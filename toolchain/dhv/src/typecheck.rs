@@ -409,12 +409,14 @@ impl TypeChecker {
         self.symbols.push_scope();
         let mut has_agent_loop = false;
         let mut declared_nodes: Vec<String> = Vec::new();
+        let mut node_spans: HashMap<String, Span> = HashMap::new();
 
         // Pass A: 注册 node/let 声明（G2 端点表 + S7 追踪）
         for stmt in &graph.body {
             match stmt {
                 GraphStmt::Node(n) => {
                     declared_nodes.push(n.name.name.clone());
+                    node_spans.insert(n.name.name.clone(), n.name.span);
                     self.symbols.declare(
                         &n.name.name,
                         n.mutable,
@@ -438,12 +440,14 @@ impl TypeChecker {
         }
 
         // Pass B: 边与语句
+        let mut edge_nodes: HashSet<String> = HashSet::new();
         for stmt in &graph.body {
             match stmt {
                 GraphStmt::Edge(edge) => {
                     for ep in &edge.endpoints {
                         let last = ep.last().name.clone();
                         let _ = self.symbols.lookup(&last); // 端点引用即使用
+                        edge_nodes.insert(last.clone());
                         if !declared_nodes.contains(&last) {
                             self.diags.push(
                                 Diagnostic::error(
@@ -476,6 +480,22 @@ impl TypeChecker {
                 GraphStmt::Stmt(s) => self.walk_stmt(s),
                 GraphStmt::Item(i) => self.check_item(i),
                 GraphStmt::Node(_) | GraphStmt::Let(_) => {} // Pass A 已处理
+            }
+        }
+
+        // G4: 孤岛节点警告（声明了 node 但无任何 edge 引用）
+        for n in &declared_nodes {
+            if !edge_nodes.contains(n) {
+                if let Some(&sp) = node_spans.get(n) {
+                    self.diags.push(
+                        Diagnostic::warning(
+                            DiagCode::Topology("G4"),
+                            format!("节点 `{n}` 没有任何 edge（孤岛节点）"),
+                            sp,
+                        )
+                        .note("若为插件注入位请添加注释说明；否则检查是否遗漏了连接此节点的 edge"),
+                    );
+                }
             }
         }
 
@@ -704,7 +724,8 @@ impl TypeChecker {
                         path
                     ),
                     rule.span,
-                ));
+                ).note(format!("为 {name} 或 rules 路径模板选择不同的目标以避免冲突")));
+
             } else {
                 seen_paths.insert(path.clone(), name.clone());
             }
@@ -714,11 +735,12 @@ impl TypeChecker {
                     self.diags.push(Diagnostic::error(
                         DiagCode::Projection("P4"),
                         format!(
-                            "未注册的后端语言 `{}`（rules 展开，项 {name}；注册表见 dhv targets）",
+                            "未注册的后端语言 `{}`（rules 展开，项 {name}）",
                             rule.lang.name
                         ),
                         rule.span,
-                    ));
+                    ).note("运行 dhv targets 查看全部合法后端 id"));
+
                 }
                 Some(spec) => {
                     let is_block = rule_kind == "block";
@@ -730,7 +752,8 @@ impl TypeChecker {
                                 rule.lang.name
                             ),
                             rule.span,
-                        ));
+                        ).note("将 rules 的 lang 改为 yaml / json / toml / markdown / ini / xml 之一"));
+
                     }
                     if !is_block && spec.tier == 0 {
                         self.diags.push(Diagnostic::error(
@@ -740,7 +763,8 @@ impl TypeChecker {
                                 rule.lang.name
                             ),
                             rule.span,
-                        ));
+                        ).note("将 rules 的 lang 改为编程语言，如 rust / python / typescript 等"));
+
                     }
                 }
             }
@@ -805,6 +829,17 @@ impl TypeChecker {
                 // N1（v0.1 范围）：native 块按原文引用外层符号（变量捕获语义）。
                 // 词法扫描其中的标识符并标记使用，避免 S7 对捕获变量误报；
                 // 完整的"已声明 + 类型可平凡传递 + #[allow]"校验在 P3+ 接入类型推导。
+                // N1: native 块语言标识校验
+                if crate::langs::resolve(&nb.lang.name).is_none() {
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::NativeSafety("N1"),
+                            format!("native 语言 `{}` 未注册（已注册语言见 dhv targets）", nb.lang.name),
+                            nb.span,
+                        )
+                        .note("native 块语言标识必须是已注册后端 id 或 host（harness 宿主语言）"),
+                    );
+                }
                 for word in nb.code.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
                     if word.is_empty() {
                         continue;

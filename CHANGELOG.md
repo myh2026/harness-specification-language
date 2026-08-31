@@ -2,6 +2,19 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.29] — 2026-09-01 · 「诊断信息质量提升」版
+
+### 新增
+- **G-4 孤岛节点警告**（typecheck.rs）：graph 体内声明了 `node` 但无任何 `edge` 引用时输出 WARNING[G-G4]，提示可能遗漏了连接。对齐 dhv-ts `checker.ts` G-4。
+- **N-1 native 语言标识校验**（typecheck.rs）：`native nonexistent_lang { ... }` 输出 ERROR[N-N1]，此前未注册语言静默通过。对齐 dhv-ts `checker.ts` N-1。首个使用 `DiagCode::NativeSafety` 的实际检查。
+- 回归用例 `errors/N1_unregistered_native_lang.hsl`。
+
+### 改进
+- **rules 展开诊断补齐 note**（typecheck.rs）：P2 路径冲突、P4 未注册语言、P4 block→静态、P4 代码→静态四处 rules 展开路径的诊断新增 `.note()` 修复建议（此前仅显式投射路径有 note，rules 展开路径缺失，信息质量不一致）。
+
+### 变更
+- 版本统一：dhv 0.2.29 · dhv-ts 0.2.29 · BNF v1.5.0。
+
 ## [0.2.28] — 2026-09-01 · 「for-range 代码生成补齐」版
 
 ### 修复（dhv-ts，全部以回归用例锁定）

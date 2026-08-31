@@ -1,0 +1,7 @@
+// 回归锁定：native 块使用未注册语言标识 → N1 错误。
+// v0.2.29 新增检查，对齐 dhv-ts checker.ts N-1。
+
+export fn test() -> i64 {
+    native nonexistent_lang { x };
+    0
+}
