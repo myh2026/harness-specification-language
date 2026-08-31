@@ -71,8 +71,10 @@ jobs:
       - name: Package (zip)
         if: matrix.archive == 'zip'
         working-directory: toolchain/dhv
-        shell: pwsh
-        run: Compress-Archive -Path "target\${{ matrix.target }}\release\${{ matrix.exe }}" -DestinationPath "/tmp/dhv-${{ github.ref_name }}-windows-x86_64.zip"
+        shell: bash
+        run: |
+          cd "target/${{ matrix.target }}/release"
+          zip "/tmp/dhv-${{ github.ref_name }}-windows-x86_64.zip" "${{ matrix.exe }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

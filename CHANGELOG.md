@@ -2,6 +2,15 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.24] — 2026-09-01 · 「Release CI Windows 修复」版
+
+### 修复
+- **release.yml Windows 打包**：`Compress-Archive`（PowerShell，路径和 /tmp 不兼容 Windows）→ `zip`（Git Bash 预装，统一 Unix 路径）
+- **v0.2.23 Release 失败回退**：Linux/macOS arm64/macOS x86_64 三平台构建成功但 Windows MSVC 打包失败，删除 v0.2.23 tag
+
+### 变更
+- 版本统一：dhv 0.2.24 · dhv-ts 0.2.24 · BNF v1.5.0。
+
 ## [0.2.23] — 2026-09-01 · 「Release CI 原生 Runners 重写」版
 
 ### 修复
