@@ -65,22 +65,24 @@ jobs:
         run: |
           EXE="target/${{ matrix.target }}/release/${{ matrix.exe }}"
           strip "$EXE" 2>/dev/null || true
-          tar czf "/tmp/dhv-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
+          mkdir -p "$RUNNER_TEMP"
+          tar czf "$RUNNER_TEMP/dhv-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" "${{ matrix.exe }}"
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         working-directory: toolchain/dhv
-        shell: bash
+        shell: pwsh
         run: |
-          cd "target/${{ matrix.target }}/release"
-          zip "/tmp/dhv-${{ github.ref_name }}-windows-x86_64.zip" "${{ matrix.exe }}"
+          $src = "toolchain/dhv/target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          $dst = Join-Path $env:RUNNER_TEMP "dhv-${{ github.ref_name }}-windows-x86_64.zip"
+          Compress-Archive -Path $src -DestinationPath $dst
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dhv-${{ github.ref_name }}-${{ matrix.target }}
-          path: /tmp/dhv-${{ github.ref_name }}-*
+          path: ${{ runner.temp }}/dhv-${{ github.ref_name }}-*
 
   release:
     name: Publish GitHub Release

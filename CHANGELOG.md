@@ -2,6 +2,16 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.25] — 2026-09-01 · 「Release CI Windows 打包再修复」版
+
+### 修复
+- **release.yml Windows 打包**：`zip` 命令在 windows-latest Git Bash 中不存在（exit 127）→ 改回 PowerShell `Compress-Archive`（`shell: pwsh`）+ `$env:RUNNER_TEMP` 跨平台临时目录
+- **release.yml 统一临时路径**：所有平台打包产物统一使用 `$RUNNER_TEMP`（替代 `/tmp/`，Windows 无 `/tmp/`）
+- **v0.2.24 Release 失败回退**：删除 v0.2.24 tag
+
+### 变更
+- 版本统一：dhv 0.2.25 · dhv-ts 0.2.25 · BNF v1.5.0。
+
 ## [0.2.24] — 2026-09-01 · 「Release CI Windows 修复」版
 
 ### 修复
