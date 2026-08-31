@@ -905,10 +905,15 @@ export class Body {
         throw new TranspileError('await');
       }
       case 'range': {
-        const lo = e.lo ? this.expr(e.lo) : '0';
-        const hi = e.hi ? this.expr(e.hi) : (L === 'python' ? 'None' : 'undefined');
-        if (L === 'python') return `range(${lo}, (${hi}) + (1 if True else 0))`;
-        if (L === 'rust') return `${lo}..${hi}${e.inclusive ? '=' : ''}`;
+        // v0.2.28: 修复 Python inclusive bug（此前总是 +1）；补齐半开 range
+        const lo = e.lo ? this.expr(e.lo) : undefined;
+        const hi = e.hi ? this.expr(e.hi) : undefined;
+        if (L === 'python') {
+          if (!hi) throw new TranspileError('值语境 range（无上界）');
+          return `range(${lo ?? '0'}, ${hi}${e.inclusive ? ' + 1' : ''})`;
+        }
+        if (L === 'rust') return `${lo ?? ''}..${hi ?? ''}${e.inclusive ? '=' : ''}`;
+        // 其他语言：值语境 range 作为值暂不支持，for 内联由 forRangeLines 处理
         throw new TranspileError('值语境 range');
       }
       case 'slice': {
@@ -1670,8 +1675,13 @@ export class Body {
         const name = patternName(e.pat);
         if (!name || e.pat.kind !== 'binding') throw new TranspileError('for 复杂模式');
         const safe = ident(name, L);
-        if (e.range) {
-          out.push(this.forRangeLines(indent, safe, this.expr(e.range.lo), this.expr(e.range.hi), e.range.inclusive));
+        // v0.2.28: 检测 e.iter 为 range 表达式（parseExprNoStruct 会消费 a..b 为 range expr，
+        // 导致 e.range 始终 undefined）
+        const rng = e.range ?? (e.iter?.kind === 'range' ? e.iter : undefined);
+        if (rng) {
+          const rlo = rng.lo ? this.expr(rng.lo) : undefined;
+          const rhi = rng.hi ? this.expr(rng.hi) : undefined;
+          out.push(this.forRangeLines(indent, safe, rlo, rhi, rng.inclusive));
         } else {
           out.push(this.forInLines(indent, safe, this.expr(e.iter!)));
         }
@@ -2283,13 +2293,16 @@ export class Body {
     if (L === 'go') return `${i}for {`;
     return `${i}while (true) {`;
   }
-  private forRangeLines(i: string, n: string, lo: string, hi: string, inc: boolean): string {
+  private forRangeLines(i: string, n: string, lo: string | undefined, hi: string | undefined, inc: boolean): string {
     const L = this.lang.id;
-    if (L === 'python') return `${i}for ${n} in range(${lo}, ${hi}${inc ? ' + 1' : ''}):`;
-    if (L === 'rust') return `${i}for ${n} in ${lo}..${inc ? '=' : ''}${hi} {`;
-    if (L === 'go') return `${i}for ${n} := ${lo}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++ {`;
-    if (L === 'typescript' || L === 'javascript') return `${i}for (let ${n} = ${lo}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++) {`;
-    return `${i}for (auto ${n} = ${lo}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++) {`;
+    // v0.2.28: 支持半开 range（..n / n..）
+    const loStr = lo ?? '0';
+    if (!hi) throw new TranspileError('for range 无上界');
+    if (L === 'python') return `${i}for ${n} in range(${loStr}, ${hi}${inc ? ' + 1' : ''}):`;
+    if (L === 'rust') return `${i}for ${n} in ${lo ?? ''}..${inc ? '=' : ''}${hi} {`;
+    if (L === 'go') return `${i}for ${n} := ${loStr}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++ {`;
+    if (L === 'typescript' || L === 'javascript') return `${i}for (let ${n} = ${loStr}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++) {`;
+    return `${i}for (auto ${n} = ${loStr}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++) {`;
   }
   private forInLines(i: string, n: string, it: string): string {
     const L = this.lang.id;
