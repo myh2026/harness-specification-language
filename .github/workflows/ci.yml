@@ -1,0 +1,123 @@
+# HSL/DHV CI — 每次推送 main 或 PR 时运行全量测试矩阵
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'ide/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+
+# 避免同一 PR 重复运行
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  BUN_VERSION: '1'
+
+jobs:
+  # ── Job 1: Rust 编译器测试 ──────────────────────────────
+  rust-test:
+    name: Rust test (cargo test --release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Build & test
+        working-directory: toolchain/dhv
+        run: cargo test --release
+
+  # ── Job 2: 双编译器一致性 ───────────────────────────────
+  conformance:
+    name: Dual-compiler conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Build dhv release binary
+        working-directory: toolchain/dhv
+        run: cargo build --release
+
+      - name: Run conformance suite
+        working-directory: toolchain
+        run: bash tests/run_conformance.sh
+
+  # ── Job 3: dhv-ts 全量套件（fuzzing / 38 backends / CLI / stress）──
+  dhv-ts-suite:
+    name: dhv-ts full suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Run dhv-ts test suite
+        working-directory: toolchain
+        run: bun tests/hsl/run-all.ts
+        timeout-minutes: 15
+
+  # ── Job 4: 版本号一致性守卫 ─────────────────────────────
+  version-sync:
+    name: Version sync check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract dhv version
+        id: dhv
+        working-directory: toolchain/dhv
+        run: echo "version=$(grep -oP '(?<=^version = ")\d+\.\d+\.\d+' Cargo.toml)" >> $GITHUB_OUTPUT
+
+      - name: Extract dhv-ts version
+        id: dhv-ts
+        working-directory: toolchain/dhv-ts
+        run: echo "version=$(grep -oP '(?<="version": ")\d+\.\d+\.\d+' package.json)" >> $GITHUB_OUTPUT
+
+      - name: Verify versions match
+        run: |
+          if [ "${{ steps.dhv.outputs.version }}" != "${{ steps.dhv-ts.outputs.version }}" ]; then
+            echo "ERROR: dhv=${{ steps.dhv.outputs.version }} != dhv-ts=${{ steps.dhv-ts.outputs.version }}"
+            exit 1
+          fi
+          echo "OK: both at ${{ steps.dhv.outputs.version }}"

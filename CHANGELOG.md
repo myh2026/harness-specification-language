@@ -2,6 +2,22 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.18] — 2026-09-01 · 「CI/CD」版
+
+### 新增
+- **GitHub Actions CI 工作流（.github/workflows/ci.yml）**—— 每次 push main 或 PR 自动运行：
+  - `rust-test`：cargo test --release 回归矩阵
+  - `conformance`：dhv ↔ dhv-ts 双编译器一致性（34 组用例）
+  - `dhv-ts-suite`：dhv-ts 全量测试（fuzzing / 38 backends / CLI / stress）
+  - `version-sync`：dhv(Cargo.toml) 与 dhv-ts(package.json) 版本号一致性守卫
+  - Cargo 缓存加速、Bun 环境自动安装、并发去重（concurrency group）
+- **GitHub Actions Release 工作流（.github/workflows/release.yml）**—— push tag v* 自动：
+  - 四平台并行构建（linux-x86_64 / windows-x86_64 / macos-aarch64 / macos-x86_64）
+  - 交叉编译通过 zig + cargo-zigbuild 实现
+  - 从 CHANGELOG.md 自动提取对应版本发布说明
+  - 创建 GitHub Release 并上传全部产物
+  - release 后自动跑 cargo test + conformance 验证
+
 ## [0.2.17] — 2026-09-01 · 「Go 后端」版
 
 ### 新增

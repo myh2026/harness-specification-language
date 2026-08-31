@@ -1,0 +1,176 @@
+# HSL/DHV Release — push tag v* 时自动三平台构建并发布
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Job 1: 构建三平台二进制 ─────────────────────────────
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: dhv-${{ github.ref_name }}-linux-x86_64.tar.gz
+            archive_cmd: tar czf
+          - target: x86_64-pc-windows-gnu
+            runner: ubuntu-latest
+            artifact: dhv-${{ github.ref_name }}-windows-x86_64.zip
+            archive_cmd: 'cd toolchain/dhv/target/${{ matrix.target }}/release && 7z a -bd -y ../../../../../${{ matrix.artifact }} dhv.exe'
+            cross: true
+          - target: aarch64-apple-darwin
+            runner: ubuntu-latest
+            artifact: dhv-${{ github.ref_name }}-macos-aarch64.tar.gz
+            archive_cmd: tar czf
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: ubuntu-latest
+            artifact: dhv-${{ github.ref_name }}-macos-x86_64.tar.gz
+            archive_cmd: tar czf
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        if: ${{ !matrix.cross }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ matrix.target }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ matrix.target }}-
+
+      # 交叉编译工具链：zig + cargo-zigbuild
+      - name: Install Zig
+        if: ${{ matrix.cross }}
+        run: |
+          pip install ziglang
+          cargo install cargo-zigbuild --locked
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        working-directory: toolchain/dhv
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross via zig)
+        if: ${{ matrix.cross }}
+        working-directory: toolchain/dhv
+        run: cargo zigbuild --release --target ${{ matrix.target }}
+
+      - name: Package (tar.gz)
+        if: ${{ matrix.target != 'x86_64-pc-windows-gnu' }}
+        working-directory: toolchain/dhv
+        run: |
+          EXE=target/${{ matrix.target }}/release/dhv
+          [ -f "$EXE" ] || EXE=target/${{ matrix.target }}/release/dhv.exe
+          strip "$EXE" 2>/dev/null || true
+          OUT=/tmp/${{ matrix.artifact }}
+          tar czf "$OUT" -C "target/${{ matrix.target }}/release" dhv
+          echo "packaged=$OUT" >> $GITHUB_ENV
+
+      - name: Package (zip for Windows)
+        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+        working-directory: toolchain/dhv
+        run: |
+          apt-get update -qq && apt-get install -y -qq p7zip-full > /dev/null 2>&1
+          EXE=target/${{ matrix.target }}/release/dhv.exe
+          OUT=/tmp/${{ matrix.artifact }}
+          7z a -bd -y "$OUT" -w"target/${{ matrix.target }}/release" dhv.exe
+          echo "packaged=$OUT" >> $GITHUB_ENV
+
+      - name: Verify binary runs
+        run: |
+          if [ -f "${{ env.packaged }}" ]; then
+            echo "Artifact: ${{ env.packaged }} ($(du -h ${{ env.packaged }} | cut -f1))"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ env.packaged }}
+
+  # ── Job 2: 创建 GitHub Release 并上传产物 ─────────────
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate release notes from CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          # 提取 CHANGELOG 中对应版本条目（从版本标题到下一个版本标题或 EOF）
+          awk "/^## ${TAG}$/,/^## [0-9]/" CHANGELOG.md \
+            | head -n -1 \
+            > /tmp/release-notes.md
+          # 兜底：未匹配到则用简短说明
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "## ${TAG}" > /tmp/release-notes.md
+            echo '' >> /tmp/release-notes.md
+            echo 'See [CHANGELOG.md](https://github.com/myh2026/HSL/blob/main/CHANGELOG.md) for details.' >> /tmp/release-notes.md
+          fi
+          cat /tmp/release-notes.md
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh /tmp/artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DHV ${{ github.ref_name }}
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: false
+          files: /tmp/artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 自动更新网站版本号和 README 徽章由下一个 cron 轮次处理
+
+  # ── Job 3: Release 后 CI 验证 ──────────────────────────
+  post-release-ci:
+    name: Post-release CI validation
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: cargo test
+        working-directory: toolchain/dhv
+        run: cargo test --release --quiet
+
+      - name: conformance
+        working-directory: toolchain
+        run: bash tests/run_conformance.sh
