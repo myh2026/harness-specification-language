@@ -1,0 +1,5 @@
+// 回归锁定：import 名未被源模块 export → M3 错误
+// v0.2.30 新增检查，对齐 dhv-ts checker.ts M3
+import { Secret } from "./helper.hsl";
+
+export fn f() -> i64 { 0 }

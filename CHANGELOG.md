@@ -2,6 +2,16 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.30] — 2026-09-01 · 「M3 import 未 export 检查」版
+
+### 新增
+- **M3 import 未 export 检查**（typecheck.rs + lib.rs）：`import { Secret } from "./helper.hsl"` 若 `Secret` 未被 `helper.hsl` export 则输出 `ERROR[M-M3]`。对齐 dhv-ts `checker.ts` M3。实现：`harvest_module` 新增 `module_path` 参数收集每模块 export 名集合（`module_exports: HashMap<String, HashSet<String>>`）；新增 `check_m3_imports` 方法在 harvest 后对根文件和依赖模块的 import 逐一校验。namespace/glob import 豁免（与 dhv-ts 一致）。
+- 回归用例 `modules/fail_M3_not_exported`（双编译器一致：导入未 export 的名 → M3）。
+
+### 变更
+- `harvest_module` 签名新增 `module_path: &str` 参数（lib.rs 调用点同步）
+- 版本统一：dhv 0.2.30 · dhv-ts 0.2.30 · BNF v1.5.0。
+
 ## [0.2.29] — 2026-09-01 · 「诊断信息质量提升」版
 
 ### 新增

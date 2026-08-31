@@ -123,6 +123,8 @@ pub struct TypeChecker {
     static_resources: HashSet<String>,
     /// 依赖模块导出项（名, 类型串）：§2.15 rules 跨模块展开（linker 注入）
     module_items: Vec<(String, String)>,
+    /// M3: 模块导出名集合（模块显示路径 → 导出项名集合）
+    module_exports: HashMap<String, HashSet<String>>,
     /// 命名 import 符号（S7 追踪）
     imports: Vec<ImportSym>,
     /// graph AgentLoop 嵌套深度（S6 强化上下文）
@@ -138,6 +140,7 @@ impl TypeChecker {
             enums: HashMap::new(),
             static_resources: HashSet::new(),
             module_items: Vec::new(),
+            module_exports: HashMap::new(),
             imports: Vec::new(),
             in_agent_loop: 0,
         }
@@ -210,7 +213,21 @@ impl TypeChecker {
     /// 模块注册表收集（linker 调用，检查根文件前）：
     /// 仅收集依赖模块 **导出** 的 enum 变体与静态资源 —— 跨模块 S6/P4 语义。
     /// 不动 declared_items（P3 目标存在性仍由根文件自身 + 其 import 决定）。
-    pub fn harvest_module(&mut self, file: &SourceFile) {
+    /// M3: 模块导出名收集（linker 调用，检查根文件前）
+    pub fn harvest_module(&mut self, module_path: &str, file: &SourceFile) {
+        // M3: 收集该模块的 export 名集合
+        let mut exported: HashSet<String> = HashSet::new();
+        for top in &file.items {
+            if let TopLevel::Item(item) = top {
+                if let Item::Export(exp) = item {
+                    if let Some(name) = exp.item.name() {
+                        exported.insert(name.name.clone());
+                    }
+                }
+            }
+        }
+        self.module_exports.insert(module_path.to_string(), exported);
+
         for top in &file.items {
             if let TopLevel::Item(item) = top {
                 self.harvest_module_item(item);
@@ -238,6 +255,63 @@ impl TypeChecker {
             Item::TypeAlias(a) => self.module_items.push((a.name.name.clone(), "type".to_string())),
             Item::Graph(g) => self.module_items.push((g.name.name.clone(), "graph".to_string())),
             _ => {}
+        }
+    }
+
+    /// M3: import 名必须被源模块 export（对齐 dhv-ts checker.ts M3）
+    pub fn check_m3_imports(&mut self, file_name: &str, file: &SourceFile) {
+        let root_dir = std::path::Path::new(file_name)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+        for top in &file.items {
+            if let TopLevel::Item(Item::Import(imp)) = top {
+                if imp.from.is_empty() {
+                    continue; // std virtual modules
+                }
+
+                // 解析模块路径（与 linker::resolve 同逻辑）
+                let resolved = match root_dir.join(&imp.from).canonicalize() {
+                    Ok(p) => p.display().to_string(),
+                    Err(_) => continue, // M2 already reported by linker
+                };
+
+                let exported = match self.module_exports.get(&resolved) {
+                    Some(s) => s,
+                    None => continue, // module not in export map
+                };
+
+                // 收集导入的原始名（跳过 namespace/glob import）
+                let names: Vec<&Ident> = match &imp.spec {
+                    ImportSpec::Named(items) => items.iter().map(|it| &it.name).collect(),
+                    ImportSpec::Single(it) => vec![&it.name],
+                    ImportSpec::Namespace { .. } => vec![], // glob: skip
+                };
+
+                for name in names {
+                    if !exported.contains(&name.name) {
+                        let module_short = std::path::Path::new(&resolved)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| imp.from.clone());
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::NameResolution("M3"),
+                                format!(
+                                    "import 失败：`{}` 未被 {} export",
+                                    name.name, module_short
+                                ),
+                                name.span,
+                            )
+                            .note(format!(
+                                "在 {} 中添加 `export {}` 使其对本模块可见",
+                                module_short, name.name
+                            )),
+                        );
+                    }
+                }
+            }
         }
     }
 

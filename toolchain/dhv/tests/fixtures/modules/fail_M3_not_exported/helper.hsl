@@ -1,0 +1,3 @@
+// Secret 未 export——只有 Public 被 export
+export fn Public() -> i64 { 0 }
+fn Secret() -> i64 { 42 }

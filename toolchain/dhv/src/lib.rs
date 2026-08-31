@@ -70,13 +70,15 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
 
     // 3. TypeCheck（严格性 + 拓扑 + 投射）
     let mut tc = typecheck::TypeChecker::new();
-    for (_mpath, mfile) in &linked.modules {
-        tc.harvest_module(mfile);
+    for (mpath, mfile) in &linked.modules {
+        tc.harvest_module(mpath, mfile);
     }
     // 依赖模块体级 S 系列检查（对齐 dhv-ts：先链接后逐文件检查）
     for (mpath, mfile) in &linked.modules {
+        tc.check_m3_imports(mpath, mfile);
         tc.check_module_body(mpath, mfile);
     }
+    tc.check_m3_imports(file_name, &file);
     tc.check_file(&file);
     all_diags.extend(tc.diags.items.clone());
     let module_sources: Vec<(String, String)> = linked.module_sources;
