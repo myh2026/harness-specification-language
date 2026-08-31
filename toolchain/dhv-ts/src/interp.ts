@@ -672,7 +672,13 @@ export class Interp {
           for (let i = lo; e.range.inclusive ? i <= hi : i < hi; i++) items.push(i);
         } else {
           const iter = await this.evalExpr(e.iter, env);
-          if (Array.isArray(iter)) items = iter;
+          // 值语境 range 对象（`let r = a..b; for i in r`）
+          if (iter && typeof iter === 'object' && '__range' in iter) {
+            const r = iter as { __range: true; lo: number; hi?: number; inclusive: boolean };
+            items = [];
+            const hi = r.hi ?? Infinity;
+            for (let i = r.lo; r.inclusive ? i <= hi : i < hi; i++) items.push(i);
+          } else if (Array.isArray(iter)) items = iter;
           else if (typeof iter === 'string') items = [...iter];
           else if (iter instanceof Map) items = [...iter.entries()].map(([k, v]) => [k, v]);
           else if (typeof iter === 'number') throw new HRuntimeError('for-in 数值请使用范围表达式 a..b');
@@ -707,6 +713,12 @@ export class Interp {
         throw new ContinueSignal(e.label);
       case 'return':
         throw new ReturnSignal(e.value ? await this.evalExpr(e.value, env) : undefined);
+      case 'range': {
+        // 值语境 range 产出一个描述对象，供 for-in 消费
+        const lo = e.lo ? Number(await this.evalExpr(e.lo, env)) : 0;
+        const hi = e.hi ? Number(await this.evalExpr(e.hi, env)) : undefined;
+        return { __range: true, lo, hi, inclusive: e.inclusive };
+      }
       case 'macro':
         return await this.evalMacro(e, env);
       case 'native':

@@ -904,6 +904,13 @@ export class Body {
         if (L === 'python' || L === 'typescript' || L === 'javascript') return `await ${v}`;
         throw new TranspileError('await');
       }
+      case 'range': {
+        const lo = e.lo ? this.expr(e.lo) : '0';
+        const hi = e.hi ? this.expr(e.hi) : (L === 'python' ? 'None' : 'undefined');
+        if (L === 'python') return `range(${lo}, (${hi}) + (1 if True else 0))`;
+        if (L === 'rust') return `${lo}..${hi}${e.inclusive ? '=' : ''}`;
+        throw new TranspileError('值语境 range');
+      }
       case 'slice': {
         const recv = this.expr(e.recv);
         const lo = e.lo ? this.expr(e.lo) : '';

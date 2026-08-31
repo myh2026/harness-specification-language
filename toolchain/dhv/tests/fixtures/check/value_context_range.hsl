@@ -1,0 +1,30 @@
+// 回归锁定：值语境 range（`let r = a..b;` 作一等值，双编译器一致）。
+// BNF v1.5 §2.11.7 —— dhv 与 dhv-ts 均须通过 check。
+// 含：a..b / a..=b / n.. / ..n 四种形态。
+
+export fn value_range_open(a: i64, b: i64) -> i64 {
+    let r = a..b;
+    let mut acc: i64 = 0;
+    for i in r {
+        acc = acc + i;
+    }
+    acc
+}
+
+export fn value_range_closed(a: i64, b: i64) -> i64 {
+    let s = a..=b;
+    let mut acc: i64 = 0;
+    for i in s {
+        acc = acc + i;
+    }
+    acc
+}
+
+export fn value_range_open_end(n: i64) -> i64 {
+    let r = 0..n;
+    let mut acc: i64 = 0;
+    for i in r {
+        acc = acc + i;
+    }
+    acc
+}

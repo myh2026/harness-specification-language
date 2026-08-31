@@ -741,7 +741,7 @@ export class Parser {
   }
 
   private parseAssign(): A.Expr {
-    const lhs = this.parseOr();
+    const lhs = this.parseRange();
     // 块表达式不能作赋值 LHS（Rust 语义）—— 否则 `while {...} = x` 会被错解析为赋值
     if (exprIsWithBlock(lhs)) return lhs;
     const t = this.peek();
@@ -749,6 +749,32 @@ export class Parser {
       this.next();
       const rhs = this.parseAssign();
       return { kind: 'assign', op: t.text, target: lhs, value: rhs, span: this.sp(t) };
+    }
+    return lhs;
+  }
+
+  /** 值语境 range：a..b / a..=b / n.. / ..n（BNF v1.5 §2.11.7，对齐 dhv） */
+  private parseRange(): A.Expr {
+    // ..n（前无操作数）
+    if (this.atP('..') || this.atP('..=')) {
+      const t = this.next();
+      let inclusive = t.text === '..=';
+      const hi = this.parseOr();
+      return { kind: 'range', lo: undefined, hi, inclusive, span: this.sp(t) };
+    }
+    const lhs = this.parseOr();
+    if (exprIsWithBlock(lhs)) return lhs;
+    if (this.atP('..') || this.atP('..=')) {
+      const t = this.next();
+      let inclusive = t.text === '..=';
+      // 检查是否有 hi 操作数（排除 struct 拆解 `..base` 和 spread `..` 消耗场景）
+      // 值语境 range 的 RHS 必须是表达式起始符
+      if (this.exprStarts()) {
+        const hi = this.parseOr();
+        return { kind: 'range', lo: lhs, hi, inclusive, span: lhs.span };
+      }
+      // n..（无 hi）
+      return { kind: 'range', lo: lhs, hi: undefined, inclusive, span: lhs.span };
     }
     return lhs;
   }

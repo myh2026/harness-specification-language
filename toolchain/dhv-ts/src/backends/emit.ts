@@ -68,6 +68,7 @@ function collectTypeRefs(item: A.Item, out: Set<string>): void {
       case 'field': walkExpr(e.recv); break;
       case 'index': walkExpr(e.recv); walkExpr(e.index); break;
       case 'slice': walkExpr(e.recv); walkExpr(e.lo); walkExpr(e.hi); break;
+      case 'range': walkExpr(e.lo); walkExpr(e.hi); break;
       case 'try': case 'await': walkExpr(e.expr); break;
       case 'cast': walkExpr(e.expr); walkType(e.ty); break;
       case 'tuple': for (const i of e.items) walkExpr(i); break;

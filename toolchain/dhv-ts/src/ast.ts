@@ -84,6 +84,7 @@ export type Expr =
   | { kind: 'break'; label?: string; value?: Expr; span: Span }
   | { kind: 'continue'; label?: string; span: Span }
   | { kind: 'return'; value?: Expr; span: Span }
+  | { kind: 'range'; lo?: Expr; hi?: Expr; inclusive: boolean; span: Span }
   | { kind: 'macro'; path: string[]; tree: TokenTree; span: Span }
   | { kind: 'native'; lang: string; body: string; span: Span }
   | { kind: 'unit'; span: Span };

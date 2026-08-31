@@ -2,6 +2,20 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.14] — 2026-08-31 · 「值语境 range 对齐」版
+
+### 新增
+- **dhv-ts 值语境 range**（对齐 dhv，消除 BNF v1.5 已知限制 #10）：
+  `let r = a..b;` / `let s = a..=b;` 现在在 dhv-ts 中作为一等值表达式正确解析、检查、解释执行。
+  AST 新增 `Expr.kind = 'range'`；parser 新增 `parseRange()` 优先级层（assignment 与 or 之间）。
+  解释器产 Range 描述对象，`for i in r`（r 为 range 变量）可正确迭代。
+- 回归用例 `check/value_context_range.hsl`（双编译器一致：a..b / a..=b / 0..n 三种值语境 range）。
+
+### 变更
+- 版本统一：dhv 0.2.14 · dhv-ts 0.2.14 · BNF v1.5.0。
+- 双编译器一致性：32 → 33 组用例（新增 `value_context_range`）。
+- `value_context_ranges_dhv_only` 测试注释更新：不再标记为 dhv 独有能力。
+
 ## [0.2.13] — 2026-08-31 · 「模块体 S 检查」版
 
 ### 新增

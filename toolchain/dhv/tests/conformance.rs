@@ -128,8 +128,9 @@ fn module_projects_link_and_check() {
     assert!(failures.is_empty(), "modules/ 断言未满足:\n{}", failures.join("\n=====\n"));
 }
 
-/// ---- dhv 独有能力：值语境 range（BNF v1.5 已知限制 #10）----
-/// dhv-ts 暂不解析 `let r = a..b;` 作一等值 —— dhv 必须全绿（对齐 BNF §2.11）。
+/// ---- 值语境 range：双编译器一致回归 ----
+/// `let r = a..b;` 作一等值 —— dhv 与 dhv-ts 均支持（BNF v1.5 §2.11.7）。
+/// fixture: check/value_context_range.hsl
 #[test]
 fn value_context_ranges_dhv_only() {
     let src = r#"export fn f(a: i64, b: i64) -> i64 {

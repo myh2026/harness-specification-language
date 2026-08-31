@@ -535,6 +535,10 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
         checkExpr(sub, scope, enums, diags, file, inAgentLoop);
       }
       break;
+    case 'range':
+      if (e.lo) checkExpr(e.lo, scope, enums, diags, file, inAgentLoop);
+      if (e.hi) checkExpr(e.hi, scope, enums, diags, file, inAgentLoop);
+      break;
     case 'native': {
       // N-1：语言标识
       if (!NATIVE_LANGS.has(e.lang)) {
