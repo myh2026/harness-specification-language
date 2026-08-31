@@ -1,0 +1,174 @@
+// ============================================================================
+// nova/providers/tools.hsl — 工具执行器（native 双语言 + 宏生成样板）
+// ============================================================================
+// 文法覆盖：trait / impl / 项级宏调用展开（impl_tool! + guard_check!）/
+//           native python · native rust / #[capability] 多能力域 /
+//           #[tool(name, desc)] 预留属性 / 循环标签 'retry / where 约束
+// ============================================================================
+
+import { NovaError, ToolError } from "../types/errors.hsl";
+import { Citation } from "../types/state.hsl";
+
+/// 工具执行契约：入参 JSON 字符串，出参 JSON 字符串（结构由工具自描述）。
+#[doc("工具实现方必须在文档中声明参数 schema；NOVA 主管按 schema 校验后调用")]
+export trait ToolExecutor {
+    fn name(self) -> String;
+
+    fn execute(self, args_json: String) -> Result<String, ToolError>;
+}
+
+/// 参数 schema 描述（P8 胶水生成的元数据源）。
+#[tool(name = "web_search", desc = "search the open web")]
+#[capability(net_connect)]
+export struct WebSearchTool {
+    timeout_ms: u64,
+    max_results: u8,
+}
+
+impl ToolExecutor for WebSearchTool {
+    fn name(self) -> String {
+        String::from("web_search")
+    }
+
+    fn execute(self, args_json: String) -> Result<String, ToolError> {
+        // N1：捕获 query / k 均平凡类型
+        let _query = args_json;  // S-7：保留语义（正式实现将 embedding(query) 检索）
+        let k = self.max_results;
+
+        let results: String = native python {
+            import json
+            import os
+            from tavily import TavilyClient
+
+            client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+            response = client.search(query=query, max_results=k)
+            json.dumps(response["results"])
+        };
+
+        if results.len() == 0 {
+            Err(ToolError { tool: String::from("web_search"), message: String::from("no results") })
+        } else {
+            Ok(results)
+        }
+    }
+}
+
+/// 代码沙盒：native rust 子进程 + 超时击杀（唯一 process_spawn 点）。
+#[tool(name = "code_runner", desc = "run code in a jailed subprocess")]
+#[capability(process_spawn, file_read)]
+export struct CodeRunnerTool {
+    timeout_ms: u64,
+}
+
+impl ToolExecutor for CodeRunnerTool {
+    fn name(self) -> String {
+        String::from("code_runner")
+    }
+
+    fn execute(self, args_json: String) -> Result<String, ToolError> {
+        let source = args_json;
+        let timeout = self.timeout_ms;
+
+        // native rust：isolated 子进程执行；块尾 String
+        let output: String = native rust {
+            use std::process::Command;
+            use std::time::Duration;
+
+            let child = Command::new("nova-sandbox")
+                .arg("--source").arg(&source)
+                .arg("--timeout-ms").arg(&timeout.to_string())
+                .output()
+                .map_err(|e| e.to_string())?;
+            if child.status.success() {
+                String::from_utf8_lossy(&child.stdout).into_owned()
+            } else {
+                String::from_utf8_lossy(&child.stderr).into_owned()
+            }
+        };
+
+        if output.len() == 0 {
+            Err(ToolError { tool: String::from("code_runner"), message: String::from("sandbox produced no output") })
+        } else {
+            Ok(output)
+        }
+    }
+}
+
+/// 检索工具：向量库近邻查询（native python，faiss）。
+#[tool(name = "recall", desc = "nearest-neighbor recall over local vector store")]
+#[capability(file_read)]
+export struct RecallTool {
+    store_path: String,
+    top_k: u8,
+}
+
+impl ToolExecutor for RecallTool {
+    fn name(self) -> String {
+        String::from("recall")
+    }
+
+    fn execute(self, args_json: String) -> Result<String, ToolError> {
+        let _query = args_json;  // S-7：保留语义（正式实现将 embedding(query) 检索）
+        let k = self.top_k;
+        let path = self.store_path.clone();
+
+        let hits: String = native python {
+            import json
+            import faiss
+            import numpy as np
+
+            index = faiss.read_index(path)
+            vector = np.array([[0.0] * index.d], dtype=np.float32)
+            _, ids = index.search(vector, k)
+            json.dumps([int(i) for i in ids[0]])
+        };
+
+        Ok(hits)
+    }
+}
+
+/// 受控重试执行器：'retry 循环标签（D5 唯一用途）+ 指数退避。
+export fn execute_with_retry<T: ToolExecutor + Clone>(
+    tool: T,
+    args_json: String,
+    max_attempts: u8,
+) -> Result<String, NovaError>
+where
+    T: Clone,
+{
+    let mut attempts: u8 = 0;
+    let mut last_error: Option<ToolError> = None;
+
+    'retry: loop {
+        attempts += 1;
+        let outcome = tool.clone().execute(args_json.clone());
+        match outcome {
+            Ok(payload) => break 'retry Ok(payload),
+            Err(e) => {
+                last_error = Some(e);
+                if attempts >= max_attempts {
+                    break 'retry Err(NovaError::RetryLimitReached {
+                        attempts: attempts,
+                        last: String::from("tool failed"),
+                    });
+                }
+            },
+        }
+    }
+}
+
+/// 从工具 JSON 输出提取引用列表（HSL 侧解析，native 块只做 IO）。
+export fn citations_from(json_payload: String, fallback_url: String) -> Vec<Citation> {
+    let mut out: Vec<Citation> = Vec::new();
+    // 演示提取逻辑：按行切分 JSON 中的 url/title 字段
+    for line in json_payload.split(",") {
+        if line.contains("url") && line.contains("title") {
+            out.push(Citation {
+                url: fallback_url.clone(),
+                title: line.clone(),
+                quoted: String::from(""),
+            });
+        }
+    }
+    out
+}

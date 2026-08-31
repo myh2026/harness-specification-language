@@ -1,0 +1,248 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HSL",
+  "scopeName": "source.hsl",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#attribute" },
+    { "include": "#interpolation" },
+    { "include": "#hsl-topology" },
+    { "include": "#hsl-projection" },
+    { "include": "#native-block" },
+    { "include": "#macro-rule" },
+    { "include": "#labels" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#char" },
+    { "include": "#constants" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.hsl",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.hsl",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            { "include": "#comment" }
+          ]
+        }
+      ]
+    },
+    "attribute": {
+      "name": "meta.attribute.hsl",
+      "begin": "(#)(\\[)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.attribute.hsl" },
+        "2": { "name": "punctuation.definition.attribute.hsl" }
+      },
+      "end": "\\]",
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.hsl",
+          "match": "\\b(capability|cfg|cfg_attr|derive|doc|allow|deny|tool)\\b"
+        },
+        { "name": "string.quoted.double.hsl", "match": "\"[^\"]*\"" },
+        { "name": "punctuation.separator.hsl", "match": "[:,=]" }
+      ]
+    },
+    "interpolation": {
+      "name": "meta.interpolation.hsl",
+      "begin": "\\{\\{",
+      "end": "\\}\\}",
+      "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.hsl" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.hsl" } },
+      "patterns": [
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#numbers" },
+        { "include": "#strings" },
+        { "name": "variable.other.hsl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+      ]
+    },
+    "hsl-topology": {
+      "patterns": [
+        {
+          "name": "meta.graph.declaration.hsl",
+          "match": "\\b(graph)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.graph.hsl" },
+            "2": { "name": "entity.name.type.graph.hsl" }
+          }
+        },
+        {
+          "name": "meta.edge.declaration.hsl",
+          "match": "\\b(edge|node|on|with)\\b",
+          "captures": {
+            "0": { "name": "keyword.control.edge.hsl" }
+          }
+        }
+      ]
+    },
+    "hsl-projection": {
+      "patterns": [
+        {
+          "name": "meta.projection.item.hsl",
+          "match": "(->)\\s*(\"[^\"]*\")\\s*(:)\\s*(rust|python|typescript|yaml|markdown|json|toml)\\b",
+          "captures": {
+            "1": { "name": "keyword.operator.arrow.hsl" },
+            "2": { "name": "string.quoted.double.path.hsl" },
+            "3": { "name": "punctuation.separator.hsl" },
+            "4": { "name": "constant.language.target-lang.hsl" }
+          }
+        },
+        {
+          "name": "keyword.control.projection.hsl",
+          "match": "\\b(project|scale|import|export|from)\\b"
+        },
+        {
+          "name": "constant.language.scale-mode.hsl",
+          "match": "\\b(monolith|microkernel)\\b"
+        }
+      ]
+    },
+    "native-block": {
+      "patterns": [
+        {
+          "name": "meta.native.declaration.hsl",
+          "match": "\\b(native)\\s+(rust|python|typescript)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.native.hsl" },
+            "2": { "name": "constant.language.native-lang.hsl" }
+          }
+        }
+      ]
+    },
+    "macro-rule": {
+      "patterns": [
+        {
+          "name": "meta.macro.rules.hsl",
+          "match": "\\b(macro_rules)\\s*(!)",
+          "captures": {
+            "1": { "name": "entity.name.macro.hsl" },
+            "2": { "name": "punctuation.definition.macro.hsl" }
+          }
+        },
+        {
+          "name": "meta.macro.call.hsl",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(!)(?=\\s*[\\(\\[\\{])",
+          "captures": {
+            "1": { "name": "entity.name.function.macro.hsl" },
+            "2": { "name": "punctuation.definition.macro.hsl" }
+          }
+        },
+        {
+          "name": "variable.other.macro.fragment.hsl",
+          "match": "\\$[a-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "labels": {
+      "name": "entity.name.label.hsl",
+      "match": "'[a-zA-Z_][A-Za-z0-9_]*"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.hsl",
+          "match": "\\b(if|else|match|loop|while|for|in|break|continue|return|await)\\b"
+        },
+        {
+          "name": "keyword.control.definition.hsl",
+          "match": "\\b(let|fn|async|mut|const|struct|enum|trait|impl|type|where)\\b"
+        },
+        {
+          "name": "keyword.operator.misc.hsl",
+          "match": "\\b(as|move|dyn|self|Self)\\b"
+        },
+        {
+          "name": "storage.modifier.visibility.hsl",
+          "match": "\\b(export|mod|use)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.hsl",
+          "match": "\\b(bool|char|str|String|i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64)\\b"
+        },
+        {
+          "name": "support.type.collection.hsl",
+          "match": "\\b(Vec|HashMap|HashSet|Option|Result|Box)\\b"
+        },
+        {
+          "name": "entity.name.type.hsl",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.raw.hsl",
+          "match": "r#+\"[^\"]*\"#+"
+        },
+        {
+          "name": "string.quoted.double.hsl",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.hsl", "match": "\\\\(n|r|t|0|\\\\|'\"|x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F_]+\\})" }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.hsl",
+          "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?(f32|f64)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.hsl",
+          "match": "\\b0x[0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.hsl",
+          "match": "\\b0o[0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.hsl",
+          "match": "\\b0b[01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hsl",
+          "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize)?\\b"
+        }
+      ]
+    },
+    "char": {
+      "name": "constant.character.hsl",
+      "match": "'(\\\\.|[^'\\\\])'"
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.hsl",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.hsl",
+          "match": "(->|=>|::|\\.\\.\\.=?|\\?|&&|\\|\\||==|!=|<=|>=|<<|>>)"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "name": "hsl-ide",
+  "displayName": "HSL IDE — Harness Specification Language",
+  "description": "HSL 语言支持：语法高亮（graph/edge/project/scale/native/block 全量构件）、语言配置、代码片段、暗色主题。基于 VSCode，砍掉冗余，专注 HSL/DHV 工程。",
+  "version": "0.1.0",
+  "publisher": "dhv-project",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Themes",
+    "Snippets"
+  ],
+  "keywords": [
+    "hsl", "dhv", "agent", "harness", "compiler", "ai"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "hsl",
+        "aliases": ["HSL", "hsl", "Harness Specification Language"],
+        "extensions": [".hsl"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/hsl-light.svg",
+          "dark": "./icons/hsl-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hsl",
+        "scopeName": "source.hsl",
+        "path": "./syntaxes/hsl.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "HSL Dark (amber keynote)",
+        "uiTheme": "vs-dark",
+        "path": "./themes/hsl-dark-color-theme.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "hsl",
+        "path": "./snippets/hsl.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "hsl.compile",
+        "title": "HSL: Compile (dhv emit)",
+        "category": "HSL"
+      },
+      {
+        "command": "hsl.check",
+        "title": "HSL: Type Check (dhv check)",
+        "category": "HSL"
+      }
+    ],
+    "configuration": {
+      "title": "HSL IDE",
+      "properties": {
+        "hsl.dhvPath": {
+          "type": "string",
+          "default": "dhv",
+          "description": "dhv 编译器可执行文件路径"
+        },
+        "hsl.scale": {
+          "type": "string",
+          "enum": ["monolith", "microkernel"],
+          "default": "monolith",
+          "description": "默认编译尺度（对应 scale 声明的回退值）"
+        }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dhv-project/hsl"
+  },
+  "scripts": {
+    "package": "vsce package"
+  }
+}

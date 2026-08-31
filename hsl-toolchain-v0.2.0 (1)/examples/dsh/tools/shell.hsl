@@ -1,0 +1,40 @@
+// ============================================================================
+// dsh/tools/shell.hsl — bash 工具（首词白名单 + 超时 + 输出封顶）
+// ============================================================================
+// 文法覆盖：#[capability(process_spawn)] / 复合赋值 String.push_str /
+//           if 守卫（S1 显式 len 比较）
+// ============================================================================
+
+import { ToolResult } from "../types/messages.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Policy } from "../types/state.hsl";
+import { cap_chars } from "./workspace.hsl";
+
+#[capability(process_spawn)]
+export fn run_bash(policy: Policy, command: String) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        const out = await $host.shell.run(command, { timeoutMs: 60000 });
+        return { ok: out.ok, code: out.code, stdout: out.stdout, stderr: out.stderr };
+    };
+    let mut combined = String::from("");
+    if r.stdout.len() > 0 {
+        combined.push_str(r.stdout.as_str());
+    }
+    if r.stderr.len() > 0 {
+        if combined.len() > 0 {
+            combined.push_str("\n");
+        }
+        combined.push_str("[stderr]\n");
+        combined.push_str(r.stderr.as_str());
+    }
+    if combined.len() == 0 {
+        combined.push_str(format!("(no output, exit {})", r.code).as_str());
+    }
+    let capped = cap_chars(combined, policy.max_output_chars);
+    Ok(ToolResult {
+        call: format!("bash {}", command),
+        ok: r.ok,
+        output: capped,
+        duration_ms: 0,
+    })
+}

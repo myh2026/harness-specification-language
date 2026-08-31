@@ -1,0 +1,112 @@
+// ============================================================================
+// nova/agents/researcher.hsl — 研究 Agent：检索 → 阅读 → 笔记 子循环
+// ============================================================================
+// 文法覆盖：graph 带泛型 GraphParams / node 声明带初始化 / 三跳 edge /
+//           AgentLoop 内嵌套 while / for-in / continue / #[cfg] on graph
+// ============================================================================
+
+import { Citation, Finding, Task } from "../types/state.hsl";
+import { NovaError } from "../types/errors.hsl";
+import { WebSearchTool, RecallTool, citations_from, execute_with_retry } from "../providers/tools.hsl";
+
+/// 研究层边事件。
+enum ResearchEdge {
+    SearchReady,
+    ReadReady,
+    NoteReady,
+}
+
+/// 研究 graph：对单个任务执行 检索→阅读→记笔记 直到 Enough。
+///
+/// 拓扑（三跳链）：
+///   searcher ──on SearchReady──> reader ──on ReadReady──> notetaker
+///   notetaker ──on NoteReady──> searcher   （条件环：Enough 打破，G3 合法）
+graph Researcher(mut task: Task, question: String) -> Result<Finding, NovaError> {
+    node searcher: WebSearchTool = WebSearchTool { timeout_ms: 8_000, max_results: 8 };
+    node reader: RecallTool = RecallTool { store_path: String::from("data/nova.index"), top_k: 5 };
+    node mut notetaker: Vec<Citation> = Vec::new();
+
+    // 条件环（G3：环上每条边带 on Guard）
+    edge searcher -> reader on ResearchEdge::SearchReady;
+    edge reader -> notetaker on ResearchEdge::ReadReady;
+    edge notetaker -> searcher on ResearchEdge::NoteReady with retry_cap = 2;
+
+    // 局部项：子循环预算
+    const SUBLOOP_CAP: u8 = 6;
+
+    let mut rounds: u8 = 0;
+    let mut collected: Vec<Citation> = Vec::new();
+
+    // AgentLoop
+    loop {
+        // 子状态机：Search → Read → Note → 评估
+        let action = decide(rounds, collected.len(), SUBLOOP_CAP)?;
+        match action {
+            ResearchStep::Search { query } => {
+                let results = execute_with_retry(searcher.clone(), query, 2)?;
+                let hits = citations_from(results, String::from("about:search"));
+                for hit in hits {
+                    collected.push(hit);
+                }
+                rounds += 1;
+            },
+            ResearchStep::Recall { filter } => {
+                let ids = execute_with_retry(reader.clone(), filter, 2)?;
+                if ids.len() == 0 {
+                    // 召回空：退化为搜索（拓扑等价性由 G6 保证）
+                    rounds += 1;
+                    continue;
+                }
+                rounds += 1;
+            },
+            ResearchStep::Note => {
+                notetaker.append(collected.clone());
+                rounds += 1;
+            },
+            ResearchStep::Enough => {
+                break;
+            },
+        }
+    }
+
+    Ok(Finding {
+        id: task.id,
+        task_id: task.id,
+        claim: format_finding(question, notetaker.len()),
+        evidence: notetaker.clone(),
+        confidence: 0.72,
+        verified: false,
+    })
+}
+
+/// 研究子步骤（loop 驱动词汇，与 ResearchAction 分层：外层是编排词汇）。
+enum ResearchStep {
+    Search { query: String },
+    Recall { filter: String },
+    Note,
+    Enough,
+}
+
+/// 子循环决策（S1：显式比较；S7：参数全使用）。
+fn decide(rounds: u8, evidence_count: usize, cap: u8) -> Result<ResearchStep, NovaError> {
+    if rounds >= cap {
+        Ok(ResearchStep::Enough)
+    } else if evidence_count == 0 {
+        Ok(ResearchStep::Search { query: String::from("initial sweep") })
+    } else if evidence_count < 3 {
+        Ok(ResearchStep::Recall { filter: String::from("deep dive") })
+    } else if evidence_count % 2 == 0 {
+        Ok(ResearchStep::Note)
+    } else {
+        Ok(ResearchStep::Search { query: String::from("gap fill") })
+    }
+}
+
+fn format_finding(question: String, evidence: usize) -> String {
+    let mut out = String::from("finding for: ");
+    out.push_str(question.as_str());
+    out.push_str(" (citations: ");
+    out.push_str(evidence.to_string().as_str());
+    out.push_str(")");
+    out
+}

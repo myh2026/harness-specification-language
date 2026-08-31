@@ -1,0 +1,102 @@
+// ============================================================================
+// dsh/types/state.hsl — 策略 / 会话统计 / 会话状态 / 运行报告
+// ============================================================================
+// 文法覆盖：const（含 0x 进制与 _ 分隔字面量）/ turbofish parse::<T>() /
+//           HashMap<String,String> / Option 链 / ? 跨类型传播（From）
+// ============================================================================
+
+import { Message } from "./messages.hsl";
+import { HarnessError } from "./errors.hsl";
+
+export const DEFAULT_MAX_TURNS: u32 = 24;
+export const DEFAULT_MAX_BASH: u32 = 0x0C; // 12 —— 十六进制字面量（§1.5 覆盖）
+export const DEFAULT_MAX_OUTPUT: u32 = 4_000;
+
+/// 运行策略（由 CLI --flags 装配，经 $host.config 读取）。
+#[derive(Debug, Clone)]
+export struct Policy {
+    model: String,
+    temperature: f64,
+    max_turns: u32,
+    max_bash_calls: u32,
+    max_output_chars: u32,
+    workspace: String,
+    task: String,
+    allow: Vec<String>,
+}
+
+impl Policy {
+    /// 从宿主配置装配策略。native 只做字段搬运（N1：平凡类型捕获），
+    /// 数值转换走 parse::<T>() + ?（零隐式转换，S1）。
+    fn from_config() -> Result<Policy, HarnessError> {
+        let cfg: HashMap<String, String> = native typescript {
+            const c = $host.config;
+            const m = new Map();
+            m.set("model", String(c.model));
+            m.set("temperature", String(c.temperature));
+            m.set("max_turns", String(c.maxTurns));
+            m.set("max_bash_calls", String(c.maxBashCalls));
+            m.set("max_output_chars", String(c.maxOutputChars));
+            m.set("workspace", String(c.workspace));
+            m.set("task", String(c.task));
+            m.set("allow", c.allow.join(","));
+            return m;
+        };
+        let model = cfg.get("model").unwrap_or(String::from("scripted"));
+        let temperature = cfg.get("temperature").unwrap_or(String::from("0.2")).parse::<f64>()?;
+        let max_turns = cfg.get("max_turns").unwrap_or(String::from("24")).parse::<u32>()?;
+        let max_bash_calls = cfg.get("max_bash_calls").unwrap_or(String::from("12")).parse::<u32>()?;
+        let max_output_chars = cfg.get("max_output_chars").unwrap_or(String::from("4000")).parse::<u32>()?;
+        let workspace = cfg.get("workspace").unwrap_or(String::from("."));
+        let task = cfg.get("task").unwrap_or(String::from(""));
+        let allow_raw = cfg.get("allow").unwrap_or(String::from("bun"));
+        let allow = allow_raw.split(',').map(|s| s.trim().to_string());
+        Ok(Policy {
+            model,
+            temperature,
+            max_turns,
+            max_bash_calls,
+            max_output_chars,
+            workspace,
+            task,
+            allow,
+        })
+    }
+}
+
+/// 会话预算与统计。
+#[derive(Debug, Clone)]
+export struct SessionStats {
+    turns: u32,
+    tool_calls: u32,
+    bash_calls: u32,
+    failures: u32,
+}
+
+impl SessionStats {
+    fn zero() -> SessionStats {
+        SessionStats { turns: 0, tool_calls: 0, bash_calls: 0, failures: 0 }
+    }
+}
+
+/// 会话状态（graph 主参数）。
+#[derive(Debug, Clone)]
+export struct SessionState {
+    policy: Policy,
+    transcript: Vec<Message>,
+    stats: SessionStats,
+}
+
+/// 运行报告（harness 出口产物）。
+#[derive(Debug, Clone)]
+export struct Report {
+    task: String,
+    verdict: String,
+    turns: u32,
+    tool_calls: u32,
+    bash_calls: u32,
+    failures: u32,
+    transcript_lines: u32,
+    ok: bool,
+    transcript: Vec<Message>,
+}

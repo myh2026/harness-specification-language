@@ -1,0 +1,144 @@
+// ============================================================================
+// nova/agents/planner.hsl — 规划 Agent：问题 → 任务 DAG
+// ============================================================================
+// 文法覆盖：GraphDef（-> Result<T,E>）/ node 声明 / edge on Guard（枚举变体，
+//           G5）/ EdgeAttrs（with priority = 1）/ AgentLoop（G1）/
+//           graph 体内局部 item（M5）/ impl 固有方法
+// ============================================================================
+
+import { ResearchState, Task, TokenBudget } from "../types/state.hsl";
+import { NovaError } from "../types/errors.hsl";
+import { CompletionRequest, DeepSeekClient, Message } from "../providers/llm.hsl";
+
+/// 边事件：拓扑条件（G5 要求 guard 为枚举变体模式）。
+enum EdgeSignal {
+    PlanReady,
+    PlanComplete,
+}
+
+/// 规划器动作词汇（文件局部）。
+enum PlannerAction {
+    Decompose,
+    Refine { hint: String },
+    Commit,
+    Abort { reason: String },
+}
+
+/// 任务汇聚槽：graph node 的可观测输出。
+struct TaskSink {
+    committed: u32,
+}
+
+impl TaskSink {
+    fn new() -> TaskSink {
+        TaskSink { committed: 0 }
+    }
+
+    fn commit(&mut self, state: ResearchState) {
+        self.committed = state.tasks.len() as u32;
+    }
+}
+
+impl DeepSeekClient {
+    /// graph 上的下一步决策（骨架：生产实现为 LLM 结构化输出 + 解析）。
+    async fn next_action(state: ResearchState) -> Result<PlannerAction, NovaError> {
+        if state.tasks.len() > 0 {
+            Ok(PlannerAction::Commit)
+        } else if state.budget_low() {
+            Ok(PlannerAction::Abort { reason: String::from("planning") })
+        } else {
+            Ok(PlannerAction::Decompose)
+        }
+    }
+}
+
+/// 规划 graph：输入研究问题，产出任务 DAG（写入 state.tasks）。
+///
+/// 拓扑（G2 端点均为已声明 node；G3 无环——条件边进一步打破任何潜在环）：
+///   brain ──on EdgeSignal::PlanReady──> backlog ──on EdgeSignal::PlanComplete──> out
+export graph Planner -> Result<ResearchState, NovaError> {
+    // node 声明：拓扑一等公民（G4：全部可达——brain 入边来自 loop 引用）
+    node brain: DeepSeekClient = DeepSeekClient::new();
+    node mut backlog: Vec<Task> = Vec::new();
+    node mut out: TaskSink = TaskSink::new();
+
+    // 条件边（G5：枚举变体 guard）+ 边属性（with priority = 1）
+    edge brain -> backlog on EdgeSignal::PlanReady;
+    edge backlog -> out on EdgeSignal::PlanComplete with priority = 1;
+
+    // graph 体内局部项（M5：词法作用域与函数体一致）
+    fn seed_tasks(question: String) -> Vec<Task> {
+        vec![
+            Task { id: 1, goal: question, depends_on: Vec::new(), role: String::from("researcher"), priority: 1, done: false },
+            Task { id: 2, goal: String::from("verify key claims"), depends_on: vec![1], role: String::from("verifier"), priority: 2, done: false },
+            Task { id: 3, goal: String::from("audit evidence"), depends_on: vec![1], role: String::from("critic"), priority: 3, done: false },
+        ]
+    }
+
+    fn expand(hint: String, request_budget: TokenBudget) -> Result<String, NovaError> {
+        let request = CompletionRequest {
+            messages: vec![Message::system(String::from("output JSON array of tasks")), Message::user(hint)],
+            temperature: 0.0,
+            budget: request_budget,
+        };
+        let raw = DeepSeekClient::complete(request).await?;
+        Ok(raw)
+    }
+
+    // graph 局部状态
+    let mut state = ResearchState::new(String::from("(planner input)"));
+    let mut planned: u32 = 0;
+    let max_plan_rounds: u32 = 2;
+
+    // AgentLoop（G1：恰一个 loop）
+    loop {
+        let action = brain.next_action(state.clone()).await?;
+        match action {
+            PlannerAction::Decompose => {
+                let seeds = seed_tasks(state.question.clone());
+                for task in seeds {
+                    backlog.push(task);
+                }
+                planned += 1;
+            },
+            PlannerAction::Refine { hint } => {
+                // 预算内允许一轮细化（S1：显式数值比较）
+                if planned < max_plan_rounds {
+                    let improved = expand(hint, state.budget.clone())?;
+                    let extra = parse_tasks(improved);
+                    for task in extra {
+                        backlog.push(task);
+                    }
+                    planned += 1;
+                }
+            },
+            PlannerAction::Commit => {
+                state.tasks = backlog.clone();
+                out.commit(state.clone());
+                break;
+            },
+            PlannerAction::Abort { reason } => {
+                return Err(NovaError::BudgetExhausted { phase: reason });
+            },
+        }
+    }
+
+    Ok(state)
+}
+
+/// 解析 LLM 输出为任务（骨架：生产实现走 serde + schema 校验）。
+fn parse_tasks(payload: String) -> Vec<Task> {
+    let mut out: Vec<Task> = Vec::new();
+    if payload.len() > 0 {
+        let next_id = 10 + out.len() as u32;
+        out.push(Task {
+            id: next_id,
+            goal: payload,
+            depends_on: Vec::new(),
+            role: String::from("researcher"),
+            priority: 5,
+            done: false,
+        });
+    }
+    out
+}

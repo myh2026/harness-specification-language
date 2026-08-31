@@ -1,0 +1,187 @@
+// ============================================================================
+// dsh/dsh.hsl — DS Harness 入口：主编排 graph + main + 投射声明
+// ============================================================================
+// 复现 DS harness 的核心循环：
+//   model ──on Action::Tool──> executor ──on Event::Observed──> model
+//   model ──on Action::Done──> reviewer ──on Verdict::Revise──> model
+// （planner→tool→observe→reviewer 的条件环拓扑；G3 环上全部带 guard）
+//
+// 文法覆盖：GraphDef（mut 参数 + 返回类型）/ node 声明带初始化 / 条件边环 /
+//           AgentLoop + match 穷尽（S6 无 _）/ macro_rules! bump /
+//           GraphName::run 调用约定 / project + scale
+// ============================================================================
+
+import { Message, ToolResult, Action, Verdict, Event } from "./types/messages.hsl";
+import { Policy, SessionState, SessionStats, Report } from "./types/state.hsl";
+import { HarnessError } from "./types/errors.hsl";
+import { DeepSeekModel, ScriptedModel, ModelProvider } from "./providers/model.hsl";
+import { Toolkit, parse_action } from "./agents/executor.hsl";
+import { review } from "./agents/reviewer.hsl";
+import { SYSTEM_PROMPT, HARNESS_CONFIG, EVENTS_SCHEMA } from "./config/resources.hsl";
+
+macro_rules! bump {
+    ($field:expr, $by:expr) => { $field += $by; };
+}
+
+fn make_model(policy: Policy) -> Result<Box<dyn ModelProvider>, HarnessError> {
+    if policy.model == String::from("deepseek") {
+        Ok(DeepSeekModel::new(String::from("glm-4.5"), policy.temperature))
+    } else {
+        Ok(ScriptedModel::new(String::from("fixture"), String::from("actor")))
+    }
+}
+
+fn make_reviewer(policy: Policy) -> Result<Box<dyn ModelProvider>, HarnessError> {
+    // 审查者与执行者同源不同实例：低温、独立对话、剧本独立轨道（reviews）
+    if policy.model == String::from("deepseek") {
+        Ok(DeepSeekModel::new(String::from("glm-4.5"), 0.1))
+    } else {
+        Ok(ScriptedModel::new(String::from("fixture"), String::from("reviewer")))
+    }
+}
+
+/// 主编排 graph：会话状态机。
+graph Dsh(mut state: SessionState) -> Result<Report, HarnessError> {
+    node model: Box<dyn ModelProvider> = make_model(state.policy.clone())?;
+    node executor: Toolkit = Toolkit::new(state.policy.clone());
+    node reviewer: Box<dyn ModelProvider> = make_reviewer(state.policy.clone())?;
+    let mut transcript: Vec<Message> = state.transcript.clone();
+    let mut turns: u32 = 0;
+    let mut accepted: bool = false;
+
+    // 条件环（G3：环上每条边都带 on Guard，由词法打破死锁）
+    edge model -> executor on Action::Tool;
+    edge executor -> model on Event::Observed;
+    edge model -> reviewer on Action::Done;
+    edge reviewer -> model on Verdict::Revise;
+
+    loop {
+        if turns >= state.policy.max_turns {
+            break;
+        }
+        let raw = model.act(transcript.clone()).await?;
+        // 模型自己的回合必须入转录（否则模型看不到自己已做过什么 → 重复动作）
+        transcript.push(Message::assistant(raw.clone()));
+        // 协议纠错回路：解析失败把错误反馈给模型重试（预算内）
+        let action = match parse_action(raw) {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[dsh] 协议违规，反馈重试: {}", e.message);
+                transcript.push(Message::user(format!("你的上一条输出违反了协议：{}\n请重新输出恰好一个 JSON 对象（action/tool 字段按系统提示词的格式）。", e.message)));
+                turns += 1;
+                continue;
+            },
+        };
+        match action {
+            Action::Tool { call } => {
+                // bash 预算闸门（运行时策略，与编译期 capability 双闸门互补）
+                if let ToolCall::Bash { command: _ } = call {
+                    if state.stats.bash_calls >= state.policy.max_bash_calls {
+                        transcript.push(Message::tool(String::from("bash 预算已耗尽（max_bash_calls），请收敛调用或直接 done")));
+                        turns += 1;
+                        continue;
+                    }
+                    bump!(state.stats.bash_calls, 1);
+                }
+                let result: ToolResult = executor.run(call)?;
+                transcript.push(result.observation());
+                if result.ok == false {
+                    bump!(state.stats.failures, 1);
+                }
+                bump!(state.stats.tool_calls, 1);
+                bump!(state.stats.turns, 1);
+                turns += 1;
+                let _ = native typescript {
+                    $host.events.emit("observed", { turns });
+                    return true;
+                };
+            },
+            Action::Done { summary } => {
+                println!("[dsh] model declared done: {}", summary);
+                state.transcript = transcript.clone();
+                let v = review(state.clone(), reviewer).await?;
+                match v {
+                    Verdict::Accept => {
+                        accepted = true;
+                        break;
+                    },
+                    Verdict::Revise { note } => {
+                        println!("[dsh] reviewer 要求返工: {}", note);
+                        transcript.push(Message::user(format!("reviewer 要求返工：{}\n请继续完成任务。", note)));
+                        bump!(state.stats.turns, 1);
+                        turns += 1;
+                    },
+                }
+            },
+        }
+    }
+
+    state.transcript = transcript.clone();
+    Ok(build_report(state, transcript, turns, accepted))
+}
+
+fn build_report(state: SessionState, transcript: Vec<Message>, turns: u32, accepted: bool) -> Report {
+    let verdict = if accepted { String::from("accepted") } else { String::from("budget_exhausted") };
+    Report {
+        task: state.policy.task.clone(),
+        verdict,
+        turns,
+        tool_calls: state.stats.tool_calls,
+        bash_calls: state.stats.bash_calls,
+        failures: state.stats.failures,
+        transcript_lines: transcript.len(),
+        ok: accepted,
+        transcript,
+    }
+}
+
+export fn main() -> Result<(), HarnessError> {
+    let policy = Policy::from_config()?;
+    let mut opening: Vec<Message> = Vec::new();
+    opening.push(Message::system(SYSTEM_PROMPT));
+    opening.push(Message::user(format!("workspace: {}\ntask: {}", policy.workspace, policy.task)));
+    let state = SessionState { policy: policy.clone(), transcript: opening, stats: SessionStats::zero() };
+    let report = Dsh::run(state)?;
+    write_artifacts(report, policy)
+}
+
+fn write_artifacts(report: Report, policy: Policy) -> Result<(), HarnessError> {
+    let report_md = render_report(report.clone(), policy);
+    let transcript_jsonl: String = native typescript {
+        const lines = report.transcript.map((m) => JSON.stringify({ role: m.role, content: m.content }));
+        return lines.join("\n") + "\n";
+    };
+    native typescript {
+        $host.artifacts.write("report.md", report_md);
+        $host.artifacts.write("transcript.jsonl", transcript_jsonl);
+        return true;
+    };
+    println!("[dsh] artifacts written: report.md / transcript.jsonl");
+    Ok(())
+}
+
+fn render_report(report: Report, policy: Policy) -> String {
+    let mut out = String::from("# DSH Run Report\n\n");
+    out.push_str("## 任务\n\n");
+    out.push_str(policy.task.as_str());
+    out.push_str("\n\n## 结果\n\n");
+    out.push_str(format!("- verdict: {}\n", report.verdict).as_str());
+    out.push_str(format!("- completed: {}\n", report.ok).as_str());
+    out.push_str("\n## 预算消耗\n\n");
+    out.push_str(format!("- turns: {}\n", report.turns).as_str());
+    out.push_str(format!("- tool_calls: {}\n", report.tool_calls).as_str());
+    out.push_str(format!("- bash_calls: {}\n", report.bash_calls).as_str());
+    out.push_str(format!("- failures: {}\n", report.failures).as_str());
+    out.push_str(format!("- transcript_lines: {}\n", report.transcript_lines).as_str());
+    out
+}
+
+scale = microkernel;
+
+project {
+    Dsh            -> "src/dsh/main.py"           : python,
+    DeepSeekModel  -> "src/dsh/model.ts"          : typescript,
+    SYSTEM_PROMPT  -> ".harness/AGENTS.md"        : markdown,
+    HARNESS_CONFIG -> "config/harness.yml"        : yaml,
+    EVENTS_SCHEMA  -> "config/events.schema.json" : json,
+}

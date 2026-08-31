@@ -1,0 +1,7 @@
+{
+  "ts": "2026-08-30T11:17:28.681Z",
+  "ok": false,
+  "panic": "import 路径无法解析：./types/messages.hsl（from D:\\HSL\\hsl-toolchain-v0.2.0 (1)\\examples\\dsh\\dsh.hsl）",
+  "model": "scripted",
+  "task": "修复 stats.ts 方差"
+}

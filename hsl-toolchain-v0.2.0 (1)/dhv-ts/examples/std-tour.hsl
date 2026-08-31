@@ -1,0 +1,121 @@
+// ============================================================================
+// dhv-ts/examples/std-tour.hsl — 标准库全库巡览（10 个 std 模块）
+// ----------------------------------------------------------------------------
+// 运行：bun dhv-ts/src/main.ts run dhv-ts/examples/std-tour.hsl
+// ============================================================================
+
+import { identity, type_name, hash } from "std/core";
+import { vec, zip, chunk, dedup, unique, flatten, reverse } from "std/collections";
+import { split_once, to_snake, to_camel, pad_start, capitalize, levenshtein, truncate } from "std/text";
+import { sin, cos, gcd, lcm, signum, isqrt, div_ceil, rem_euclid, PI } from "std/math";
+import { parse, stringify, get } from "std/json";
+import { now_ms, duration_desc } from "std/time";
+import { seed, random, int_in, choice, shuffle, uuid_v4 } from "std/random";
+import { env_get } from "std/env";
+import { range, range_step, enumerate, chain, take, min_of, max_of } from "std/iter";
+
+fn main() -> i64 {
+    // std/core
+    println!("== std/core ==");
+    println!("identity(42) = {}", identity(42));
+    println!("type_name(3.14) = {}", type_name(3.14));
+    println!("hash(\"hsl\") = {}", hash(String::from("hsl")));
+
+    // std/collections
+    println!("\n== std/collections ==");
+    let v = vec(1, 2, 3, 4, 5, 6);
+    println!("vec(1..6) len = {}", v.len());
+    let z = zip(vec(1, 2), vec(10, 20));
+    println!("zip = {:?}", z);
+    println!("chunk(v,2) = {:?}", chunk(v, 2));
+    println!("dedup(vec(1,1,2,2,3)) = {:?}", dedup(vec(1, 1, 2, 2, 3)));
+    println!("unique(vec(1,2,1,3,2)) = {:?}", unique(vec(1, 2, 1, 3, 2)));
+    println!("flatten = {:?}", flatten(vec(vec(1, 2), vec(3))));
+    println!("reverse = {:?}", reverse(vec(1, 2, 3)));
+
+    // std/text
+    println!("\n== std/text ==");
+    let parts = split_once(String::from("key=value"), String::from("="));
+    match parts {
+        Option::Some(pair) => println!("split_once key/value = {} / {}", pair[0], pair[1]),
+        Option::None => println!("split_once none"),
+    }
+    println!("to_snake(\"myToolName\") = {}", to_snake(String::from("myToolName")));
+    println!("to_camel(\"my_tool_name\") = {}", to_camel(String::from("my_tool_name")));
+    println!("pad_start(\"7\", 3, \"0\") = {}", pad_start(String::from("7"), 3, String::from("0")));
+    println!("capitalize(\"hsl\") = {}", capitalize(String::from("hsl")));
+    println!("levenshtein(kitten/sitting) = {}", levenshtein(String::from("kitten"), String::from("sitting")));
+    println!("truncate(long, 8) = {}", truncate(String::from("0123456789ABC"), 8));
+
+    // std/math
+    println!("\n== std/math ==");
+    println!("sin(0) = {}", sin(0.0));
+    println!("cos(0) = {}", cos(0.0));
+    println!("gcd(12,18) = {}", gcd(12, 18));
+    println!("lcm(4,6) = {}", lcm(4, 6));
+    println!("signum(-5) = {}", signum(-5));
+    println!("isqrt(50) = {}", isqrt(50));
+    println!("div_ceil(7,2) = {}", div_ceil(7, 2));
+    println!("rem_euclid(-7,3) = {}", rem_euclid(-7, 3));
+    println!("PI = {}", PI);
+
+    // std/json
+    println!("\n== std/json ==");
+    let parsed = parse(String::from("{\"name\":\"hsl\",\"backends\":38}"));
+    match parsed {
+        Result::Ok(obj) => {
+            match get(obj, String::from("name")) {
+                Option::Some(name) => println!("json name = {}", name),
+                Option::None => println!("json name missing"),
+            }
+            match get(obj, String::from("backends")) {
+                Option::Some(n) => println!("json backends = {}", n),
+                Option::None => println!("json backends missing"),
+            }
+        },
+        Result::Err(e) => println!("json parse err = {}", e),
+    }
+    println!("stringify = {}", stringify(vec(1, 2, 3)));
+
+    // std/time
+    println!("\n== std/time ==");
+    let t = now_ms();
+    println!("now_ms = {}", t);
+    println!("duration_desc(1234) = {}", duration_desc(1234));
+
+    // std/random（可复现：种子 42）
+    println!("\n== std/random ==");
+    seed(42);
+    println!("random() #1 = {}", random());
+    println!("random() #2 = {}", random());
+    println!("int_in(1,6) = {}", int_in(1, 6));
+    println!("choice = {:?}", choice(vec(String::from("a"), String::from("b"))));
+    println!("shuffle = {:?}", shuffle(vec(1, 2, 3, 4, 5)));
+    println!("uuid_v4 = {}", uuid_v4());
+
+    // std/env
+    println!("\n== std/env ==");
+    match env_get(String::from("PATH")) {
+        Option::Some(p) => println!("PATH 头 20 字符 = {}", p.take(20)),
+        Option::None => println!("(PATH 不可见)"),
+    }
+
+    // std/iter
+    println!("\n== std/iter ==");
+    println!("range(0,5) = {:?}", range(0, 5));
+    println!("range_step(0,10,3) = {:?}", range_step(0, 10, 3));
+    println!("enumerate = {:?}", enumerate(vec(String::from("a"), String::from("b"))));
+    println!("chain = {:?}", chain(vec(1, 2), vec(3, 4)));
+    println!("take(range(0,10),3) = {:?}", take(range(0, 10), 3));
+    match min_of(vec(5, 2, 9)) {
+        Option::Some(m) => println!("min_of = {}", m),
+        Option::None => println!("min none"),
+    }
+    match max_of(vec(5, 2, 9)) {
+        Option::Some(m) => println!("max_of = {}", m),
+        Option::None => println!("max none"),
+    }
+
+    println!("\nstd-tour ✓（10 库全巡览）");
+    0
+}

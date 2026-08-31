@@ -1,0 +1,83 @@
+// ============================================================================
+// nova/config/resources.hsl — 静态资源块（yaml / markdown / json 三后端）
+// ============================================================================
+// 文法覆盖：StaticResourceDef（block/static 同义）+ 编译期插值 {{expr}}（N4）+
+//           大括号深度计数（§1.9 模式 A：block 体为原始文本）
+// ============================================================================
+
+import { BUDGET_PROMPT, MAX_ITERATIONS } from "../types/state.hsl";
+import { EMBED_DIM } from "../providers/embed.hsl";
+
+/// 运行配置（投射 yaml 后端）。
+/// N4：插值表达式为数值常量（ToString ✓）；运行期占位见 N5 说明。
+export block nova_config {
+    # Nova runtime configuration
+    runtime:
+      name: nova-research
+      version: 0.1.0
+      max_iterations: {{MAX_ITERATIONS}}
+      budget_prompt: {{BUDGET_PROMPT}}
+    research:
+      subloop_cap: 6
+      evidence_min: 3
+      quorum: 1
+    memory:
+      window: 4096
+      embed_dim: {{EMBED_DIM}}
+}
+
+/// Agent 提示词（投射 markdown 后端：.harness/AGENTS.md）。
+/// {{}} 内为编译期常量插值；运行期上下文由 harness 注入点填充（N5）。
+export block agent_instructions {
+    # Nova Agents
+
+    你是 NOVA 深度研究团队的成员。团队拓扑：
+
+    - planner —— 把研究问题分解为任务 DAG
+    - researcher —— 检索、阅读、记笔记
+    - verifier —— 写验证代码并在沙盒内运行
+    - critic —— 审查证据强度并裁决
+    - synthesizer —— 汇总为结构化报告
+
+    ## 纪律（S 系列铁律的运行时映射）
+
+    - 条件必须显式比较，禁止 truthy 判断
+    - 禁止裸 unwrap，一律 ? 或 match 兜底
+    - 优先不可变；需要变更再显式 mut
+    - 循环必须有预算上限（默认 {{MAX_ITERATIONS}} 轮）
+
+    ## 安全
+
+    能力域仅限 file_read / net_connect / process_spawn；
+    file_write 与 secret_access 一律编译期处决。
+}
+
+/// 任务 schema（投射 json 后端：config/task.schema.json）。
+export block task_schema {
+    {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Nova Task",
+        "type": "object",
+        "required": ["id", "goal", "role"],
+        "properties": {
+            "id": { "type": "integer", "minimum": 1 },
+            "goal": { "type": "string", "minLength": 8 },
+            "role": { "type": "string", "enum": ["researcher", "verifier", "critic"] },
+            "priority": { "type": "integer", "minimum": 1, "maximum": 9 },
+            "depends_on": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+    }
+}
+
+/// 事件清单（static 与 block 同义，风格演示）。
+export static event_catalog {
+    # Nova 事件总线（microkernel 尺度）
+
+    | 事件 | 载荷 | 订阅者 |
+    |---|---|---|
+    | TaskCompleted | task_id, by | orchestrator |
+    | BudgetLow | remaining | orchestrator |
+    | VerdictIssued | finding_id, verdict | synthesizer |
+    | ResearchHalted | reason | all |
+}

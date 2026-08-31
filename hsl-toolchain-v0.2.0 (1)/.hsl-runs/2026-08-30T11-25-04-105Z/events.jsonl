@@ -1,0 +1,2 @@
+{"seq":0,"ts":"2026-08-30T11:25:04.127Z","name":"run_start","data":{"entry":"C:\\Users\\86186\\AppData\\Local\\Temp\\hsl-test-eS7DI8\\macro-bang\\mc.hsl","model":"scripted","task":"","scale":"microkernel"}}
+{"seq":1,"ts":"2026-08-30T11:25:04.141Z","name":"run_end","data":{"elapsed_ms":14,"ok":true}}

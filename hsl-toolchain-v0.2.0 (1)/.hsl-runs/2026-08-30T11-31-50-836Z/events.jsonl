@@ -1,0 +1,2 @@
+{"seq":0,"ts":"2026-08-30T11:31:50.890Z","name":"run_start","data":{"entry":"D:\\HSL\\hsl-toolchain-v0.2.0 (1)\\examples\\backends-demo\\agent.hsl","model":"scripted","task":"","scale":"microkernel"}}
+{"seq":1,"ts":"2026-08-30T11:31:50.916Z","name":"run_end","data":{"elapsed_ms":26,"ok":true}}

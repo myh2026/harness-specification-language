@@ -1,0 +1,7 @@
+{
+  "ts": "2026-08-30T11:17:29.818Z",
+  "ok": false,
+  "panic": "import 路径无法解析：./model.hsl（from D:\\HSL\\hsl-toolchain-v0.2.0 (1)\\examples\\backends-demo\\agent.hsl）",
+  "model": "scripted",
+  "task": ""
+}

@@ -1,0 +1,102 @@
+{
+  "graph": {
+    "prefix": "graph",
+    "body": [
+      "graph ${1:MyAgent} -> Result<(), Error> {",
+      "    let ${2:planner}: Box<dyn ${3:LLMProvider}> = ${4:DeepSeekClient}::new();",
+      "    let ${5:tool}: Box<dyn ${6:ToolExecutor}> = ${7:BashTool}::new();",
+      "    let mut state = ${8:AgentState} { history: Vec::new(), current_goal: \"${9:goal}\" };",
+      "",
+      "    edge $2 -> $5 on ${10:Action}::${11:CallTool};",
+      "",
+      "    loop {",
+      "        let action = $2.generate(state.clone()).await?;",
+      "        match action {",
+      "            ${10:Action}::${11:CallTool} { .. } => { state.history.push($5.execute(action)?); },",
+      "            ${10:Action}::${12:Respond}(text) => { println(text); break; },",
+      "            ${10:Action}::${13:Stop} => break,",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "description": "Agent 拓扑：graph + edge + loop + match Action 核心循环"
+  },
+  "project": {
+    "prefix": "project",
+    "body": [
+      "project {",
+      "    ${1:MyAgent}        -> \"${2:src/main.rs}\"      : rust,",
+      "    ${3:DeepSeekClient} -> \"${4:src/deepseek.py}\"  : python,",
+      "    ${5:agent_config}   -> \"${6:config/agent.yml}\" : yaml,",
+      "}"
+    ],
+    "description": "project 投射声明：逻辑项 → 物理文件 : 目标语言"
+  },
+  "native-python": {
+    "prefix": "native python",
+    "body": [
+      "let ${1:result}: ${2:String} = native python {",
+      "    ${3:import openai}",
+      "    $0",
+      "};"
+    ],
+    "description": "Python 逃生舱：直接调用 Python 生态"
+  },
+  "native-rust": {
+    "prefix": "native rust",
+    "body": [
+      "let ${1:result}: ${2:String} = native rust {",
+      "    ${3:use rayon::prelude::*;}",
+      "    $0",
+      "};"
+    ],
+    "description": "Rust 逃生舱：直接调用 Rust 生态"
+  },
+  "block": {
+    "prefix": "block",
+    "body": [
+      "block ${1:agent_config} {",
+      "    ${2:agent}:",
+      "      name: ${3:MiniAgent}",
+      "      version: 0.1",
+      "      max_retries: {{${4:MAX_RETRIES}}}",
+      "}"
+    ],
+    "description": "静态资源原生块（{{}} 编译期插值）"
+  },
+  "scale": {
+    "prefix": "scale",
+    "body": ["scale = ${1|monolith,microkernel|};"],
+    "description": "尺度声明：同一份源码，改变架构形态"
+  },
+  "edge": {
+    "prefix": "edge",
+    "body": ["edge ${1:planner} -> ${2:tool} on ${3:Action}::${4:CallTool};"],
+    "description": "拓扑边（可带条件守卫）"
+  },
+  "trait-provider": {
+    "prefix": "trait provider",
+    "body": [
+      "export trait ${1:LLMProvider} {",
+      "    async fn ${2:generate}(prompt: ${3:Prompt}) -> Result<String, ${4:Error}>;",
+      "}"
+    ],
+    "description": "Provider trait 契约"
+  },
+  "impl-trait": {
+    "prefix": "impl trait",
+    "body": [
+      "impl ${1:LLMProvider} for ${2:DeepSeekClient} {",
+      "    async fn ${3:generate}(prompt: ${4:Prompt}) -> Result<String, ${5:Error}> {",
+      "        $0",
+      "    }",
+      "}"
+    ],
+    "description": "trait 实现"
+  },
+  "capability": {
+    "prefix": "#[capability",
+    "body": ["#[capability(${1|file_read,file_write,net_connect,process_spawn,secret_access|})]"],
+    "description": "能力域声明：编译期处决越界"
+  }
+}

@@ -1,0 +1,5 @@
+{"seq":0,"ts":"2026-08-30T11:33:57.609Z","name":"run_start","data":{"entry":"C:\\Users\\86186\\AppData\\Local\\Temp\\mini\\mini-agent.hsl","model":"scripted","task":"","scale":"microkernel"}}
+{"seq":1,"ts":"2026-08-30T11:33:57.622Z","name":"node","data":{"graph":"MiniAgent","node":"planner","initialized":true}}
+{"seq":2,"ts":"2026-08-30T11:33:57.635Z","name":"edge","data":{"graph":"MiniAgent","from":"planner","to":"planner","on":"CallTool","scale":"microkernel"}}
+{"seq":3,"ts":"2026-08-30T11:33:57.643Z","name":"edge","data":{"graph":"MiniAgent","from":"planner","to":"planner","on":"CallTool","scale":"microkernel"}}
+{"seq":4,"ts":"2026-08-30T11:33:57.648Z","name":"run_end","data":{"elapsed_ms":39,"ok":true}}

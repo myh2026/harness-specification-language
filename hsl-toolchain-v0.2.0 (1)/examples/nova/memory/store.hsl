@@ -1,0 +1,117 @@
+// ============================================================================
+// nova/memory/store.hsl — 记忆存储（短期窗口 + 长期向量召回）
+// ============================================================================
+// 文法覆盖：GenericParams + WhereClause 多约束 / SelfParam（&self &mut self）/
+//           impl Trait for Type / Vec/HashMap / for-in / while / if-let
+// ============================================================================
+
+import { Finding } from "../types/state.hsl";
+
+/// 记忆条目。
+#[derive(Debug, Clone)]
+export struct MemoryEntry {
+    content: String,
+    importance: f64,
+    embedding_id: u64,
+}
+
+/// 记忆契约：拓扑中的可替换存储后端（graph node 注入）。
+export trait MemoryStore {
+    fn push(&mut self, entry: MemoryEntry) -> Result<(), String>;
+
+    fn window(&self, last_n: u32) -> Vec<MemoryEntry>;
+
+    fn len(&self) -> u32;
+}
+
+/// 进程内存储：演示拓扑用；生产替换为 Redis / Postgres 实现。
+#[derive(Debug)]
+export struct InMemoryStore {
+    entries: Vec<MemoryEntry>,
+    index_by_word: HashMap<String, Vec<u64>>,
+}
+
+impl InMemoryStore {
+    fn new() -> InMemoryStore {
+        InMemoryStore {
+            entries: Vec::new(),
+            index_by_word: HashMap::new(),
+        }
+    }
+}
+
+impl MemoryStore for InMemoryStore {
+    fn push(&mut self, entry: MemoryEntry) -> Result<(), String> {
+        // 词级倒排：为 graph 内 recall 检索提供索引
+        for word in entry.content.split(" ") {
+            let posting = self.index_by_word.entry(word).or_insert(Vec::new());
+            posting.push(entry.embedding_id);
+        }
+        self.entries.push(entry);
+        if self.entries.len() > 4096 {
+            Err(String::from("memory window overflow: 4096 entries"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn window(&self, last_n: u32) -> Vec<MemoryEntry> {
+        let n = last_n as usize;
+        let total = self.entries.len();
+        let start = if total > n { total - n } else { 0 };
+        let mut out: Vec<MemoryEntry> = Vec::new();
+        let mut i = start;
+        while i < total {
+            out.push(self.entries[i].clone());
+            i += 1;
+        }
+        out
+    }
+
+    fn len(&self) -> u32 {
+        self.entries.len() as u32
+    }
+}
+
+/// 把发现压缩进长期记忆：重要性 = 置信度 × 是否已验证加成。
+export fn consolidate<S: MemoryStore + Clone>(store: S, findings: Vec<Finding>) -> Result<S, String> {
+    let mut working = store.clone();
+    for finding in findings {
+        let boost = if finding.verified { 1.2 } else { 0.8 };
+        let score = finding.confidence * boost;
+        let entry = MemoryEntry {
+            content: finding.claim.clone(),
+            importance: score,
+            embedding_id: finding.id as u64,
+        };
+        let outcome = working.push(entry);
+        if let Err(message) = outcome {
+            return Err(message);
+        }
+    }
+    Ok(working)
+}
+
+/// 摘要压缩：短期记忆超窗时的截断策略（保头保尾，中段合并）。
+export fn compact(entries: Vec<MemoryEntry>, keep: u32) -> Vec<MemoryEntry> {
+    let total = entries.len();
+    let n = keep as usize;
+    if total <= n {
+        entries
+    } else {
+        let head = n / 2;
+        let mut out: Vec<MemoryEntry> = Vec::new();
+        let mut i = 0;
+        while i < head {
+            out.push(entries[i].clone());
+            i += 1;
+        }
+        let tail_start = total - (n - head);
+        let mut j = tail_start;
+        while j < total {
+            out.push(entries[j].clone());
+            j += 1;
+        }
+        out
+    }
+}

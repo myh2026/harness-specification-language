@@ -1,0 +1,105 @@
+// ============================================================================
+// nova/agents/critic.hsl — 审查 Agent：证据审查 → 评分 → 裁决
+// ============================================================================
+// 文法覆盖：graph node 声明（无初始化 = 类型锚点）/ edge 多跳 /
+//           match 嵌套数据变体 / Vec 过滤 + 计数 / u8 饱和算术
+// ============================================================================
+
+import { Citation, Finding } from "../types/state.hsl";
+import { Verdict } from "../types/actions.hsl";
+import { NovaError } from "../types/errors.hsl";
+
+/// 审查层边事件。
+enum CriticEdge {
+    EvidenceScanned,
+    ScoreComputed,
+}
+
+/// 审查 graph：对发现做证据强度审查。
+///
+/// 拓扑（两跳）：
+///   scanner ──on EvidenceScanned──> scorer ──on ScoreComputed──> bench
+export graph Critic(finding: Finding) -> Result<Verdict, NovaError> {
+    // node 无初始化：类型锚点（运行时由 harness 注入实现，microkernel 插件位）
+    node scanner: EvidenceScanner;
+    node scorer: ScoreCard;
+    node mut bench: Vec<Verdict> = Vec::new();
+
+    edge scanner -> scorer on CriticEdge::EvidenceScanned;
+    edge scorer -> bench on CriticEdge::ScoreComputed with quorum = 1;
+
+    fn evidence_mass(evidence: Vec<Citation>) -> usize {
+        let meaningful = evidence.iter().filter(|c: &Citation| c.quoted.len() > 40);
+        let mut total = 0;
+        for _ in meaningful {
+            total += 1;
+        }
+        total
+    }
+
+    let mass = evidence_mass(finding.evidence.clone());
+    let issues = scanner.scan(finding.clone());
+
+    // AgentLoop（单轮裁决）
+    loop {
+        let score = scorer.rate(mass, issues.len());
+        let verdict = if score >= 80 {
+            Verdict::Accept { score: score }
+        } else if score >= 50 {
+            Verdict::Revise { issues: issues.clone(), score: score }
+        } else {
+            Verdict::Reject { reason: String::from("insufficient evidence mass") }
+        };
+        bench.push(verdict.clone());
+        break;
+    }
+
+    match bench.last().cloned() {
+        Some(final_verdict) => Ok(final_verdict),
+        None => Err(NovaError::TaskNotFound { task_id: finding.task_id }),
+    }
+}
+
+/// 证据扫描器骨架。
+struct EvidenceScanner {
+    min_quotes: usize,
+}
+
+impl EvidenceScanner {
+    fn scan(self, finding: Finding) -> Vec<String> {
+        let mut problems: Vec<String> = Vec::new();
+        if finding.evidence.len() < self.min_quotes {
+            problems.push(String::from("too few citations"));
+        }
+        let weak = finding.evidence.iter().filter(|c: &Citation| c.url.len() == 0);
+        let mut weak_count = 0;
+        for _ in weak {
+            weak_count += 1;
+        }
+        if weak_count > 0 {
+            problems.push(String::from("citation without url"));
+        }
+        if finding.confidence < 0.3 {
+            problems.push(String::from("low model confidence"));
+        }
+        problems
+    }
+}
+
+/// 评分卡骨架。
+struct ScoreCard {
+    base: u8,
+}
+
+impl ScoreCard {
+    fn rate(self, evidence_mass: usize, issue_count: usize) -> u8 {
+        let mass_bonus = evidence_mass * 8;
+        let penalty = issue_count * 15;
+        let raw = self.base as u32 + mass_bonus as u32 - penalty as u32;
+        if raw > 255 {
+            255 as u8
+        } else {
+            raw as u8
+        }
+    }
+}

@@ -1,0 +1,110 @@
+// ============================================================================
+// dhv-ts/examples/smoke.hsl — 解释器冒烟样例（覆盖核心构件）
+// ============================================================================
+
+export struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    fn magnitude_sq(self) -> i32 {
+        self.x * self.x + self.y * self.y
+    }
+}
+
+export enum Shape {
+    Circle { radius: f64 },
+    Rect { w: i32, h: i32 },
+    Dot,
+}
+
+export fn describe(s: Shape) -> String {
+    match s {
+        Shape::Circle { radius } => format!("circle r={}", radius),
+        Shape::Rect { w, h } => format!("rect {}x{}", w, h),
+        Shape::Dot => String::from("dot"),
+    }
+}
+
+fn try_div(a: i32, b: i32) -> Result<i32, String> {
+    if b == 0 {
+        Err(String::from("divide by zero"))
+    } else {
+        Ok(a / b)
+    }
+}
+
+fn main() {
+    // struct + impl + 方法派发
+    let p = Point::new(3, 4);
+    println!("mag_sq = {}", p.magnitude_sq());
+
+    // 枚举 + match + format!
+    let s = Shape::Rect { w: 2, h: 5 };
+    println!("{}", describe(s.clone()));
+
+    // HashMap + Option
+    let mut m: HashMap<String, i32> = HashMap::new();
+    m.insert(String::from("a"), 1);
+    let v = m.get(String::from("a")).unwrap_or(0);
+    println!("map a = {}", v);
+
+    // Vec + 闭包 + 迭代方法
+    let nums = vec![1, 2, 3];
+    let doubled = nums.map(|x| x * 2);
+    println!("doubled = {:?} sum = {}", doubled, doubled.sum());
+
+    // 循环 / range / 累加
+    let mut total: i32 = 0;
+    for i in 0..5 {
+        total += i;
+    }
+    println!("total = {}", total);
+
+    // Result + ?
+    let ok_val = try_div(10, 2);
+    match ok_val {
+        Ok(n) => println!("10/2 = {}", n),
+        Err(e) => println!("err {}", e),
+    }
+    let bad = try_div(1, 0);
+    let recovered = bad.unwrap_or(-1);
+    println!("recovered = {}", recovered);
+
+    // if let
+    if let Ok(n) = try_div(8, 4) {
+        println!("8/4 = {}", n);
+    }
+
+    // 进制字面量 + 位运算
+    let hex_v = 0xFF;
+    let bin_v = 0b1010;
+    println!("hex={} bin={} xor={}", hex_v, bin_v, hex_v ^ bin_v);
+
+    // native typescript
+    let forty_two: i32 = native typescript {
+        return 6 * 7;
+    };
+    println!("native_ts = {}", forty_two);
+
+    // native python
+    let py: String = native python {
+        "hello " + "from python"
+    };
+    println!("native_py = {}", py);
+
+    // 原始字符串
+    let raw = r"C:\path\to\file";
+    println!("raw = {}", raw);
+
+    // 字符
+    let first_char = "HSL".chars().first().unwrap_or('?');
+    println!("first_char = {}", first_char);
+
+    println!("smoke ✓");
+}

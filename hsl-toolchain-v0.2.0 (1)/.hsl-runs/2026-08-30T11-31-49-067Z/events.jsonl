@@ -1,0 +1,16 @@
+{"seq":0,"ts":"2026-08-30T11:31:49.164Z","name":"run_start","data":{"entry":"D:\\HSL\\hsl-toolchain-v0.2.0 (1)\\examples\\dsh\\dsh.hsl","model":"scripted","task":"修复 stats.ts 方差","scale":"microkernel"}}
+{"seq":1,"ts":"2026-08-30T11:31:49.198Z","name":"node","data":{"graph":"Dsh","node":"model","initialized":true}}
+{"seq":2,"ts":"2026-08-30T11:31:49.198Z","name":"node","data":{"graph":"Dsh","node":"executor","initialized":true}}
+{"seq":3,"ts":"2026-08-30T11:31:49.198Z","name":"node","data":{"graph":"Dsh","node":"reviewer","initialized":true}}
+{"seq":4,"ts":"2026-08-30T11:31:49.204Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"executor","on":"Tool","scale":"microkernel"}}
+{"seq":5,"ts":"2026-08-30T11:31:49.226Z","name":"observed","data":{"turns":1}}
+{"seq":6,"ts":"2026-08-30T11:31:49.228Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"executor","on":"Tool","scale":"microkernel"}}
+{"seq":7,"ts":"2026-08-30T11:31:49.233Z","name":"observed","data":{"turns":2}}
+{"seq":8,"ts":"2026-08-30T11:31:49.235Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"executor","on":"Tool","scale":"microkernel"}}
+{"seq":9,"ts":"2026-08-30T11:31:49.239Z","name":"observed","data":{"turns":3}}
+{"seq":10,"ts":"2026-08-30T11:31:49.241Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"executor","on":"Tool","scale":"microkernel"}}
+{"seq":11,"ts":"2026-08-30T11:31:49.243Z","name":"observed","data":{"turns":4}}
+{"seq":12,"ts":"2026-08-30T11:31:49.244Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"executor","on":"Tool","scale":"microkernel"}}
+{"seq":13,"ts":"2026-08-30T11:31:49.697Z","name":"observed","data":{"turns":5}}
+{"seq":14,"ts":"2026-08-30T11:31:49.698Z","name":"edge","data":{"graph":"Dsh","from":"model","to":"reviewer","on":"Done","scale":"microkernel"}}
+{"seq":15,"ts":"2026-08-30T11:31:49.714Z","name":"run_end","data":{"elapsed_ms":549,"ok":true}}

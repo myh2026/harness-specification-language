@@ -1,0 +1,8 @@
+{
+  "ts": "2026-08-30T11:23:50.922Z",
+  "ok": true,
+  "elapsed_ms": 525,
+  "model": "scripted",
+  "task": "修复 stats.ts 方差",
+  "events": 16
+}

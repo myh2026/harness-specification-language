@@ -1,0 +1,106 @@
+// ============================================================================
+// nova/types/errors.hsl — NOVA 错误树 + From 自动包装
+// ============================================================================
+// 文法覆盖：EnumDef(数据变体) / impl Trait for Type / match 模式 /
+//           From trait（? 的唯一显式"隐式"转换，§5.9）
+// ============================================================================
+
+/// LLM 提供方的原始错误。
+#[derive(Debug)]
+export struct ProviderError {
+    code: u32,
+    message: String,
+}
+
+/// 工具执行的原始错误。
+#[derive(Debug)]
+export struct ToolError {
+    tool: String,
+    message: String,
+}
+
+/// 沙盒违反安全策略。
+#[derive(Debug)]
+export struct PolicyViolation {
+    capability: String,
+    detail: String,
+}
+
+/// NOVA 统一错误树：整个工程的 Result<T, NovaError>。
+#[derive(Debug)]
+export enum NovaError {
+    Provider(ProviderError),
+    Tool(ToolError),
+    Policy(PolicyViolation),
+    BudgetExhausted { phase: String },
+    TaskNotFound { task_id: u32 },
+    RetryLimitReached { attempts: u8, last: String },
+}
+
+/// From：让 `?` 在 provider 调用点自动包装（§5.9 唯一允许的转换通道）。
+impl From<ProviderError> for NovaError {
+    fn from(e: ProviderError) -> NovaError {
+        NovaError::Provider(e)
+    }
+}
+
+impl From<ToolError> for NovaError {
+    fn from(e: ToolError) -> NovaError {
+        NovaError::Tool(e)
+    }
+}
+
+impl From<PolicyViolation> for NovaError {
+    fn from(e: PolicyViolation) -> NovaError {
+        NovaError::Policy(e)
+    }
+}
+
+impl NovaError {
+    /// 是否可重试：网络类 provider 错误码在 5xx 段。
+    fn retryable(self) -> bool {
+        match self {
+            NovaError::Provider(e) => e.code >= 500 && e.code < 600,
+            NovaError::Tool(_) => true,
+            NovaError::Policy(_) => false,
+            NovaError::BudgetExhausted { phase: _ } => false,
+            NovaError::TaskNotFound { task_id: _ } => false,
+            NovaError::RetryLimitReached { attempts: _, last: _ } => false,
+        }
+    }
+
+    /// 日志友好的单行描述（投射为各后端日志）。
+    fn describe(self) -> String {
+        match self {
+            NovaError::Provider(e) => format("provider {}: {}", e.code, e.message),
+            NovaError::Tool(e) => format("tool {} failed: {}", e.tool, e.message),
+            NovaError::Policy(e) => format("policy violation [{}]: {}", e.capability, e.detail),
+            NovaError::BudgetExhausted { phase } => format("budget exhausted at {}", phase),
+            NovaError::TaskNotFound { task_id } => format("task {} not found", task_id),
+            NovaError::RetryLimitReached { attempts, last } => format(
+                "retry limit {} reached, last error: {}",
+                attempts,
+                last,
+            ),
+        }
+    }
+
+    /// 降级建议：S 系列严格性要求错误必须被处理，这里给出恢复路径。
+    fn recovery_hint(self) -> String {
+        match self {
+            NovaError::Provider(_) => String::from("switch provider or backoff 30s"),
+            NovaError::Tool(_) => String::from("inspect tool args, retry once"),
+            NovaError::Policy(_) => String::from("escalate to human operator"),
+            NovaError::BudgetExhausted { phase: _ } => String::from("synthesize with findings so far"),
+            NovaError::TaskNotFound { task_id: _ } => String::from("re-plan the DAG"),
+            NovaError::RetryLimitReached { attempts: _, last: _ } => String::from("mark task failed and continue"),
+        }
+    }
+}
+
+/// 格式化辅助宏目标：各后端 std 格式化统一走此入口（P8 胶水点）。
+fn format(lhs: String, rhs: String) -> String {
+    let mut out = lhs;
+    out.push_str(rhs.as_str());
+    out
+}

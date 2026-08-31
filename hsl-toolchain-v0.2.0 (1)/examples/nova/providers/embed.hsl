@@ -1,0 +1,58 @@
+// ============================================================================
+// nova/providers/embed.hsl — 嵌入提供方（记忆向量化的边界）
+// ============================================================================
+// 文法覆盖：trait / impl / native python（块尾返回 Vec<f64>，N2 平凡映射）/
+//           常量 / 类型别名
+// ============================================================================
+
+import { ProviderError } from "../types/errors.hsl";
+
+/// 嵌入维度常量（与 bge-m3 对齐：1024）。
+export const EMBED_DIM: usize = 1024;
+
+/// 嵌入向量类型别名。
+export type Embedding = Vec<f64>;
+
+/// 嵌入契约。
+export trait EmbeddingProvider {
+    async fn embed(text: String) -> Result<Embedding, ProviderError>;
+
+    fn dim(self) -> usize;
+}
+
+/// BGE-M3 本地实现：native python sentence-transformers。
+#[capability(file_read)]
+export struct BgeM3Embedder {
+    model_id: String,
+}
+
+impl EmbeddingProvider for BgeM3Embedder {
+    async fn embed(text: String) -> Result<Embedding, ProviderError> {
+        // N1：捕获 sentence（String，平凡传递）
+        let sentence = text;
+
+        // N2：返回值上下文显式标注 Vec<f64>（数值数组可映射，§5.2）
+        // 块尾表达式 vector.tolist() 即返回值
+        let vector: Vec<f64> = native python {
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer("BAAI/bge-m3")
+            vector = model.encode(sentence)
+            vector.tolist()
+        };
+
+        // S1：显式长度比较
+        if vector.len() == EMBED_DIM {
+            Ok(vector)
+        } else {
+            Err(ProviderError {
+                code: 500,
+                message: String::from("embedding dim mismatch: expected 1024"),
+            })
+        }
+    }
+
+    fn dim(self) -> usize {
+        EMBED_DIM
+    }
+}

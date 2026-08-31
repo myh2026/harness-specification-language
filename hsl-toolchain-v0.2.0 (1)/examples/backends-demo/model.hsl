@@ -1,0 +1,68 @@
+// ============================================================================
+// examples/backends-demo/model.hsl — 38 后端投射演示 · 类型与契约层
+// ============================================================================
+
+export struct Prompt {
+    system: String,
+    user: String,
+}
+
+export struct ToolResult {
+    tool: String,
+    output: String,
+    ok: bool,
+}
+
+export enum Action {
+    CallTool { name: String, args: HashMap<String, String> },
+    Respond { text: String },
+    Stop,
+}
+
+export enum Verdict {
+    Accept,
+    Revise { reason: String },
+    Reject { reason: String },
+}
+
+export trait LLMProvider {
+    async fn generate(prompt: Prompt) -> Result<String, String>;
+}
+
+impl Prompt {
+    fn new(system: String, user: String) -> Prompt {
+        Prompt { system, user }
+    }
+
+    fn total_len(self) -> i64 {
+        self.system.len() + self.user.len()
+    }
+}
+
+export fn describe_action(action: Action) -> String {
+    match action {
+        Action::CallTool { name, args } => format!("call {} with {} args", name, args.len()),
+        Action::Respond { text } => format!("respond: {}", text),
+        Action::Stop => String::from("stop"),
+    }
+}
+
+export fn clamp_turns(turns: i64, lo: i64, hi: i64) -> i64 {
+    if turns < lo {
+        lo
+    } else if turns > hi {
+        hi
+    } else {
+        turns
+    }
+}
+
+export fn summarize(results: Vec<ToolResult>) -> String {
+    let mut ok_count: i64 = 0;
+    for r in results {
+        if r.ok {
+            ok_count = ok_count + 1;
+        }
+    }
+    format!("{} / {} 工具调用成功", ok_count, results.len())
+}

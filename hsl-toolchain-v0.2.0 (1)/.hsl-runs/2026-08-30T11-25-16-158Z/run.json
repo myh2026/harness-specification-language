@@ -1,0 +1,7 @@
+{
+  "ts": "2026-08-30T11:25:16.179Z",
+  "ok": false,
+  "panic": "入口文件没有 fn main()（运行约定：BNF v1.3 §R-1）",
+  "model": "scripted",
+  "task": ""
+}

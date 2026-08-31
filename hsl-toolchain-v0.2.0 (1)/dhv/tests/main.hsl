@@ -1,0 +1,132 @@
+// ============================================================================
+// tests/main.hsl — HSL 全量语法样例（BNF.md §7 附录）
+// 文法覆盖：字面量全进制 / 泛型 / 模式 / 表达式优先级 / graph / edge /
+//           project / scale / block 插值 / native 逃生舱 / 宏 / 属性
+// ============================================================================
+
+// 模块系统
+import { Prompt, Action, LLMProvider, ToolExecutor } from "./models/types.hsl";
+import * as types from "./models/types.hsl";
+import BashTool as BT from "./plugins/bash_tool.hsl";
+
+export const MAX_RETRIES: u32 = 3;
+
+export struct AgentState {
+    history: Vec<String>,
+    current_goal: String,
+    retries: Option<u32>,
+}
+
+export struct DeepSeekClient { model: String }
+
+
+impl LLMProvider for DeepSeekClient {
+    async fn generate(prompt: Prompt) -> Result<String, Error> {
+        let truncated = truncate(prompt.user, 4000)?;
+        let raw: String = native python {
+            import openai
+            client = openai.Client()
+            response = client.chat.completions.create(
+                model="deepseek-v4",
+                messages=[{"role": "user", "content": truncated}]
+            )
+            response.choices[0].message.content
+        };
+        Ok(raw)
+    }
+}
+
+macro_rules! impl_tool {
+    ($name:ident, $desc:expr) => {
+        struct $name { desc: String }
+    };
+}
+
+#[capability(process_spawn)]
+#[derive(Debug)]
+struct BashTool { timeout_ms: u64 }
+
+impl_tool!(ListTool, "list files");
+
+fn truncate(s: String, max: usize) -> Result<String, Error> {
+    if s.len() > max {
+        let sliced = s[0..max];
+        Ok(sliced)
+    } else {
+        Ok(s)
+    }
+}
+
+fn precedence_check() -> i32 {
+    let a = 1 + 2 * 3;
+    let b = 0xFF & 0x0F | 0b1010 ^ 0o77;
+    let c = if a > 5 { a << 2 } else { a >> 1 };
+    let d = !(a == b) && (c <= 10 || c >= 0);
+    let e = match d {
+        true => c as i32,
+        false => -c,
+    };
+    e
+}
+
+fn closure_and_generics<T: Storage + Serializable>(item: T) -> Vec<T>
+where
+    T: Clone,
+{
+    let make = |x: T| -> Vec<T> { Vec::new() };
+    let _unused = item;
+    make(item)
+}
+
+trait Storage { fn save(s: String) -> Result<(), Error>; }
+trait Serializable { fn to_json(s: String) -> String; }
+
+enum Action {
+    CallTool { name: String, args: HashMap<String, String> },
+    Respond(String),
+    Stop,
+}
+
+graph MyAgent -> Result<(), Error> {
+    let planner: Box<dyn LLMProvider> = DeepSeekClient::new();
+    let tool: Box<dyn ToolExecutor> = BT::new();
+    let mut state = AgentState { history: Vec::new(), current_goal: "run tests", retries: None };
+
+    edge planner -> tool on Action::CallTool;
+
+    loop {
+        let action = planner.generate(state.clone()).await?;
+        match action {
+            Action::CallTool { .. } => {
+                let result = tool.execute(action)?;
+                state.history.push(result);
+            },
+            Action::Respond(text) => {
+                println(text);
+                break;
+            },
+            Action::Stop => break,
+        }
+    }
+}
+
+block agent_config {
+    agent:
+      name: MiniAgent
+      version: 0.1
+      max_retries: {{MAX_RETRIES}}
+}
+
+block agent_instructions {
+    # Agent Instructions
+    你是一个执行助手。当前目标：{{state.current_goal}}
+}
+
+scale = microkernel;
+
+project {
+    MyAgent            -> "src/main.rs"        : rust,
+    DeepSeekClient     -> "src/deepseek.py"    : python,
+    agent_config       -> "config/agent.yml"   : yaml,
+    agent_instructions -> ".harness/AGENTS.md" : markdown,
+}

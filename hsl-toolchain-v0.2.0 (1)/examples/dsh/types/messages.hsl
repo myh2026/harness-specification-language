@@ -1,0 +1,90 @@
+// ============================================================================
+// dsh/types/messages.hsl — 对话消息 / 工具词汇 / 裁决词汇（DS harness 契约层）
+// ============================================================================
+// 文法覆盖：StructDef / EnumDef（命名+元组+单元变体）/ impl 静态工厂 /
+//           if-else 表达式值 / format! / String 方法链
+// ============================================================================
+
+#[derive(Debug, Clone)]
+export struct Message {
+    role: String,
+    content: String,
+}
+
+impl Message {
+    fn system(text: String) -> Message {
+        Message { role: String::from("system"), content: text }
+    }
+
+    fn user(text: String) -> Message {
+        Message { role: String::from("user"), content: text }
+    }
+
+    fn assistant(text: String) -> Message {
+        Message { role: String::from("assistant"), content: text }
+    }
+
+    fn tool(text: String) -> Message {
+        Message { role: String::from("tool"), content: text }
+    }
+}
+
+/// 工具词汇：模型能调用的全部动作（封闭枚举——新增工具必须显式扩这里）。
+#[derive(Debug, Clone)]
+export enum ToolCall {
+    ReadFile { path: String },
+    WriteFile { path: String, content: String },
+    EditFile { path: String, old_text: String, new_text: String },
+    Bash { command: String },
+    ListFiles,
+}
+
+/// 工具执行结果（observation 会回填进 transcript）。
+#[derive(Debug, Clone)]
+export struct ToolResult {
+    call: String,
+    ok: bool,
+    output: String,
+    duration_ms: u64,
+}
+
+impl ToolResult {
+    fn observation(self) -> Message {
+        let mut text = String::from("[tool ");
+        text.push_str(self.call.as_str());
+        text.push_str("]");
+        if self.ok {
+            text.push_str(" ok\n");
+        } else {
+            text.push_str(" FAILED\n");
+        }
+        text.push_str(self.output.as_str());
+        Message::tool(text)
+    }
+
+    fn summary_line(self) -> String {
+        let status = if self.ok { "ok" } else { "FAIL" };
+        format!("{} [{}] {} chars, {} ms", self.call, status, self.output.len(), self.duration_ms)
+    }
+}
+
+/// 模型回合词汇：主循环的两类出口。
+#[derive(Debug, Clone)]
+export enum Action {
+    Tool { call: ToolCall },
+    Done { summary: String },
+}
+
+/// 审查裁决词汇。
+#[derive(Debug, Clone)]
+export enum Verdict {
+    Accept,
+    Revise { note: String },
+}
+
+/// 拓扑边事件词汇（edge on Guard 用）。
+#[derive(Debug, Clone)]
+export enum Event {
+    Observed,
+    TurnBudgetExhausted,
+}

@@ -1,0 +1,113 @@
+// ============================================================================
+// nova/types/actions.hsl — NOVA 行为词汇表（Action 枚举家族）
+// ============================================================================
+// 文法覆盖：EnumDef / EnumVariant（Unit | Tuple | NamedFields）/ 判别式 /
+//           OuterAttributes(#derive #doc) / export Item / import
+// 铁律自检：S6（全部 match 穷尽）· S8（无遮蔽）
+// ============================================================================
+
+import { TokenBudget } from "./state.hsl";
+
+/// 编排层动作：主管 graph 的循环驱动词汇。
+#[derive(Debug, Clone, PartialEq)]
+export enum OrchestrateAction {
+    Dispatch { task_id: u32, to: AgentRole },
+    Merge { finding_id: u32 },
+    Halt { reason: String },
+}
+
+/// 研究层动作：Researcher 子循环的驱动词汇。
+#[derive(Debug, Clone, PartialEq)]
+export enum ResearchAction {
+    Search { query: String, depth: u8 },
+    Read { url: String, budget: TokenBudget },
+    Note { finding_id: u32, body: String },
+    Enough,
+    Stop,
+}
+
+/// 验证层动作：Coder 沙盒循环。
+#[derive(Debug, Clone, PartialEq)]
+export enum VerifyAction {
+    Draft { lang: String, code: String },
+    Run { timeout_ms: u64 },
+    Pass,
+    Fail { stderr: String },
+}
+
+/// 审查层裁决：Critic graph 的产出。
+#[derive(Debug, Clone, PartialEq)]
+export enum Verdict {
+    Accept { score: u8 },
+    Revise { issues: Vec<String>, score: u8 },
+    Reject { reason: String },
+}
+
+/// Agent 角色枚举（带判别式，用于日志与事件路由）。
+#[derive(Debug, Clone, PartialEq)]
+export enum AgentRole {
+    Planner = 1,
+    Researcher = 2,
+    Verifier = 4,
+    Critic = 8,
+    Synthesizer = 16,
+}
+
+/// 系统事件：microkernel 尺度下编译为事件总线消息（G6）。
+#[derive(Debug, Clone)]
+export enum Event {
+    TaskCompleted { task_id: u32, by: AgentRole },
+    BudgetLow { remaining: TokenBudget },
+    VerdictIssued { finding_id: u32, verdict: Verdict },
+    ResearchHalted { reason: String },
+}
+
+/// 阶段性进展：monolith 尺度下为函数返回值，microkernel 下为事件负载。
+#[derive(Debug, Clone)]
+export struct Progress {
+    phase: AgentRole,
+    done: u32,
+    total: u32,
+    note: String,
+}
+
+impl AgentRole {
+    /// 角色位掩码：事件路由在 microkernel 尺度下按位订阅。
+    fn mask(self) -> u32 {
+        match self {
+            AgentRole::Planner => 1,
+            AgentRole::Researcher => 2,
+            AgentRole::Verifier => 4,
+            AgentRole::Critic => 8,
+            AgentRole::Synthesizer => 16,
+        }
+    }
+
+    /// 角色显示名（投射为各后端的日志标签）。
+    fn label(self) -> String {
+        match self {
+            AgentRole::Planner => "planner",
+            AgentRole::Researcher => "researcher",
+            AgentRole::Verifier => "verifier",
+            AgentRole::Critic => "critic",
+            AgentRole::Synthesizer => "synthesizer",
+        }
+    }
+}
+
+impl Progress {
+    /// 进度百分比（0-100）。S1：显式比较，无隐式 truthy。
+    fn percent(self) -> u8 {
+        if self.total == 0 {
+            0
+        } else {
+            ((self.done * 100) / self.total) as u8
+        }
+    }
+
+    /// 是否值得上报：进度跨越 10% 台阶才发事件，抑制总线噪声。
+    fn worth_emitting(self, last_reported: u8) -> bool {
+        let current = self.percent();
+        current >= last_reported + 10 || current == 100
+    }
+}

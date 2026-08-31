@@ -1,0 +1,193 @@
+// ============================================================================
+// nova/nova.hsl — 入口：主编排 graph + scale + project 投射
+// ============================================================================
+// 文法覆盖：多模块 import（含 * as 命名空间）/ 主编排 graph /
+//           ScaleDecl / ProjectBlock（十一目标跨四语言，P1-P7 全覆盖）/
+//           EdgeAttrs（with durable = true）/ 嵌套 match / 早返回
+// ============================================================================
+// graph 调用约定（与 P7 对齐）：graph 投射为函数，跨模块调用形如
+//   Planner::run(args) —— 与 trait 关联函数同形的 GraphName::run 语法。
+// ============================================================================
+
+import { Verdict } from "./types/actions.hsl";
+import { Finding, ResearchState, Task } from "./types/state.hsl";
+import { NovaError } from "./types/errors.hsl";
+import { DeepSeekClient } from "./providers/llm.hsl";
+import { CodeRunnerTool, WebSearchTool } from "./providers/tools.hsl";
+import { InMemoryStore, consolidate } from "./memory/store.hsl";
+import { SafetyPolicy } from "./policy/safety.hsl";
+import { Planner } from "./agents/planner.hsl";
+import * as researcher_mod from "./agents/researcher.hsl";
+import { Verifier, apply_verification } from "./agents/coder.hsl";
+import { Critic } from "./agents/critic.hsl";
+import { Synthesizer } from "./agents/synthesizer.hsl";
+import { agent_instructions, event_catalog, nova_config, task_schema } from "./config/resources.hsl";
+
+/// 编排层边事件（G5：枚举变体 guard）。
+enum NovaEdge {
+    TaskReady,
+    FindingReady,
+    VerdictReady,
+    ReportReady,
+}
+
+/// 主编排 graph：NOVA 系统入口（P7：-> Result<T,E> 投射为各后端 main 签名）。
+///
+/// 拓扑（node 为具体实现类型；子 agent graph 经 ::run 组合调用）：
+///   brain ──on TaskReady──> dispatcher ──on FindingReady──> gate
+///   gate ──on VerdictReady──> brain ──on ReportReady──> exporter
+///   （brain 双出边 + 条件环由 on Guard 打破，G3 合法）
+graph Nova(question: String) -> Result<ResearchState, NovaError> {
+    // node 声明：编排层的物理依赖
+    node brain: DeepSeekClient = DeepSeekClient::new();
+    node mut dispatcher: Vec<Task> = Vec::new();
+    node gate: SafetyPolicy = SafetyPolicy::default();
+    node exporter: InMemoryStore = InMemoryStore::new();
+
+    edge brain -> dispatcher on NovaEdge::TaskReady;
+    edge dispatcher -> gate on NovaEdge::FindingReady;
+    edge gate -> brain on NovaEdge::VerdictReady with backpressure = true;
+    edge brain -> exporter on NovaEdge::ReportReady with durable = true;
+
+    // 运行状态
+    let mut state = ResearchState::new(question.clone());
+    let mut accepted: Vec<Finding> = Vec::new();
+
+    // AgentLoop（G1）：主循环——规划 → 派发 → 审查 → 综合
+    loop {
+        // 1) 规划（一次）：子 graph 调用（P7 投射为函数）
+        if state.tasks.len() == 0 {
+            let planned = Planner::run(state.clone())?;
+            state.tasks = planned.tasks.clone();
+            for task in planned.tasks.clone() {
+                dispatcher.push(task);
+            }
+        }
+
+        // 2) 派发：取下一个就绪任务（拓扑序）
+        let next = state.clone().next_ready();
+        match next {
+            Some(task) => {
+                let finding = match task.role.as_str() {
+                    "researcher" => {
+                        researcher_mod::Researcher::run(task.clone(), state.question.clone())?
+                    },
+                    "verifier" => {
+                        // 验证任务：对最新发现运行沙盒
+                        let target = accepted.last().cloned();
+                        match target {
+                            Some(pending) => {
+                                let verdict = Verifier::run(pending.claim.clone())?;
+                                apply_verification(pending.clone(), verdict)
+                            },
+                            None => fallback_finding(task.id, task.goal.clone()),
+                        }
+                    },
+                    _ => {
+                        // critic 与默认路径：审查最新发现
+                        let audited = accepted.last().cloned();
+                        match audited {
+                            Some(candidate) => {
+                                let verdict = Critic::run(candidate.clone())?;
+                                match verdict {
+                                    Verdict::Accept { score: _ } => candidate,
+                                    Verdict::Revise { issues: _, score: _ } => candidate,
+                                    Verdict::Reject { reason: _ } => fallback_finding(task.id, task.goal.clone()),
+                                }
+                            },
+                            None => fallback_finding(task.id, task.goal.clone()),
+                        }
+                    },
+                };
+
+                // 3) 安全闸门（运行时第二道；编译期第一道已由 #[capability] 处决）
+                let gated = gate.gate_finding(finding.clone())?;
+                accepted.push(gated.clone());
+                state = state.complete_task(task.id, gated);
+            },
+            None => {
+                // 4) 无就绪任务：收尾——记忆固化 + 综合报告
+                let remembered = consolidate(exporter.clone(), accepted.clone());
+                match remembered {
+                    Ok(store) => {
+                        let _ = store.len();
+                    },
+                    Err(message) => {
+                        return Err(NovaError::BudgetExhausted { phase: message });
+                    },
+                }
+
+                let report = Synthesizer::run(state.clone())?;
+                state.memory.push(String::from("report generated"));
+                state.memory.push(report.title.clone());
+                let _summary = format_report_meta(report.accepted, report.rejected);
+                break;
+            },
+        }
+
+        // 5) 停机判定（预算 / 显式 halt；S1：is_some 显式）
+        let stop_reason = state.clone().should_stop();
+        match stop_reason {
+            Some(reason) => {
+                state.halted = Some(reason);
+                break;
+            },
+            None => {
+                state.iterations += 1;
+            },
+        }
+    }
+
+    Ok(state)
+}
+
+/// 兜底发现：任务无法产出真实发现时保持拓扑闭合。
+fn fallback_finding(task_id: u32, goal: String) -> Finding {
+    Finding {
+        id: task_id,
+        task_id: task_id,
+        claim: goal,
+        evidence: Vec::new(),
+        confidence: 0.4,
+        verified: false,
+    }
+}
+
+/// 报告元信息（进入记忆的最终摘要行）。
+fn format_report_meta(accepted: u32, rejected: u32) -> String {
+    let mut out = String::from("nova report: accepted ");
+    out.push_str(accepted.to_string().as_str());
+    out.push_str(" / rejected ");
+    out.push_str(rejected.to_string().as_str());
+    out
+}
+
+// ============================================================================
+// 投射层（P1：本文件持有唯一的 scale 与 project；P6：入口文件）
+// ============================================================================
+
+/// 尺度：微内核——每条 edge 编译为事件总线订阅（G6）。
+scale = microkernel;
+
+/// 物理投射（P2 路径唯一 / P3 全部 import 可见 / P4 类型合法 / P5 native 无 FFI 冲突）。
+project {
+    // 主入口与 agent graph → rust（进程编排）
+    Nova                    -> "src/main.rs"               : rust,
+    Planner                 -> "src/agents/planner.rs"      : rust,
+    Verifier                -> "src/agents/verifier.rs"     : rust,
+    Critic                  -> "src/agents/critic.rs"       : rust,
+    Synthesizer             -> "src/agents/synthesizer.rs"  : rust,
+
+    // LLM 与工具（native python 体）→ python
+    DeepSeekClient          -> "src/providers/deepseek.py"  : python,
+    WebSearchTool           -> "src/tools/web_search.py"    : python,
+
+    // 沙盒工具（native rust 体）→ rust
+    CodeRunnerTool          -> "src/tools/code_runner.rs"   : rust,
+
+    // 静态资源块 → 静态后端（P4 限定：block 只进 yaml/md/json）
+    nova_config             -> "config/nova.yml"            : yaml,
+    agent_instructions      -> ".harness/AGENTS.md"         : markdown,
+    task_schema             -> "config/task.schema.json"    : json,
+    event_catalog           -> "docs/events.md"             : markdown,
+}

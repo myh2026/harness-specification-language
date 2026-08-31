@@ -1,0 +1,73 @@
+// ============================================================================
+// nova/macros.hsl — 复用宏库（macro_rules!）
+// ============================================================================
+// 文法覆盖：MacroRulesDefinition（$name:ident / $desc:expr /
+//           $cap:literal 重复元）+ 项级宏调用（MacroInvocationSemi）
+// ============================================================================
+// 注意：HSL 可见性为 export 关键字（§2.3），无 pub 修饰符；
+//       字段可见性由 struct 是否 export 决定（§2.4）。
+// ============================================================================
+
+/// 为工具结构体生成注册样板：struct + describe() + 默认超时。
+/// 用法：impl_tool!(WebSearchTool, "search the open web", 8_000);
+macro_rules! impl_tool {
+    ($name:ident, $desc:expr, $timeout_ms:expr) => {
+        #[derive(Debug, Clone)]
+        struct $name { timeout_ms: u64 }
+
+        impl $name {
+            fn new() -> $name {
+                $name { timeout_ms: $timeout_ms }
+            }
+
+            fn describe(self) -> String {
+                $desc
+            }
+        }
+    };
+}
+
+/// 生成能力域自检方法：编译期展开为白名单 match（与 #[capability] 双保险）。
+/// 用法：guard_check!(ClockTool, []);
+macro_rules! guard_check {
+    ($name:ident, [$($cap:literal),*]) => {
+        impl $name {
+            fn allowed(self, capability: String) -> bool {
+                match capability.as_str() {
+                    $($cap => true,)*
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+
+/// 循环重试骨架：展开为带计数的受控重试块（禁无限循环，S 系列）。
+/// 用法：let outcome = with_retry!(3, { do_call() });
+macro_rules! with_retry {
+    ($max:expr, $body:block) => {{
+        let mut attempts: u8 = 0;
+        let mut outcome: Option<Result<String, String>> = None;
+        while attempts < $max {
+            attempts += 1;
+            let attempt_result = (|| $body)();
+            match attempt_result {
+                Ok(value) => {
+                    outcome = Some(Ok(value));
+                    break;
+                },
+                Err(message) => {
+                    if attempts >= $max {
+                        outcome = Some(Err(message));
+                    }
+                },
+            }
+        }
+        outcome
+    }};
+}
+
+impl_tool!(ClockTool, "monotonic clock for spans", 64);
+impl_tool!(EchoTool, "echo input back for wiring tests", 16);
+guard_check!(ClockTool, []);
+guard_check!(EchoTool, []);

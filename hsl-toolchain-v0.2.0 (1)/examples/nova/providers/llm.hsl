@@ -1,0 +1,163 @@
+// ============================================================================
+// nova/providers/llm.hsl — LLM 提供方抽象 + 双实现（native 逃生舱）
+// ============================================================================
+// 文法覆盖：TraitDef / impl Trait for Type / async fn / .await /
+//           native python · native rust（N1-N3：捕获平凡类型 + 块尾返回值）/
+//           #[capability(net_connect)] / #[cfg(lang: rust)] / ? 传播
+// ============================================================================
+
+import { NovaError, ProviderError } from "../types/errors.hsl";
+import { ResearchState, TokenBudget } from "../types/state.hsl";
+
+/// 消息（chat 格式，与主流 provider 对齐）。
+#[derive(Debug, Clone)]
+export struct Message {
+    role: String,
+    content: String,
+}
+
+impl Message {
+    fn system(text: String) -> Message {
+        Message { role: String::from("system"), content: text }
+    }
+
+    fn user(text: String) -> Message {
+        Message { role: String::from("user"), content: text }
+    }
+}
+
+/// 补全请求。
+#[derive(Debug, Clone)]
+export struct CompletionRequest {
+    messages: Vec<Message>,
+    temperature: f64,
+    budget: TokenBudget,
+}
+
+/// 提供方契约：任何 LLM 后端实现此 trait 即可接入 NOVA 拓扑。
+#[doc("实现方需保证幂等重试安全；网络错误以 ProviderError 返回")]
+export trait LLMProvider {
+    async fn complete(request: CompletionRequest) -> Result<String, ProviderError>;
+
+    fn model_name(self) -> String;
+
+    /// trait 默认实现（§2.5）：带预算裁剪的对话。
+    async fn complete_within(
+        request: CompletionRequest,
+        budget: TokenBudget,
+    ) -> Result<String, ProviderError> {
+        let mut trimmed = request;
+        if trimmed.budget.prompt > budget.prompt {
+            trimmed.budget = budget;
+        }
+        LLMProvider::complete(trimmed).await
+    }
+}
+
+/// DeepSeek 实现：native python 调用 OpenAI 兼容 SDK。
+#[capability(net_connect)]
+export struct DeepSeekClient {
+    model: String,
+}
+
+impl DeepSeekClient {
+    /// 工厂：默认模型名（可见性随 struct export）。
+    fn new() -> DeepSeekClient {
+        DeepSeekClient { model: String::from("deepseek-chat") }
+    }
+}
+
+impl LLMProvider for DeepSeekClient {
+    async fn complete(request: CompletionRequest) -> Result<String, ProviderError> {
+        // N1：捕获变量均为平凡传递类型（String / u32）
+        let question_ctx = request.messages.last().cloned().unwrap_or(
+            Message::user(String::from("(empty)")),
+        ).content;
+        let max_tokens = request.budget.completion;
+
+        let raw: String = native python {
+            import os
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=os.environ["DEEPSEEK_API_KEY"],
+                base_url="https://api.deepseek.com/v1",
+            )
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "user", "content": question_ctx}],
+                max_tokens=max_tokens,
+                temperature=0.2,
+            )
+            response.choices[0].message.content
+        };
+
+        // S1：显式 len 比较，无隐式 truthy
+        if raw.len() == 0 {
+            Err(ProviderError { code: 502, message: String::from("empty completion") })
+        } else {
+            Ok(raw)
+        }
+    }
+
+    fn model_name(self) -> String {
+        self.model
+    }
+}
+
+/// 本地 Ollama 实现：内网部署，零外联能力域。
+/// #[cfg(lang: rust)] —— 仅 rust 后端保留（python 投射时剥离，P5 免 FFI）。
+#[cfg(lang: rust)]
+#[capability(net_connect)]
+struct OllamaClient {
+    model: String,
+}
+
+#[cfg(lang: rust)]
+impl LLMProvider for OllamaClient {
+    async fn complete(request: CompletionRequest) -> Result<String, ProviderError> {
+        // HSL 侧聚合 prompt（native 块内不做复杂类型捕获，N1 纪律）
+        let prompt: String = request.messages.iter().map(
+            |m| m.content.clone(),
+        ).collect::<Vec<String>>().join("\n");
+        let endpoint = String::from("http://localhost:11434/api/generate");
+
+        // native rust：块尾表达式为 String（N2 显式标注）
+        let raw: String = native rust {
+            let body = format!("{{\"model\":\"nova-local\",\"prompt\":{prompt:?},\"stream\":false}}");
+            let response = reqwest::blocking::Client::new()
+                .post(&endpoint)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .map_err(|e| e.to_string())?;
+            response.text().map_err(|e| e.to_string())?
+        };
+
+        if raw.len() == 0 {
+            Err(ProviderError { code: 502, message: String::from("empty ollama response") })
+        } else {
+            Ok(raw)
+        }
+    }
+
+    fn model_name(self) -> String {
+        self.model
+    }
+}
+
+/// 规划器专用的结构化输出调用：把研究问题转成 JSON 任务清单。
+/// export fn —— 可被 planner graph 所在文件 import。
+export async fn structured_plan(state: ResearchState) -> Result<String, NovaError> {
+    let request = CompletionRequest {
+        messages: vec![
+            Message::system(String::from("decompose the research question into tasks, output JSON array")),
+            Message::user(state.question.clone()),
+        ],
+        temperature: 0.0,
+        budget: state.budget.clone(),
+    };
+    // ? 在此自动 From<ProviderError> → NovaError（§5.9 唯一显式通道）
+    let plan = DeepSeekClient::complete(request).await?;
+    Ok(plan)
+}

@@ -1,0 +1,108 @@
+// ============================================================================
+// dhv-ts/examples/translator-tour.hsl — 活体翻译器新能力巡览（v0.2.2 → v0.2.7）
+// ----------------------------------------------------------------------------
+// 覆盖扩充的方法映射：pop/clear/sort/is_sorted/remove/char_count/
+// split_whitespace/lines/repeat/expect/and_then/unwrap_or
+// v0.2.7 新增：Vec::insert/Vec::remove（cpp/go 活体）/ HashMap 全表面
+// （insert/contains_key/keys/values/get/remove）/ let 块初始化（if/match 值语义）
+// 注：position/find 返回 Option（Rust 语义）—— 解释器支持，生成端回退 contract
+// 运行：bun dhv-ts/src/main.ts run dhv-ts/examples/translator-tour.hsl
+// ============================================================================
+
+fn analyze_words(text: String) -> String {
+    let words = text.split_whitespace();
+    let mut total: i64 = 0;
+    for w in words {
+        total = total + w.len();
+    }
+    format!("{} 词符 {} 字符", words.len(), total)
+}
+
+fn vec_surgery(mut v: Vec<i32>) -> i32 {
+    v.insert(1, 99);
+    let head = v.remove(0);
+    let peek = v.get(0).unwrap_or(-1);
+    head + peek
+}
+
+fn map_census(mut m: HashMap<String, i32>) -> i32 {
+    m.insert("alpha", 1);
+    m.insert("beta", 2);
+    let has = if m.contains_key("alpha") { 100 } else { 0 };
+    let nk = m.keys().len();
+    let nv = m.values().len();
+    let old = m.remove("beta").unwrap_or(-5);
+    has + nk + nv + old
+}
+
+fn main() {
+    // ---- Vec 扩充 ----
+    let mut stack = vec![1, 2, 3];
+    let top = stack.pop();
+    match top {
+        Option::Some(v) => println!("pop = {}", v),
+        Option::None => println!("pop none"),
+    }
+    stack.clear();
+    println!("cleared len = {}", stack.len());
+
+    let mut scores = vec![3, 1, 2];
+    scores.sort();
+    println!("sorted = {:?} is_sorted? {}", scores, scores.is_sorted());
+
+    // position → Option（Rust 语义）
+    let idx = vec![5, 7, -2, 9].position(|x| x < 0);
+    match idx {
+        Option::Some(i) => println!("first negative at {}", i),
+        Option::None => println!("no negative"),
+    }
+
+    // ---- HashMap 扩充 ----
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    counts.insert(String::from("a"), 1);
+    counts.insert(String::from("b"), 2);
+    let removed = counts.remove(String::from("a"));
+    match removed {
+        Option::Some(v) => println!("removed a = {}", v),
+        Option::None => println!("a absent"),
+    }
+    println!("map len = {}", counts.len());
+
+    // ---- String 扩充 ----
+    let sentence = String::from("hello  harness  world");
+    println!("{}", analyze_words(sentence));
+    let text = String::from("line1\nline2\nline3");
+    println!("lines = {}", text.lines().len());
+    println!("char_count = {}", sentence.char_count());
+    println!("repeat = {}", String::from("ab").repeat(3));
+
+    // find → Option（Rust 语义）
+    let found = sentence.find(String::from("harness"));
+    match found {
+        Option::Some(i) => println!("find harness at {}", i),
+        Option::None => println!("harness absent"),
+    }
+
+    // ---- Option 扩充 ----
+    let maybe: Option<i64> = Option::Some(5);
+    let doubled = maybe.and_then(|x| x * 2);
+    println!("and_then = {}", doubled);
+    let fallback: Option<i64> = Option::None;
+    println!("unwrap_or = {}", fallback.unwrap_or(-1));
+    let must: i64 = Option::Some(42).expect(String::from("必须存在"));
+    println!("expect = {}", must);
+
+    // ---- v0.2.7：Vec::insert/remove + HashMap 全表面 + let 块初始化 ----
+    // [10,20,30]: insert(1,99) → [10,99,20,30]; remove(0) → 10; get(0) → 99 → 109
+    println!("vec_surgery = {}", vec_surgery(vec![10, 20, 30]));
+    // map census: 100(has) + 2(keys) + 2(values) + 2(remove beta) = 106
+    let census_m: HashMap<String, i32> = HashMap::new();
+    println!("map_census = {}", map_census(census_m));
+    // let 块初始化（值语义 if/match）
+    let flag = true;
+    let base = if flag { 100 } else { 0 };
+    let score = match flag { true => 10, false => 20 };
+    println!("let_block = {}", base + score);
+
+    println!("translator-tour ✓");
+}

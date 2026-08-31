@@ -1,0 +1,84 @@
+// ============================================================================
+// dsh/providers/model.hsl — 模型提供方：trait + 双实现（native 逃生舱）
+// ============================================================================
+// 文法覆盖：TraitDef（async fn + self）/ impl Trait for Type /
+//           native typescript（进程内 $host.llm 网关）/ #[capability(net_connect)]
+// ============================================================================
+
+import { Message } from "../types/messages.hsl";
+import { ProviderError } from "../types/errors.hsl";
+import { SYSTEM_PROMPT } from "../config/resources.hsl";
+
+/// 模型提供方契约：任何 LLM 后端实现 act 即可接入 Dsh 拓扑。
+export trait ModelProvider {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError>;
+}
+
+/// 真实模型（DeepSeek 风格 OpenAI 兼容 chat 协议，经 $host.llm 网关）。
+#[capability(net_connect)]
+#[derive(Debug, Clone)]
+export struct DeepSeekModel {
+    model: String,
+    temperature: f64,
+}
+
+impl DeepSeekModel {
+    fn new(model: String, temperature: f64) -> DeepSeekModel {
+        DeepSeekModel { model, temperature }
+    }
+}
+
+impl ModelProvider for DeepSeekModel {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError> {
+        // N1 纪律：prompt 组装在 HSL 侧；native 只做 API 调用与平凡类型捕获
+        let system = SYSTEM_PROMPT;
+        let raw: String = native typescript {
+            const messages = [
+                { role: "system", content: system },
+                ...transcript.map((m) => ({ role: m.role, content: m.content })),
+            ];
+            const r = await $host.llm.complete({
+                messages,
+                temperature: self.temperature,
+                maxTokens: 1024,
+            });
+            if (r === undefined || r === null) throw new Error("empty completion");
+            return r;
+        };
+        if raw.len() == 0 {
+            Err(ProviderError::new(502, String::from("empty completion")))
+        } else {
+            Ok(raw)
+        }
+    }
+}
+
+/// 确定性剧本模型（fixture 驱动）：CI 可复现、零外联。
+/// role = "actor"（消费 acts）或 "reviewer"（消费 reviews）。
+#[derive(Debug, Clone)]
+export struct ScriptedModel {
+    fixture: String,
+    role: String,
+}
+
+impl ScriptedModel {
+    fn new(fixture: String, role: String) -> ScriptedModel {
+        ScriptedModel { fixture, role }
+    }
+}
+
+impl ModelProvider for ScriptedModel {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError> {
+        let raw: String = native typescript {
+            if (self.role === "reviewer") {
+                return await $host.fixture.nextReview();
+            }
+            return await $host.fixture.nextAct();
+        };
+        if raw.len() == 0 {
+            Err(ProviderError::new(503, String::from("fixture exhausted")))
+        } else {
+            Ok(raw)
+        }
+    }
+}

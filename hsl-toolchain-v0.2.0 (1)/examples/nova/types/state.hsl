@@ -1,0 +1,150 @@
+// ============================================================================
+// nova/types/state.hsl — NOVA 全局状态模型
+// ============================================================================
+// 文法覆盖：StructDef(NamedFields) / TypeAliasDef / ConstDef(全进制字面量) /
+//           GenericParams / WhereClause / impl 默认方法 / Vec/HashMap/Option
+// ============================================================================
+
+/// 单次调用的 token 预算（u32 上限足够单次研究）。
+#[derive(Debug, Clone, PartialEq)]
+export struct TokenBudget {
+prompt: u32,
+completion: u32,
+}
+
+/// 研究问题分解后的最小任务单元。
+#[derive(Debug, Clone)]
+export struct Task {
+id: u32,
+goal: String,
+depends_on: Vec<u32>,
+role: String,
+priority: u8,
+done: bool,
+}
+
+impl Task {
+    /// 任务是否就绪：依赖全部完成。S1：显式 all + 显式比较。
+fn ready(self, completed: &Vec<u32>) -> bool {
+        self.depends_on.iter().all(|dep| completed.contains(dep))
+    }
+
+    /// 同优先级排序键（priority 小者先）。
+fn sort_key(self) -> u32 {
+        (self.priority as u32) * 1_000 + self.id
+    }
+}
+
+/// 一条研究发现：带来源引用与置信度。
+#[derive(Debug, Clone)]
+export struct Finding {
+id: u32,
+task_id: u32,
+claim: String,
+evidence: Vec<Citation>,
+confidence: f64,
+verified: bool,
+}
+
+/// 来源引用。
+#[derive(Debug, Clone)]
+export struct Citation {
+url: String,
+title: String,
+quoted: String,
+}
+
+/// 研究会话的完整状态（graph 间共享的真理源）。
+#[derive(Debug, Clone)]
+export struct ResearchState {
+question: String,
+tasks: Vec<Task>,
+findings: Vec<Finding>,
+memory: Vec<String>,
+completed_ids: Vec<u32>,
+iterations: u32,
+max_iterations: u32,
+budget: TokenBudget,
+halted: Option<String>,
+}
+
+impl ResearchState {
+    /// 工厂：从问题构造初始状态。
+fn new(question: String) -> ResearchState {
+        ResearchState {
+            question: question,
+            tasks: Vec::new(),
+            findings: Vec::new(),
+            memory: Vec::new(),
+            completed_ids: Vec::new(),
+            iterations: 0,
+            max_iterations: MAX_ITERATIONS,
+            budget: TokenBudget { prompt: BUDGET_PROMPT, completion: BUDGET_COMPLETION },
+            halted: None,
+        }
+    }
+
+    /// 是否应停止：显式 halt、任务全完成、或迭代耗尽。
+fn should_stop(self) -> Option<String> {
+        if self.halted.is_some() {
+            self.halted
+        } else if self.tasks.len() > 0 && self.tasks.iter().all(|t| t.done) {
+            Some(String::from("all tasks completed"))
+        } else if self.iterations >= self.max_iterations {
+            Some(String::from("iteration budget exhausted"))
+        } else {
+            None
+        }
+    }
+
+    /// 下一个就绪任务（拓扑序）。
+fn next_ready(self) -> Option<Task> {
+        let pending = self.tasks.iter().filter(|t| t.done == false);
+        let mut best: Option<Task> = None;
+        for t in pending {
+            if t.clone().ready(&self.completed_ids) {
+                let key = t.clone().sort_key();
+                let best_key = match best.clone() {
+                    Some(b) => b.sort_key(),
+                    None => u32::MAX,
+                };
+                if key < best_key {
+                    best = Some(t.clone());
+                }
+            }
+        }
+        best
+    }
+
+    /// 标记任务完成并登记发现。
+fn complete_task(mut self, task_id: u32, finding: Finding) -> ResearchState {
+        for t in self.tasks.iter_mut() {
+            if t.id == task_id {
+                t.done = true;
+            }
+        }
+        self.completed_ids.push(task_id);
+        self.findings.push(finding);
+        self
+    }
+
+    /// 预算是否见底（prompt 消耗 90% 阈值）。
+fn budget_low(self) -> bool {
+        self.budget.prompt < BUDGET_PROMPT / 10
+    }
+}
+
+/// 迭代上限：0x20 = 32 次（十六进制字面量示范）。
+export const MAX_ITERATIONS: u32 = 0x20;
+
+/// 单次研究会话预算：0xF_4240 ≈ 1M prompt tokens。
+export const BUDGET_PROMPT: u32 = 0xF_4240;
+
+/// 完成预算：0x1_86A0 = 100,000 tokens（十进制 100000，二进制思考）。
+export const BUDGET_COMPLETION: u32 = 0b1_1000_0110_1010_0000;
+
+/// 消息角色的类型别名。
+export type Role = String;
+
+/// 证据集合的类型别名（模块内复用）。
+type Evidence = Vec<Citation>;

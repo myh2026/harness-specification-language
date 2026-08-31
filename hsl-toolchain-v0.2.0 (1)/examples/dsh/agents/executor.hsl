@@ -1,0 +1,103 @@
+// ============================================================================
+// dsh/agents/executor.hsl — 执行器：模型输出解析 + 工具分发（Toolkit 节点）
+// ============================================================================
+// 文法覆盖：match 穷尽（S6，无 _ 兜底）/ Option::Some|None 模式 /
+//           if-else if 链 / ? 跨错误类型 / HashMap 工具
+// ============================================================================
+
+import { ToolCall, ToolResult, Action } from "../types/messages.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Policy, SessionState } from "../types/state.hsl";
+import { read_file, write_file, edit_file, list_files } from "../tools/workspace.hsl";
+import { run_bash } from "../tools/shell.hsl";
+
+/// 模型输出 → Action。
+/// 严格 JSON 协议：字段经 $host.json.fields 以 HashMap<String,String> 进入 HSL
+/// （类型纪律：不在 HSL/宿主之间穿透动态对象图）。
+export fn parse_action(raw: String) -> Result<Action, HarnessError> {
+    let fields: HashMap<String, String> = native typescript {
+        try {
+            return $host.json.fields(raw);
+        } catch (e) {
+            const m = new Map();
+            m.set("error", String(e && e.message || e));
+            return m;
+        }
+    };
+    if fields.contains_key("error") {
+        let detail = fields.get("error").unwrap_or(String::from("?"));
+        return Err(HarnessError::new(String::from("parse"), format!("模型输出不是合法 JSON：{}", detail)));
+    }
+    let kind = fields.get("action").unwrap_or(String::from(""));
+    if kind == String::from("tool") {
+        parse_tool(fields)
+    } else if kind == String::from("done") {
+        Ok(Action::Done { summary: fields.get("summary").unwrap_or(String::from("")) })
+    } else {
+        Err(HarnessError::new(String::from("parse"), format!("action 必须是 tool/done，得到 \"{}\"", kind)))
+    }
+}
+
+fn parse_tool(fields: HashMap<String, String>) -> Result<Action, HarnessError> {
+    let tool = fields.get("tool").unwrap_or(String::from(""));
+    if tool == String::from("read_file") {
+        Ok(Action::Tool { call: ToolCall::ReadFile { path: require_field(fields, "path")? } })
+    } else if tool == String::from("write_file") {
+        Ok(Action::Tool {
+            call: ToolCall::WriteFile {
+                path: require_field(fields, "path")?,
+                content: require_field(fields, "content")?,
+            },
+        })
+    } else if tool == String::from("edit_file") {
+        Ok(Action::Tool {
+            call: ToolCall::EditFile {
+                path: require_field(fields, "path")?,
+                old_text: require_field(fields, "old_text")?,
+                new_text: require_field(fields, "new_text")?,
+            },
+        })
+    } else if tool == String::from("bash") {
+        Ok(Action::Tool { call: ToolCall::Bash { command: require_field(fields, "command")? } })
+    } else if tool == String::from("list_files") {
+        Ok(Action::Tool { call: ToolCall::ListFiles })
+    } else {
+        Err(HarnessError::new(String::from("parse"), format!("未知工具 \"{}\"", tool)))
+    }
+}
+
+fn require_field(fields: HashMap<String, String>, key: String) -> Result<String, HarnessError> {
+    match fields.get(key) {
+        Option::Some(v) => Ok(v),
+        Option::None => Err(HarnessError::new(String::from("parse"), format!("缺少字段 \"{}\"", key))),
+    }
+}
+
+/// 工具箱节点：graph 中 executor node 的实体。
+/// 预算闸门（bash 上限）由主循环在调用前检查——工具自身保持无状态。
+#[derive(Debug, Clone)]
+export struct Toolkit {
+    policy: Policy,
+}
+
+impl Toolkit {
+    fn new(policy: Policy) -> Toolkit {
+        Toolkit { policy }
+    }
+
+    fn run(self, call: ToolCall) -> Result<ToolResult, HarnessError> {
+        match call {
+            ToolCall::ReadFile { path } => read_file(self.policy.clone(), path),
+            ToolCall::WriteFile { path, content } => write_file(self.policy.clone(), path, content),
+            ToolCall::EditFile { path, old_text, new_text } => edit_file(self.policy.clone(), path, old_text, new_text),
+            ToolCall::Bash { command } => run_bash(self.policy.clone(), command),
+            ToolCall::ListFiles => list_files(self.policy.clone()),
+        }
+    }
+}
+
+/// 兼容入口：无 Toolkit 实例时按会话状态直接分发（等价语义，G6 单态调用路径）。
+export fn run_tool(state: SessionState, call: ToolCall) -> Result<ToolResult, HarnessError> {
+    let toolkit = Toolkit::new(state.policy.clone());
+    toolkit.run(call)
+}

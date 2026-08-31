@@ -1,0 +1,145 @@
+// ============================================================================
+// nova/agents/synthesizer.hsl — 综合 Agent：发现集合 → 结构化报告
+// ============================================================================
+// 文法覆盖：graph + node / for-in / 字符串构建 / match 数据变体 /
+//           impl 固有方法 / 无初始化 node 不使用（本文件全部显式初始化）
+// ============================================================================
+
+import { Finding, ResearchState } from "../types/state.hsl";
+import { NovaError } from "../types/errors.hsl";
+import { CompletionRequest, DeepSeekClient, Message } from "../providers/llm.hsl";
+
+/// 综合层边事件。
+enum SynthEdge {
+    FindingsRanked,
+    DraftReady,
+}
+
+/// 报告章节。
+#[derive(Debug, Clone)]
+export struct Section {
+    heading: String,
+    body: String,
+    citations: u32,
+}
+
+/// 综合报告。
+#[derive(Debug, Clone)]
+export struct Report {
+    title: String,
+    sections: Vec<Section>,
+    accepted: u32,
+    rejected: u32,
+}
+
+/// 综合 graph：汇总全部通过审查的发现。
+///
+/// 拓扑：
+///   ranker ──on FindingsRanked──> drafter ──on DraftReady──> emitter
+export graph Synthesizer(state: ResearchState) -> Result<Report, NovaError> {
+    node ranker: Ranker = Ranker::new();
+    node drafter: DeepSeekClient = DeepSeekClient::new();
+    node mut emitter: Vec<Section> = Vec::new();
+
+    edge ranker -> drafter on SynthEdge::FindingsRanked;
+    edge drafter -> emitter on SynthEdge::DraftReady with style = "report";
+
+    // 局部项：通过线（verified 或高置信）
+    fn accepted_findings(findings: Vec<Finding>) -> Vec<Finding> {
+        let mut out: Vec<Finding> = Vec::new();
+        for f in findings {
+            if f.verified || f.confidence >= 0.6 {
+                out.push(f);
+            }
+        }
+        out
+    }
+
+    let ranked = ranker.rank(accepted_findings(state.findings.clone()));
+    let total = ranked.len();
+    let mut cursor: usize = 0;
+    let mut accepted_count: u32 = 0;
+
+    // AgentLoop：逐章生成
+    loop {
+        let next = if cursor < total {
+            Some(ranked[cursor].clone())
+        } else {
+            None
+        };
+        match next {
+            Some(finding) => {
+                let prompt = CompletionRequest {
+                    messages: vec![
+                        Message::system(String::from("write one report section, 3 paragraphs, cite as [n]")),
+                        Message::user(finding.claim.clone()),
+                    ],
+                    temperature: 0.3,
+                    budget: state.budget.clone(),
+                };
+                let body = DeepSeekClient::complete(prompt).await?;
+                emitter.push(Section {
+                    heading: finding.claim.clone(),
+                    body: body,
+                    citations: finding.evidence.len() as u32,
+                });
+                accepted_count += 1;
+                cursor += 1;
+            },
+            None => {
+                break;
+            },
+        }
+    }
+
+    let rejected_count = (state.findings.len() as u32) - accepted_count;
+
+    Ok(Report {
+        title: state.question.clone(),
+        sections: emitter.clone(),
+        accepted: accepted_count,
+        rejected: rejected_count,
+    })
+}
+
+/// 排序器：按「已验证加权 + 置信度」降序（稳定冒泡演示；生产用 sort_by）。
+struct Ranker {
+    inspections: u32,
+}
+
+impl Ranker {
+    fn new() -> Ranker {
+        Ranker { inspections: 0 }
+    }
+
+    fn rank(&mut self, findings: Vec<Finding>) -> Vec<Finding> {
+        let mut sorted = findings;
+        let n = sorted.len();
+        let mut i = 0;
+        while i < n {
+            let mut j = 0;
+            while j + 1 < n - i {
+                let left_weight = weight_of(sorted[j].clone());
+                let right_weight = weight_of(sorted[j + 1].clone());
+                if left_weight < right_weight {
+                    let tmp = sorted[j].clone();
+                    sorted[j] = sorted[j + 1].clone();
+                    sorted[j + 1] = tmp;
+                }
+                j += 1;
+                self.inspections += 1;
+            }
+            i += 1;
+        }
+        sorted
+    }
+}
+
+/// 已验证发现权重 +0.25（优先成章）。
+fn weight_of(finding: Finding) -> f64 {
+    if finding.verified {
+        finding.confidence + 0.25
+    } else {
+        finding.confidence
+    }
+}

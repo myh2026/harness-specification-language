@@ -1,0 +1,7 @@
+{
+  "ts": "2026-08-30T11:18:33.895Z",
+  "ok": false,
+  "panic": "import 路径无法解析：./b.hsl（from C:\\Users\\86186\\AppData\\Local\\Temp\\hsl-test-y43Eaj\\cycle\\a.hsl）",
+  "model": "scripted",
+  "task": ""
+}

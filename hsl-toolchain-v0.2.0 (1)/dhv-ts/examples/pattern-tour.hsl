@@ -1,0 +1,131 @@
+// ============================================================================
+// dhv-ts/examples/pattern-tour.hsl — if-let / while-let 模式扩展巡览（v0.3 新增）
+// ----------------------------------------------------------------------------
+// 本例展示 v0.3 引入的 if-let / while-let 更强模式匹配能力：
+//   1. 枚举 tuple 变体：if let Shape::Circle(r) = s
+//   2. 枚举 struct 变体：if let Shape::Point { x, y } = s
+//   3. 枚举无负载变体：if let Shape::Unit = s
+//   4. Result::Ok(x) / Result::Err(e) 模式（与 Option::Some(x) 同源）
+//   5. while let 配合表达式副作用（v.pop() 每迭代求值一次）
+//   6. scrutinee 表达式 hoist 到临时变量（避免多次求值）
+// 运行：bun dhv-ts/src/main.ts run   dhv-ts/examples/pattern-tour.hsl
+// 投射：bun dhv-ts/src/main.ts emit  dhv-ts/examples/pattern-tour.hsl --out /tmp/pattern-tour
+// ============================================================================
+
+enum Shape {
+    Circle(f64),
+    Square(f64),
+    Rect(f64, f64),
+    Point { x: i32, y: i32 },
+    Unit,
+}
+
+fn describe_shape(s: Shape) -> String {
+    if let Shape::Circle(r) = s {
+        return format!("circle r={}", r);
+    }
+    if let Shape::Square(w) = s {
+        return format!("square w={}", w);
+    }
+    if let Shape::Rect(a, b) = s {
+        return format!("rect {}x{}", a, b);
+    }
+    "other".to_string()
+}
+
+fn classify(s: Shape) -> String {
+    if let Shape::Point { x, y } = s {
+        return format!("point ({},{})", x, y);
+    }
+    if let Shape::Unit = s {
+        return "unit".to_string();
+    }
+    "non-point".to_string()
+}
+
+/// while-let 变量型 scrutinee：cpp/go 后端同构支持（变量重赋值驱动循环）
+fn count_down(mut fuel: Option<i32>) -> i32 {
+    let mut steps = 0;
+    while let Some(n) = fuel {
+        steps = steps + n;
+        if n > 1 {
+            fuel = Some(n - 1);
+        } else {
+            fuel = None;
+        }
+    }
+    steps
+}
+
+fn drain(v: Vec<i32>) -> i32 {
+    let mut total = 0;
+    let mut cur = v;
+    while let Some(x) = cur.pop() {
+        total = total + x;
+    }
+    total
+}
+
+fn first_ok(results: Vec<Result<i32, String>>) -> i32 {
+    let mut i = 0;
+    while let Some(r) = results.get(i) {
+        if let Result::Ok(v) = r {
+            return v;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn main() {
+    let c = Shape::Circle(3.0);
+    let s = Shape::Square(4.0);
+    let r = Shape::Rect(2.0, 5.0);
+    let p = Shape::Point { x: 1, y: 2 };
+    let u = Shape::Unit;
+    println!("{}", describe_shape(c));
+    println!("{}", describe_shape(s));
+    println!("{}", describe_shape(r));
+    println!("{}", classify(p));
+    println!("{}", classify(u));
+    println!("{}", classify(c));
+    println!("drain={}", drain(vec![1, 2, 3, 4, 5]));
+    let rs = vec![Result::Err("e1".to_string()), Result::Ok(42), Result::Err("e2".to_string())];
+    println!("first_ok={}", first_ok(rs));
+    println!("count_down={}", count_down(Some(4)));
+}
+
+project {
+    Shape               -> "gen/python/shape.py"           : python,
+    Shape               -> "gen/typescript/shape.ts"       : typescript,
+    Shape               -> "gen/rust/shape.rs"             : rust,
+    Shape               -> "gen/cpp/shape.cpp"            : cpp,
+    Shape               -> "gen/go/shape.go"              : go,
+    Shape               -> "gen/java/Shape.java"          : java,
+    Shape               -> "gen/kotlin/Shape.kt"           : kotlin,
+    Shape               -> "gen/swift/Shape.swift"         : swift,
+    describe_shape      -> "gen/python/describe.py"        : python,
+    describe_shape      -> "gen/typescript/describe.ts"    : typescript,
+    describe_shape      -> "gen/rust/describe.rs"          : rust,
+    describe_shape      -> "gen/cpp/describe.cpp"          : cpp,
+    describe_shape      -> "gen/go/describe.go"            : go,
+    classify            -> "gen/python/classify.py"        : python,
+    classify            -> "gen/typescript/classify.ts"    : typescript,
+    classify            -> "gen/rust/classify.rs"           : rust,
+    classify            -> "gen/cpp/classify.cpp"          : cpp,
+    classify            -> "gen/go/classify.go"            : go,
+    count_down          -> "gen/python/count_down.py"       : python,
+    count_down          -> "gen/typescript/count_down.ts"   : typescript,
+    count_down          -> "gen/rust/count_down.rs"         : rust,
+    count_down          -> "gen/cpp/count_down.cpp"        : cpp,
+    count_down          -> "gen/go/count_down.go"          : go,
+    drain               -> "gen/python/drain.py"           : python,
+    drain               -> "gen/typescript/drain.ts"       : typescript,
+    drain               -> "gen/rust/drain.rs"             : rust,
+    drain               -> "gen/cpp/drain.cpp"            : cpp,
+    drain               -> "gen/go/drain.go"              : go,
+    first_ok            -> "gen/python/first_ok.py"        : python,
+    first_ok            -> "gen/typescript/first_ok.ts"    : typescript,
+    first_ok            -> "gen/rust/first_ok.rs"           : rust,
+    first_ok            -> "gen/cpp/first_ok.cpp"          : cpp,
+}

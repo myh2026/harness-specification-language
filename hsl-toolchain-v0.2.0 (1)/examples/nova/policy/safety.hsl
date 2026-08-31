@@ -1,0 +1,121 @@
+// ============================================================================
+// nova/policy/safety.hsl — 安全策略（能力域 + 预算 + 内容闸门）
+// ============================================================================
+// 文法覆盖：impl Type（固有 impl）/ 常量 / match 数据变体 /
+//           Vec 搜索 / 早返回 / #[deny] / #[allow] 属性
+// ============================================================================
+
+import { Citation, Finding, ResearchState } from "../types/state.hsl";
+import { NovaError, PolicyViolation } from "../types/errors.hsl";
+
+/// 内容安全等级。
+#[derive(Debug, Clone, PartialEq)]
+export enum SafetyLevel {
+    Open,
+    Sensitive,
+    Blocked,
+}
+
+/// 预算闸门：三段水位。
+#[derive(Debug, Clone, PartialEq)]
+export enum BudgetLevel {
+    Green,
+    Amber,
+    Red,
+}
+
+/// 安全策略引擎（编译期已由 #[capability] 处决越界；这里是运行时第二道闸）。
+#[deny(unwrap_without_match)]
+export struct SafetyPolicy {
+    blocklist: Vec<String>,
+    red_line_ratio: f64,
+}
+
+impl SafetyPolicy {
+    fn default() -> SafetyPolicy {
+        SafetyPolicy {
+            blocklist: vec![
+                String::from("credential"),
+                String::from("private-key"),
+                String::from("exploit-kit"),
+                String::from("rat-config"),
+            ],
+            red_line_ratio: 0.95,
+        }
+    }
+
+    /// 文本安全分级。
+    fn classify(&self, text: String) -> SafetyLevel {
+        let mut hits = 0;
+        for word in self.blocklist.iter() {
+            if text.contains(word.as_str()) {
+                hits += 1;
+            }
+        }
+        if hits > 0 {
+            SafetyLevel::Blocked
+        } else if text.len() > 100_000 {
+            SafetyLevel::Sensitive
+        } else {
+            SafetyLevel::Open
+        }
+    }
+
+    /// 预算水位（S1：显式比较链拆分）。
+    fn budget_level(&self, state: ResearchState) -> BudgetLevel {
+        let used = state.iterations as f64 / state.max_iterations as f64;
+        if used >= self.red_line_ratio {
+            BudgetLevel::Red
+        } else if used >= 0.75 {
+            BudgetLevel::Amber
+        } else {
+            BudgetLevel::Green
+        }
+    }
+
+    /// 发现发布前的最终闸门：全部通过才允许进入综合阶段。
+    fn gate_finding(&self, finding: Finding) -> Result<Finding, NovaError> {
+        let claim_level = self.classify(finding.claim.clone());
+        let evidence_dirty = finding.evidence.iter().any(|c: Citation| {
+            self.classify(c.quoted.clone()) == SafetyLevel::Blocked
+        });
+        match claim_level {
+            SafetyLevel::Blocked => Err(NovaError::Policy(PolicyViolation {
+                capability: String::from("content_gate"),
+                detail: String::from("claim hit blocklist"),
+            })),
+            SafetyLevel::Sensitive => {
+                if evidence_dirty {
+                    Err(NovaError::Policy(PolicyViolation {
+                        capability: String::from("content_gate"),
+                        detail: String::from("sensitive claim with dirty evidence"),
+                    }))
+                } else {
+                    Ok(finding)
+                }
+            },
+            SafetyLevel::Open => {
+                if evidence_dirty {
+                    Err(NovaError::Policy(PolicyViolation {
+                        capability: String::from("content_gate"),
+                        detail: String::from("clean claim but quoted evidence is blocked"),
+                    }))
+                } else {
+                    Ok(finding)
+                }
+            },
+        }
+    }
+
+    /// 能力域白名单（与 #[capability] 编译期处决互为双保险）。
+    fn capability_allowed(&self, capability: String) -> bool {
+        match capability.as_str() {
+            "file_read" => true,
+            "net_connect" => true,
+            "process_spawn" => true,
+            "file_write" => false,
+            "secret_access" => false,
+            _ => false,
+        }
+    }
+}

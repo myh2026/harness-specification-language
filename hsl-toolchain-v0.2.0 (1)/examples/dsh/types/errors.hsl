@@ -1,0 +1,44 @@
+// ============================================================================
+// dsh/types/errors.hsl — 错误层 + From 转换（? 的唯一显式通道，§5.9）
+// ============================================================================
+
+#[derive(Debug, Clone)]
+export struct ProviderError {
+    code: u32,
+    message: String,
+}
+
+impl ProviderError {
+    fn new(code: u32, message: String) -> ProviderError {
+        ProviderError { code, message }
+    }
+}
+
+#[derive(Debug, Clone)]
+export struct HarnessError {
+    kind: String,
+    message: String,
+}
+
+impl HarnessError {
+    fn new(kind: String, message: String) -> HarnessError {
+        HarnessError { kind, message }
+    }
+}
+
+// ? 自动包装：ProviderError → HarnessError
+impl From<ProviderError> for HarnessError {
+    fn from(src: ProviderError) -> HarnessError {
+        HarnessError {
+            kind: String::from("provider"),
+            message: format!("provider {}: {}", src.code, src.message),
+        }
+    }
+}
+
+// ? 自动包装：String（parse 错误）→ HarnessError
+impl From<String> for HarnessError {
+    fn from(src: String) -> HarnessError {
+        HarnessError { kind: String::from("parse"), message: src }
+    }
+}

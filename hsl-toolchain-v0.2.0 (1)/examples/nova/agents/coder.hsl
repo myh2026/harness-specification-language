@@ -1,0 +1,133 @@
+// ============================================================================
+// nova/agents/coder.hsl — 验证 Agent：写代码 → 沙盒运行 → 判定
+// ============================================================================
+// 文法覆盖：graph + node + edge / native rust（沙盒调用）/ Result 判定 /
+//           闭包捕获 / Vec 方法链 / as 转换
+// ============================================================================
+
+import { Finding } from "../types/state.hsl";
+import { NovaError, ToolError } from "../types/errors.hsl";
+import { CodeRunnerTool, execute_with_retry } from "../providers/tools.hsl";
+
+/// 验证层边事件。
+enum VerifyEdge {
+    DraftReady,
+    RunFinished,
+}
+
+/// 验证判定。
+enum Verification {
+    Proven { stdout: String },
+    Disproven { stderr: String },
+    Inconclusive,
+}
+
+/// 验证 graph：对一条发现生成验证代码并在沙盒内运行。
+///
+/// 拓扑：
+///   drafter ──on DraftReady──> runner ──on RunFinished──> judge
+export graph Verifier(claim: String) -> Result<Verification, NovaError> {
+    node drafter: DraftKit = DraftKit::new();
+    node runner: CodeRunnerTool = CodeRunnerTool { timeout_ms: 30_000 };
+    node mut judge: Option<Verification> = None;
+
+    edge drafter -> runner on VerifyEdge::DraftReady;
+    edge runner -> judge on VerifyEdge::RunFinished with jail = true;
+
+    // 局部项：断言模板（演示级；生产由 LLM 生成断言）
+    fn assertion_for(claim_text: String) -> String {
+        let mut code = String::from("fn check() -> bool {\n    // claim under test: ");
+        code.push_str(claim_text.as_str());
+        code.push_str("\n    true\n}\ncheck()");
+        code
+    }
+
+    let source = assertion_for(claim);
+    let attempts: u8 = 2;
+
+    // AgentLoop
+    loop {
+        let draft = drafter.draft(source.clone());
+        let payload = execute_with_retry(runner.clone(), draft, attempts)?;
+        let verdict = interpret(payload);
+        judge = Some(verdict.clone());
+        match verdict {
+            Verification::Proven { stdout: _ } => break,
+            Verification::Disproven { stderr: _ } => break,
+            Verification::Inconclusive => {
+                // 一次机会：换模板重试，仍不确定则接受不确定
+                if drafter.escalated {
+                    break;
+                }
+                drafter.escalate();
+            },
+        }
+    }
+
+    // S2 纪律：不裸 unwrap——用 match 消解 Option
+    match judge {
+        Some(final_verdict) => Ok(final_verdict),
+        None => Err(NovaError::Tool(ToolError {
+            tool: String::from("verifier"),
+            message: String::from("no verdict produced"),
+        })),
+    }
+}
+
+/// 草稿工具：断言模板状态机。
+struct DraftKit {
+    escalated: bool,
+    variant: u8,
+}
+
+impl DraftKit {
+    fn new() -> DraftKit {
+        DraftKit { escalated: false, variant: 0 }
+    }
+
+    fn draft(&mut self, base: String) -> String {
+        self.variant += 1;
+        let header = if self.escalated {
+            String::from("// strict mode\n")
+        } else {
+            String::from("// fast mode\n")
+        };
+        let mut payload = header;
+        payload.push_str(base.as_str());
+        payload
+    }
+
+    fn escalate(&mut self) {
+        self.escalated = true;
+    }
+}
+
+/// 输出判读：空输出 = 不确定。
+fn interpret(payload: String) -> Verification {
+    if payload.contains("panicked") {
+        Verification::Disproven { stderr: payload }
+    } else if payload.contains("true") {
+        Verification::Proven { stdout: payload }
+    } else {
+        Verification::Inconclusive
+    }
+}
+
+/// 把验证结果回填到发现（verified 标志 + 置信度修正）。
+export fn apply_verification(finding: Finding, verdict: Verification) -> Finding {
+    let mut updated = finding.clone();
+    match verdict {
+        Verification::Proven { stdout: _ } => {
+            updated.verified = true;
+            updated.confidence = (updated.confidence + 0.2).min(1.0);
+        },
+        Verification::Disproven { stderr: _ } => {
+            updated.verified = false;
+            updated.confidence = (updated.confidence * 0.5).min(1.0);
+        },
+        Verification::Inconclusive => {
+            updated.confidence = (updated.confidence * 0.9).min(1.0);
+        },
+    }
+    updated
+}

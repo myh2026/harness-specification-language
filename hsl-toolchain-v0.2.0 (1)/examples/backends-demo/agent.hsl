@@ -1,0 +1,284 @@
+// ============================================================================
+// examples/backends-demo/agent.hsl — 38 后端投射演示 · 入口与拓扑
+// ----------------------------------------------------------------------------
+// 本项目把同一份逻辑投射到全部 38 个后端（32 编程语言 + 6 静态格式），
+// 演示 project{} 的多语言散布能力。运行：
+//   bun dhv-ts/src/main.ts emit examples/backends-demo/agent.hsl --out /tmp/backends-demo
+// ============================================================================
+
+import { Prompt, ToolResult, Action, Verdict, LLMProvider, describe_action, clamp_turns, summarize } from "./model.hsl";
+
+const MAX_TURNS: i64 = 24;
+const state_budget: i64 = 12;
+
+fn main() -> i64 {
+    let p = Prompt::new(String::from("sys"), String::from("usr"));
+    println!("len={}", p.total_len());
+    println!("{}", describe_action(Action::Stop));
+    let results = vec![
+        ToolResult { tool: String::from("bash"), output: String::from("ok"), ok: true },
+        ToolResult { tool: String::from("grep"), output: String::from("miss"), ok: false },
+    ];
+    println!("{}", summarize(results));
+    0
+}
+
+graph DemoAgent {
+    let planner: Prompt = Prompt::new(String::from("you are a demo agent"), String::from("run"));
+    let budget: i64 = clamp_turns(12, 1, 24);
+
+    loop {
+        let action = Action::Stop;
+        match action {
+            Action::CallTool { name, args } => {
+                let result = ToolResult { tool: name, output: format!("{} args · budget={}", args.len(), budget), ok: true };
+                println!("tool: {}", result.output);
+                continue;
+            },
+            Action::Respond { text } => {
+                println!("{} · planner={}", text, planner.total_len());
+                break;
+            },
+            Action::Stop => break,
+        }
+    }
+}
+
+block agent_config {
+    agent:
+      name: BackendsDemo
+      version: 2
+      max_turns: {{MAX_TURNS}}
+      languages: 38
+}
+
+block agent_instructions {
+    # Backends Demo Agent
+    这是一个跨 38 后端的投射演示。
+    当前预算：{{state_budget}} 轮。
+}
+
+scale = microkernel;
+
+project {
+    // ---- Tier 1 · Harness 核心（10）----
+    Prompt          -> "gen/python/prompt.py"          : python,
+    Prompt          -> "gen/typescript/prompt.ts"      : typescript,
+    Prompt          -> "gen/javascript/prompt.js"      : javascript,
+    Prompt          -> "gen/rust/prompt.rs"            : rust,
+    Prompt          -> "gen/go/prompt.go"              : go,
+    Prompt          -> "gen/cpp/prompt.cpp"            : cpp,
+    Prompt          -> "gen/java/Prompt.java"          : java,
+    Prompt          -> "gen/csharp/Prompt.cs"          : csharp,
+    Prompt          -> "gen/kotlin/Prompt.kt"          : kotlin,
+    Prompt          -> "gen/swift/Prompt.swift"        : swift,
+    // ---- Tier 2 · 脚本与动态（8）----
+    Prompt          -> "gen/ruby/prompt.rb"            : ruby,
+    Prompt          -> "gen/php/Prompt.php"            : php,
+    Prompt          -> "gen/lua/prompt.lua"            : lua,
+    Prompt          -> "gen/perl/Prompt.pl"            : perl,
+    Prompt          -> "gen/bash/prompt.sh"            : bash,
+    Prompt          -> "gen/powershell/Prompt.ps1"     : powershell,
+    Prompt          -> "gen/r/prompt.R"                : r,
+    Prompt          -> "gen/julia/prompt.jl"           : julia,
+    // ---- Tier 3 · 函数式（6）----
+    Prompt          -> "gen/scala/Prompt.scala"        : scala,
+    Prompt          -> "gen/elixir/prompt.ex"          : elixir,
+    Prompt          -> "gen/erlang/prompt.erl"         : erlang,
+    Prompt          -> "gen/haskell/Prompt.hs"         : haskell,
+    Prompt          -> "gen/ocaml/prompt.ml"           : ocaml,
+    Prompt          -> "gen/fsharp/Prompt.fs"          : fsharp,
+    // ---- Tier 4 · 系统与现代（8）----
+    Prompt          -> "gen/zig/prompt.zig"            : zig,
+    Prompt          -> "gen/nim/prompt.nim"            : nim,
+    Prompt          -> "gen/crystal/prompt.cr"         : crystal,
+    Prompt          -> "gen/dart/prompt.dart"          : dart,
+    Prompt          -> "gen/groovy/Prompt.groovy"      : groovy,
+    Prompt          -> "gen/objectivec/Prompt.m"      : objectivec,
+    Prompt          -> "gen/d/prompt.d"                : d,
+    Prompt          -> "gen/vb/Prompt.vb"              : vb,
+    ToolResult          -> "gen/python/toolresult.py"          : python,
+    ToolResult          -> "gen/typescript/toolresult.ts"      : typescript,
+    ToolResult          -> "gen/javascript/toolresult.js"      : javascript,
+    ToolResult          -> "gen/rust/toolresult.rs"            : rust,
+    ToolResult          -> "gen/go/toolresult.go"              : go,
+    ToolResult          -> "gen/cpp/toolresult.cpp"            : cpp,
+    ToolResult          -> "gen/java/ToolResult.java"          : java,
+    ToolResult          -> "gen/csharp/ToolResult.cs"          : csharp,
+    ToolResult          -> "gen/kotlin/ToolResult.kt"          : kotlin,
+    ToolResult          -> "gen/swift/ToolResult.swift"        : swift,
+    ToolResult          -> "gen/ruby/toolresult.rb"            : ruby,
+    ToolResult          -> "gen/php/ToolResult.php"            : php,
+    ToolResult          -> "gen/lua/toolresult.lua"            : lua,
+    ToolResult          -> "gen/perl/ToolResult.pl"            : perl,
+    ToolResult          -> "gen/bash/toolresult.sh"            : bash,
+    ToolResult          -> "gen/powershell/ToolResult.ps1"     : powershell,
+    ToolResult          -> "gen/r/toolresult.R"                : r,
+    ToolResult          -> "gen/julia/toolresult.jl"           : julia,
+    ToolResult          -> "gen/scala/ToolResult.scala"        : scala,
+    ToolResult          -> "gen/elixir/toolresult.ex"          : elixir,
+    ToolResult          -> "gen/erlang/toolresult.erl"         : erlang,
+    ToolResult          -> "gen/haskell/ToolResult.hs"         : haskell,
+    ToolResult          -> "gen/ocaml/toolresult.ml"           : ocaml,
+    ToolResult          -> "gen/fsharp/ToolResult.fs"          : fsharp,
+    ToolResult          -> "gen/zig/toolresult.zig"            : zig,
+    ToolResult          -> "gen/nim/toolresult.nim"            : nim,
+    ToolResult          -> "gen/crystal/toolresult.cr"         : crystal,
+    ToolResult          -> "gen/dart/toolresult.dart"          : dart,
+    ToolResult          -> "gen/groovy/ToolResult.groovy"      : groovy,
+    ToolResult          -> "gen/objectivec/ToolResult.m"      : objectivec,
+    ToolResult          -> "gen/d/toolresult.d"                : d,
+    ToolResult          -> "gen/vb/ToolResult.vb"              : vb,
+    // ---- 静态格式（6）----
+    agent_config    -> "config/agent.yml"              : yaml,
+    agent_instructions -> "docs/AGENTS.md"             : markdown,
+    agent_config    -> "config/agent.json"             : json,
+    agent_config    -> "config/agent.toml"             : toml,
+    agent_config    -> "config/agent.ini"              : ini,
+    agent_config    -> "config/agent.xml"              : xml,
+    // ---- 其他构件抽样（跨 tier 验证 enum/trait/fn/graph/impl）----
+    Action          -> "gen/python/action.py"          : python,
+    Action          -> "gen/typescript/action.ts"      : typescript,
+    Action          -> "gen/rust/action.rs"            : rust,
+    Action          -> "gen/go/action.go"              : go,
+    Action          -> "gen/java/Action.java"          : java,
+    Action          -> "gen/kotlin/Action.kt"          : kotlin,
+    Action          -> "gen/swift/Action.swift"        : swift,
+    Action          -> "gen/scala/Action.scala"        : scala,
+    Action          -> "gen/haskell/Action.hs"         : haskell,
+    Action          -> "gen/ocaml/action.ml"           : ocaml,
+    Action          -> "gen/zig/action.zig"            : zig,
+    Action          -> "gen/dart/Action.dart"          : dart,
+    Action          -> "gen/ruby/action.rb"            : ruby,
+    Action          -> "gen/php/Action.php"            : php,
+    Action          -> "gen/lua/action.lua"            : lua,
+    Action          -> "gen/elixir/action.ex"          : elixir,
+    Action          -> "gen/erlang/action.erl"         : erlang,
+    Action          -> "gen/julia/action.jl"           : julia,
+    Action          -> "gen/nim/action.nim"            : nim,
+    Action          -> "gen/crystal/action.cr"         : crystal,
+    Verdict         -> "gen/python/verdict.py"         : python,
+    Verdict         -> "gen/typescript/verdict.ts"     : typescript,
+    Verdict         -> "gen/go/verdict.go"             : go,
+    Verdict         -> "gen/java/Verdict.java"         : java,
+    Verdict         -> "gen/swift/Verdict.swift"       : swift,
+    Verdict         -> "gen/fsharp/Verdict.fs"         : fsharp,
+    Verdict         -> "gen/d/verdict.d"               : d,
+    Verdict         -> "gen/vb/Verdict.vb"             : vb,
+    LLMProvider     -> "gen/python/provider.py"        : python,
+    LLMProvider     -> "gen/typescript/provider.ts"    : typescript,
+    LLMProvider     -> "gen/rust/provider.rs"          : rust,
+    LLMProvider     -> "gen/go/provider.go"            : go,
+    LLMProvider     -> "gen/java/LLMProvider.java"     : java,
+    LLMProvider     -> "gen/kotlin/LLMProvider.kt"     : kotlin,
+    LLMProvider     -> "gen/swift/LLMProvider.swift"   : swift,
+    LLMProvider     -> "gen/ruby/provider.rb"          : ruby,
+    LLMProvider     -> "gen/php/LLMProvider.php"       : php,
+    LLMProvider     -> "gen/elixir/provider.ex"        : elixir,
+    LLMProvider     -> "gen/haskell/Provider.hs"       : haskell,
+    LLMProvider     -> "gen/ocaml/provider.ml"         : ocaml,
+    LLMProvider     -> "gen/fsharp/LLMProvider.fs"     : fsharp,
+    LLMProvider     -> "gen/dart/LLMProvider.dart"     : dart,
+    LLMProvider     -> "gen/powershell/LLMProvider.ps1" : powershell,
+    describe_action -> "gen/python/describe.py"        : python,
+    describe_action -> "gen/typescript/describe.ts"    : typescript,
+    describe_action -> "gen/rust/describe.rs"          : rust,
+    describe_action -> "gen/go/describe.go"            : go,
+    describe_action -> "gen/cpp/describe.cpp"          : cpp,
+    describe_action -> "gen/java/Describe.java"        : java,
+    describe_action -> "gen/kotlin/describe.kt"        : kotlin,
+    describe_action -> "gen/swift/describe.swift"      : swift,
+    describe_action -> "gen/ruby/describe.rb"          : ruby,
+    describe_action -> "gen/php/describe.php"          : php,
+    describe_action -> "gen/lua/describe.lua"          : lua,
+    describe_action -> "gen/bash/describe.sh"          : bash,
+    describe_action -> "gen/powershell/describe.ps1"   : powershell,
+    describe_action -> "gen/r/describe.R"              : r,
+    describe_action -> "gen/julia/describe.jl"         : julia,
+    describe_action -> "gen/scala/describe.scala"      : scala,
+    describe_action -> "gen/elixir/describe.ex"        : elixir,
+    describe_action -> "gen/erlang/describe.erl"       : erlang,
+    describe_action -> "gen/haskell/describe.hs"       : haskell,
+    describe_action -> "gen/ocaml/describe.ml"         : ocaml,
+    describe_action -> "gen/fsharp/describe.fs"        : fsharp,
+    describe_action -> "gen/zig/describe.zig"          : zig,
+    describe_action -> "gen/nim/describe.nim"          : nim,
+    describe_action -> "gen/crystal/describe.cr"       : crystal,
+    describe_action -> "gen/dart/describe.dart"        : dart,
+    describe_action -> "gen/groovy/describe.groovy"    : groovy,
+    describe_action -> "gen/objectivec/describe.m"     : objectivec,
+    describe_action -> "gen/d/describe.d"              : d,
+    describe_action -> "gen/vb/Describe.vb"            : vb,
+    clamp_turns     -> "gen/python/clamp.py"           : python,
+    clamp_turns     -> "gen/typescript/clamp.ts"       : typescript,
+    clamp_turns     -> "gen/rust/clamp.rs"             : rust,
+    clamp_turns     -> "gen/go/clamp.go"               : go,
+    clamp_turns     -> "gen/cpp/clamp.cpp"             : cpp,
+    clamp_turns     -> "gen/java/Clamp.java"           : java,
+    clamp_turns     -> "gen/kotlin/clamp.kt"           : kotlin,
+    clamp_turns     -> "gen/swift/clamp.swift"         : swift,
+    clamp_turns     -> "gen/ruby/clamp.rb"             : ruby,
+    clamp_turns     -> "gen/php/clamp.php"             : php,
+    clamp_turns     -> "gen/lua/clamp.lua"             : lua,
+    clamp_turns     -> "gen/perl/clamp.pl"             : perl,
+    clamp_turns     -> "gen/bash/clamp.sh"             : bash,
+    clamp_turns     -> "gen/powershell/Clamp.ps1"      : powershell,
+    clamp_turns     -> "gen/r/clamp.R"                 : r,
+    clamp_turns     -> "gen/julia/clamp.jl"            : julia,
+    clamp_turns     -> "gen/scala/clamp.scala"         : scala,
+    clamp_turns     -> "gen/elixir/clamp.ex"           : elixir,
+    clamp_turns     -> "gen/erlang/clamp.erl"          : erlang,
+    clamp_turns     -> "gen/haskell/clamp.hs"          : haskell,
+    clamp_turns     -> "gen/ocaml/clamp.ml"            : ocaml,
+    clamp_turns     -> "gen/fsharp/clamp.fs"           : fsharp,
+    clamp_turns     -> "gen/zig/clamp.zig"             : zig,
+    clamp_turns     -> "gen/nim/clamp.nim"             : nim,
+    clamp_turns     -> "gen/crystal/clamp.cr"          : crystal,
+    clamp_turns     -> "gen/dart/clamp.dart"           : dart,
+    clamp_turns     -> "gen/groovy/clamp.groovy"       : groovy,
+    clamp_turns     -> "gen/objectivec/clamp.m"        : objectivec,
+    clamp_turns     -> "gen/d/clamp.d"                 : d,
+    clamp_turns     -> "gen/vb/Clamp.vb"               : vb,
+    summarize       -> "gen/python/summarize.py"       : python,
+    summarize       -> "gen/typescript/summarize.ts"   : typescript,
+    summarize       -> "gen/rust/summarize.rs"         : rust,
+    summarize       -> "gen/go/summarize.go"           : go,
+    summarize       -> "gen/cpp/summarize.cpp"         : cpp,
+    summarize       -> "gen/java/Summarize.java"       : java,
+    summarize       -> "gen/swift/summarize.swift"     : swift,
+    summarize       -> "gen/haskell/Summarize.hs"      : haskell,
+    summarize       -> "gen/ocaml/summarize.ml"        : ocaml,
+    summarize       -> "gen/erlang/summarize.erl"      : erlang,
+    summarize       -> "gen/elixir/summarize.ex"       : elixir,
+    summarize       -> "gen/zig/summarize.zig"         : zig,
+    summarize       -> "gen/dart/summarize.dart"       : dart,
+    DemoAgent       -> "gen/python/agent.py"           : python,
+    DemoAgent       -> "gen/typescript/agent.ts"       : typescript,
+    DemoAgent       -> "gen/rust/agent.rs"             : rust,
+    DemoAgent       -> "gen/go/agent.go"               : go,
+    DemoAgent       -> "gen/cpp/agent.cpp"             : cpp,
+    DemoAgent       -> "gen/java/Agent.java"           : java,
+    DemoAgent       -> "gen/kotlin/Agent.kt"           : kotlin,
+    DemoAgent       -> "gen/swift/Agent.swift"         : swift,
+    DemoAgent       -> "gen/ruby/agent.rb"             : ruby,
+    DemoAgent       -> "gen/php/Agent.php"             : php,
+    DemoAgent       -> "gen/lua/agent.lua"             : lua,
+    DemoAgent       -> "gen/bash/agent.sh"             : bash,
+    DemoAgent       -> "gen/powershell/Agent.ps1"      : powershell,
+    DemoAgent       -> "gen/r/agent.R"                 : r,
+    DemoAgent       -> "gen/julia/agent.jl"            : julia,
+    DemoAgent       -> "gen/scala/Agent.scala"         : scala,
+    DemoAgent       -> "gen/elixir/agent.ex"           : elixir,
+    DemoAgent       -> "gen/erlang/agent.erl"          : erlang,
+    DemoAgent       -> "gen/haskell/Agent.hs"          : haskell,
+    DemoAgent       -> "gen/ocaml/agent.ml"            : ocaml,
+    DemoAgent       -> "gen/fsharp/Agent.fs"           : fsharp,
+    DemoAgent       -> "gen/zig/agent.zig"             : zig,
+    DemoAgent       -> "gen/nim/agent.nim"             : nim,
+    DemoAgent       -> "gen/crystal/agent.cr"          : crystal,
+    DemoAgent       -> "gen/dart/Agent.dart"           : dart,
+    DemoAgent       -> "gen/groovy/Agent.groovy"       : groovy,
+    DemoAgent       -> "gen/objectivec/Agent.m"        : objectivec,
+    DemoAgent       -> "gen/d/agent.d"                 : d,
+    DemoAgent       -> "gen/vb/Agent.vb"               : vb,
+}

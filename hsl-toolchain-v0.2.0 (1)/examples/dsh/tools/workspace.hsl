@@ -1,0 +1,97 @@
+// ============================================================================
+// dsh/tools/workspace.hsl — 工作区文件工具（路径监狱由 $host.fs 保证）
+// ============================================================================
+// 文法覆盖：#[capability(file_read, file_write)] / native try-catch 返回
+//           结构化结果 / if-else 表达式值 / String 方法链（chars().take().collect）
+// ============================================================================
+
+import { ToolResult } from "../types/messages.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Policy } from "../types/state.hsl";
+
+/// 输出封顶（纯 HSL 字符串工程：chars().take(n).collect::<String>()）。
+export fn cap_chars(text: String, cap: u32) -> String {
+    if text.len() <= cap {
+        text
+    } else {
+        let head = text.chars().take(cap).collect::<String>();
+        let mut out = head;
+        out.push_str("\n... [truncated ");
+        out.push_str((text.len() - cap).to_string().as_str());
+        out.push_str(" chars]");
+        out
+    }
+}
+
+#[capability(file_read)]
+export fn read_file(policy: Policy, path: String) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        const t0 = Date.now();
+        try {
+            const content = await $host.fs.read(path);
+            return { ok: true, body: content, error: "", ms: Date.now() - t0 };
+        } catch (e) {
+            return { ok: false, body: "", error: String(e && e.message || e), ms: Date.now() - t0 };
+        }
+    };
+    let body = if r.ok { cap_chars(r.body, policy.max_output_chars) } else { r.error };
+    Ok(ToolResult {
+        call: format!("read_file {}", path),
+        ok: r.ok,
+        output: body,
+        duration_ms: r.ms,
+    })
+}
+
+#[capability(file_write)]
+export fn write_file(policy: Policy, path: String, content: String) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        try {
+            const n = $host.fs.write(path, content);
+            return { ok: true, error: "", bytes: n };
+        } catch (e) {
+            return { ok: false, error: String(e && e.message || e), bytes: 0 };
+        }
+    };
+    let output = if r.ok { format!("wrote {} bytes", r.bytes) } else { r.error };
+    Ok(ToolResult {
+        call: format!("write_file {}", path),
+        ok: r.ok,
+        output,
+        duration_ms: 0,
+    })
+}
+
+#[capability(file_write)]
+export fn edit_file(policy: Policy, path: String, old_text: String, new_text: String) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        const result = $host.fs.edit(path, old_text, new_text);
+        return { ok: result.ok, error: result.error || "" };
+    };
+    let output = if r.ok { String::from("edited 1 occurrence") } else { r.error };
+    Ok(ToolResult {
+        call: format!("edit_file {}", path),
+        ok: r.ok,
+        output,
+        duration_ms: 0,
+    })
+}
+
+#[capability(file_read)]
+export fn list_files(policy: Policy) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        try {
+            const listing = await $host.fs.list(".");
+            return { ok: true, body: listing, error: "" };
+        } catch (e) {
+            return { ok: false, body: "", error: String(e && e.message || e) };
+        }
+    };
+    let body = if r.ok { cap_chars(r.body, policy.max_output_chars) } else { r.error };
+    Ok(ToolResult {
+        call: String::from("list_files"),
+        ok: r.ok,
+        output: body,
+        duration_ms: 0,
+    })
+}
