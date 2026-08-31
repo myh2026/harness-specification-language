@@ -15,9 +15,9 @@ REPO_DIR="$(dirname "$TOOLCHAIN_DIR")"
 
 local_ver="$(grep -m1 '^version' "$TOOLCHAIN_DIR/dhv/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
-# 远端 README 中的当前版本（### x.y.z 标题或 🛡️ 当前版本 小节里的 v 号）
-remote_ver="$(git -C "$REPO_DIR" show origin/main:README.md 2>/dev/null \
-  | grep -oE '\*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*' | head -1 | tr -d 'v*' )"
+# 远端 README 中的当前版本（🛡️ 当前版本 小节的 **vX.Y.Z**；README 未推送时回退 0.0.0）
+remote_ver="$(git -C "$REPO_DIR" show 'origin/main:README.md' 2>/dev/null \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 remote_ver="${remote_ver:-0.0.0}"
 
 ver_ge() { # $1 >= $2 ?
