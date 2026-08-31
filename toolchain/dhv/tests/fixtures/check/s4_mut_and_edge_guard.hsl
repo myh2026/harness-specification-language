@@ -1,0 +1,21 @@
+// 回归锁定 S4 + S7 + 边守卫：mut 赋值合法性、`_` 前缀豁免、
+// `edge .. on Enum::Variant` 守卫使用（导入与路径使用标记）。
+
+enum Signal { On, Off }
+
+export fn mut_flow() -> i64 {
+    let mut x: i64 = 1;
+    x = x + 1;
+    let _unused_but_exempt = 9;
+    x
+}
+
+graph G {
+    node src: Signal;
+    node dst: Signal;
+    edge src -> dst on Signal::On;
+    loop {
+        let tick = 1;
+        if tick > 0 { break; }
+    }
+}

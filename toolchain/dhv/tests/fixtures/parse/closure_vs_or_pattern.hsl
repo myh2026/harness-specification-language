@@ -1,0 +1,20 @@
+// 回归锁定：闭包 `|x| expr` 与 or-模式的歧义（Rust PatternNoTopAlt 同源规则）。
+// 此闭包参数复用 or-pattern 规则导致 `|x| x * 2` 的 `| x` 被当 or-模式分隔符吞掉闭包体。
+export fn transform(nums: Vec<i64>) -> Vec<i64> {
+    nums.iter().map(|x| x * 2).collect()
+}
+
+export fn pick_or(point: (i64, i64)) -> i64 {
+    let (a, b) = point;
+    let f = |v: i64| v + 1;
+    f(a) + f(b)
+}
+
+export fn classify(n: i64) -> String {
+    let text = match n {
+        0 => String::from("zero"),
+        1 | 2 | 3 => String::from("small"),
+        _ => String::from("many"),
+    };
+    text
+}

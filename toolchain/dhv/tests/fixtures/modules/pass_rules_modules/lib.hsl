@@ -1,0 +1,5 @@
+export struct Saved { id: String }
+
+export fn save_all(items: Vec<Saved>) -> i64 {
+    items.len() as i64
+}

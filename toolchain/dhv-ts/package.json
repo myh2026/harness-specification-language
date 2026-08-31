@@ -1,0 +1,12 @@
+{
+  "name": "dhv-ts",
+  "version": "0.2.12",
+  "type": "module",
+  "description": "dhv-ts — HSL (Harness Specification Language) 参考解释器：check / run / emit / targets / sync / watch，38 后端投射（BNF v1.4 可执行子集）。",
+  "scripts": {
+    "dev": "bun src/main.ts --help",
+    "check": "bun src/main.ts check",
+    "run": "bun src/main.ts run"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,14 @@
+// 回归锁定（跨模块）§2.15：rules 展开覆盖依赖模块导出项（struct/fn）。
+import { Saved, save_all } from "./lib.hsl";
+
+export fn run() -> i64 {
+    let s = Saved { id: String::from("a") };
+    save_all(vec![s])
+}
+
+project {
+    rules {
+        struct -> "src/types/{name}.rs" : rust,
+        fn     -> "src/logic/{name}.rs" : rust,
+    }
+}

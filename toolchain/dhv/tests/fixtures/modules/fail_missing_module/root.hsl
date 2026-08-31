@@ -1,0 +1,6 @@
+// 期望 M2：导入的模块文件不存在。
+import { Ghost } from "./nowhere.hsl";
+
+export fn f() -> i64 {
+    0
+}

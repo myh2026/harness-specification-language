@@ -1,0 +1,32 @@
+// 回归锁定：native 块内字符串包含 `//`、`#`、`/*`、引号、字典大括号。
+// 此前 pest 全局 COMMENT 规则作为隐式空白注入非原子规则，`https://...` 中的
+// `//` 在字符串内部触发行注释吞掉闭合引号。native_string/native_text 现为原子规则。
+export fn remote_call(question: String) -> String {
+    let raw: String = native python {
+        import os
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=os.environ["DEEPSEEK_API_KEY"],
+            base_url="https://api.deepseek.com/v1",
+        )
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": question}],
+            max_tokens=1024,
+            temperature=0.2,
+        )
+        response.choices[0].message.content  # 行内注释：// 不再破坏字符串
+    };
+    raw
+}
+
+export fn rust_escape(route: String) -> String {
+    let raw: String = native rust {
+        let url = String::from("http://127.0.0.1:11434/api/generate");
+        let body = format!("{{\"model\":\"nova-local\",\"route\":{route:?}}}");
+        let _ = (url, body);
+        "done"
+    };
+    raw
+}

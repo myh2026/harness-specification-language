@@ -1,2 +1,0 @@
-{"seq":0,"ts":"2026-08-30T11:23:24.198Z","name":"run_start","data":{"entry":"C:\\Users\\86186\\AppData\\Local\\Temp\\hsl-test-S91ekf\\stress-6.hsl","model":"scripted","task":"","scale":"microkernel"}}
-{"seq":1,"ts":"2026-08-30T11:23:24.227Z","name":"run_end","data":{"elapsed_ms":28,"ok":true}}

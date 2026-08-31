@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Bun
+node_modules/
+*.log
+
+# HSL 运行产物
+.hsl-runs/
+dist/
+gen/
+
+# IDE / OS
+.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# 环境与凭据（严禁提交）
+.env
+*.token
+gha-creds-*.json

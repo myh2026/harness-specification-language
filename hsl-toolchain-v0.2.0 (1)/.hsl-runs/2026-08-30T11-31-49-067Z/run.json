@@ -1,8 +1,0 @@
-{
-  "ts": "2026-08-30T11:31:49.718Z",
-  "ok": true,
-  "elapsed_ms": 549,
-  "model": "scripted",
-  "task": "修复 stats.ts 方差",
-  "events": 16
-}

@@ -1,2 +1,0 @@
-{"seq":0,"ts":"2026-08-30T11:23:46.329Z","name":"run_start","data":{"entry":"D:\\HSL\\hsl-toolchain-v0.2.0 (1)\\dhv-ts\\examples\\std-tour.hsl","model":"scripted","task":"","scale":"microkernel"}}
-{"seq":1,"ts":"2026-08-30T11:23:46.353Z","name":"run_end","data":{"elapsed_ms":24,"ok":true}}

@@ -1,7 +1,0 @@
-{
-  "ts": "2026-08-30T11:22:27.250Z",
-  "ok": false,
-  "panic": "path is not defined",
-  "model": "scripted",
-  "task": "修复 stats.ts 方差"
-}

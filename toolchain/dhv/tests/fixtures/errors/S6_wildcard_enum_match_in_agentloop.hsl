@@ -1,0 +1,17 @@
+// 期望 S6：graph 体内（AgentLoop 上下文）用户枚举 match 使用 `_` 通配兜底 —— 铁律禁止。
+// 注意：普通 fn 体内的 loop 不触发 S6（S6 作用域 = graph 体，对齐 dhv-ts inAgentLoop）。
+
+enum Action { Call { id: String }, Stop }
+
+graph Runner {
+    node inbox: Vec<Action>;
+    let mut log = String::from("");
+    edge inbox -> inbox;
+    loop {
+        let action = Action::Call { id: String::from("a") };
+        match action {
+            Action::Call { id } => { log = id; },
+            _ => break,
+        }
+    }
+}

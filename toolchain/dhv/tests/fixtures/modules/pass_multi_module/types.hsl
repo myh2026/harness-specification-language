@@ -1,0 +1,5 @@
+export enum Verdict { Accept { score: i64 }, Reject { reason: String } }
+
+export block resources {
+    name = demo
+}

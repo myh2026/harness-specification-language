@@ -1,0 +1,23 @@
+// 回归锁定 S7/S8：`_` 通配与 `_` 前缀豁免语义（Rust 对齐）。
+// - `_` 可重复绑定且不计未使用
+// - `_x` 前缀绑定豁免 S7
+// - 裸 `None` 是预导入单元变体，不构成绑定（Some/None 归一化）
+
+enum Maybe { Some { v: i64 }, None }
+
+export fn wildcard_demo() -> i64 {
+    let _ = 1;
+    let _ = 2;
+    let _ignored = 3;
+    let mut total: i64 = 0;
+    let m = Maybe::Some { v: 7 };
+    match m {
+        Maybe::Some { v } => { total = v; },
+        Maybe::None => {},
+    }
+    match total {
+        0 => 0,
+        n if n > 0 => { let _ = n; n },
+        _ => -1,
+    }
+}

@@ -1,1 +1,0 @@
-{"seq":0,"ts":"2026-08-30T11:18:34.436Z","name":"run_panic","data":{"message":"入口文件没有 fn main()（运行约定：BNF v1.3 §R-1）"}}

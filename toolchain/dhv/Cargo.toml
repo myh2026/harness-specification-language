@@ -1,0 +1,21 @@
+[package]
+name = "dhv"
+version = "0.2.12"
+edition = "2021"
+description = "DHV — HSL (Harness Specification Language) 编译器：多后端源到源转译器"
+license = "MIT"
+
+[lib]
+name = "dhv"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dhv"
+path = "src/main.rs"
+
+[dependencies]
+pest = "2.7"
+pest_derive = "2.7"
+clap = { version = "4", features = ["derive"] }
+
+[workspace]

@@ -1,0 +1,10 @@
+// 期望 P5：同一规则类型重复声明（R3）。
+
+struct A { x: i64 }
+
+project {
+    rules {
+        struct -> "src/types/{name}.rs" : rust,
+        struct -> "src/other/{name}.rs" : rust,
+    }
+}

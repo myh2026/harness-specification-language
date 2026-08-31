@@ -1,0 +1,37 @@
+// 回归锁定 S6：AgentLoop 内 `_` 通配兜底仅对**用户枚举** match 禁止；
+// Option/Result/字符串字面量匹配的 `_` 兜底合法（对齐 dhv-ts enumArms 门控）。
+
+struct Task { id: String, role: String }
+
+export fn route(tasks: Vec<Task>) -> String {
+    let mut report = String::from("");
+    let mut pending: Option<Task> = tasks.into_iter().next();
+    match pending {
+        Some(task) => {
+            // 字符串匹配 + `_` 兜底：合法
+            let lane = match task.role.as_str() {
+                "researcher" => String::from("deep"),
+                "verifier" => String::from("sandbox"),
+                _ => String::from("default"),
+            };
+            report = format!("{} -> {}", task.id, lane);
+            pending = None;
+        },
+        None => {
+            report = String::from("empty");
+        },
+    }
+    report
+}
+
+export fn loop_with_option_wildcard(ids: Vec<String>) -> i64 {
+    let mut it = ids.into_iter();
+    let mut count: i64 = 0;
+    loop {
+        match it.next() {
+            Some(id) => { count = count + id.len(); },
+            None => break,
+        }
+    }
+    count
+}

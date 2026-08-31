@@ -1,0 +1,29 @@
+// 回归锁定：export 项的前导属性 `#[derive(..)] export struct/enum`；
+// impl 的前导属性 `#[cfg(lang: rust)] impl ...`。
+// 此前属性只能写在非 export 项内、impl_def 无属性槽位 —— 模块文件大量使用这些形态。
+
+/// 导出结构体 + derive 属性。
+#[derive(Debug, Clone, PartialEq)]
+export struct TokenBudget {
+    prompt: u32,
+    completion: u32,
+}
+
+#[derive(Debug, Clone)]
+export enum Verdict {
+    Accept { score: i64 },
+    Reject { reason: String },
+}
+
+#[cfg(lang: rust)]
+#[capability(net_connect)]
+export trait Provider {
+    async fn call(input: String) -> Result<String, String>;
+}
+
+#[cfg(lang: rust)]
+impl Provider {
+    async fn call(input: String) -> Result<String, String> {
+        Ok(input)
+    }
+}

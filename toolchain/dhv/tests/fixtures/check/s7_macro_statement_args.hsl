@@ -1,0 +1,10 @@
+// 回归锁定 S7：语句级宏 `println!(...)` 的实参 token 树中标识符视为使用。
+// 此前语句位置宏是 Item::MacroCall，check_item 直接忽略 → 绑定误报未使用。
+
+export fn demo() -> i64 {
+    let p = String::from("payload");
+    let n = 41;
+    println!("p={} n={}", p, n);
+    println!("{}", p.len());
+    n + 1
+}

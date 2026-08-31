@@ -1,0 +1,9 @@
+// 期望 P5：路径占位符不在白名单（R2：v1 仅支持 {name}）。
+
+struct A { x: i64 }
+
+project {
+    rules {
+        struct -> "src/{module}/{name}.rs" : rust,
+    }
+}

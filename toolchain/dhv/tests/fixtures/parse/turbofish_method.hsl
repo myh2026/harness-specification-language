@@ -1,0 +1,13 @@
+// 回归锁定：turbofish 方法泛型 `.collect::<Vec<String>>()` / `.parse::<f64>()`。
+// 此前 method_call 文法缺少 `::<` 的 `::` 前缀，含 turbofish 的后缀链全部解析失败。
+export fn join_all(items: Vec<String>) -> String {
+    items.iter().map(|s| s.clone()).collect::<Vec<String>>().join(",")
+}
+
+export fn parse_ratio(raw: String) -> f64 {
+    raw.parse::<f64>().unwrap_or(0.0)
+}
+
+export fn parse_count(raw: String) -> u32 {
+    raw.parse::<u32>().unwrap_or(0)
+}

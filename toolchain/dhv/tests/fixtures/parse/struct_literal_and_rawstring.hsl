@@ -1,0 +1,33 @@
+// 回归锁定：结构体字面量各形态 + 原始字符串。
+// - 命名字段 / 简写字段 / 功能更新 ..base / 空结构体
+// - no-struct 语境（if/while/match/for 头部）内 `<` 后不吞块
+// - raw string：r"..." 与 r#"..."#（0/1 级 hash，对齐 dhv-ts 词法）
+
+struct Point { x: i64, y: i64 }
+
+struct Config { name: String, retries: i64 }
+
+export fn make_point(x: i64, y: i64) -> Point {
+    Point { x: x, y: y }
+}
+
+export fn shadow_cmp(flag: bool, x: i64, limit: i64) -> i64 {
+    let mut v: i64 = 0;
+    while x < limit {
+        v = v + 1;
+        break;
+    }
+    if flag { v } else { -v }
+}
+
+export fn with_base() -> Config {
+    let base = Config { name: String::from("nova"), retries: 3 };
+    Config { name: String::from("dsh"), ..base }
+}
+
+export fn raw_texts() -> String {
+    let a = r"plain\path";
+    let b = r#"quote " inside"#;
+    let _ = b;
+    a
+}

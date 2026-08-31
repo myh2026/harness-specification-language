@@ -1,0 +1,9 @@
+// 期望 P4：block 资源不能投射到编程语言后端。
+
+block cfg {
+    name = demo
+}
+
+project {
+    cfg -> "src/cfg.rs" : rust,
+}

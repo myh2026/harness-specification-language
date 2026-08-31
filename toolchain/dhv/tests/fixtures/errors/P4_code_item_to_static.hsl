@@ -1,0 +1,9 @@
+// 期望 P4：代码项（fn）不能投射到静态格式后端。
+
+export fn logic(x: i64) -> i64 {
+    x
+}
+
+project {
+    logic -> "config/logic.yml" : yaml,
+}

@@ -1,0 +1,23 @@
+// 回归锁定 S6：用户枚举在 AgentLoop 内 match 必须显式穷尽 —— 本文件提供
+// 全变体覆盖的合法形态（缺变体的非法形态见 errors/s6_missing_variant.hsl）。
+
+enum Action { Call { id: String }, Respond { text: String }, Stop }
+
+export fn run_loop(actions: Vec<Action>) -> String {
+    let mut it = actions.into_iter();
+    let mut log = String::from("");
+    loop {
+        let next = it.next();
+        match next {
+            Some(action) => {
+                match action {
+                    Action::Call { id } => { log = format!("call {}", id); },
+                    Action::Respond { text } => { log = text; },
+                    Action::Stop => break,
+                }
+            },
+            None => break,
+        }
+    }
+    log
+}

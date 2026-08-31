@@ -1,0 +1,46 @@
+// 回归锁定 §2.15（BNF v1.5）投射规则组：
+// - rules 按项类型批量映射，{name} 占位符展开
+// - 显式映射优先（R1 遮蔽原则）：helper 走显式路径而非 fn 规则
+// - block/static 同义归一（R4）
+// - rules 展开项参与 P2/P4 校验（合法形态）
+
+block app_cfg {
+    mode = demo
+}
+
+static changelog_md {
+    # v0.1 初始化
+}
+
+struct Point { x: i64, y: i64 }
+
+enum Mood { Happy, Sad }
+
+const MAX_RETRIES: i64 = 3;
+
+export fn helper(a: i64) -> i64 {
+    a
+}
+
+export graph G {
+    node a: i64;
+    node b: i64;
+    edge a -> b;
+    loop {
+        let x = 1;
+        if x > 0 { break; }
+    }
+}
+
+project {
+    helper -> "src/special/helper.rs" : rust,
+
+    rules {
+        graph  -> "src/graphs/{name}.rs" : rust,
+        struct -> "src/types/{name}.rs"  : rust,
+        enum   -> "src/types/{name}.rs"  : rust,
+        const  -> "src/consts/{name}.rs" : rust,
+        block  -> "config/{name}.yml"    : yaml,
+        static -> "config/{name}.yml"    : yaml,
+    }
+}

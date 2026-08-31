@@ -1,0 +1,31 @@
+// 回归锁定：range 表达式 —— for-in 与切片位置（双端一致子集）。
+// 0..n / a..=b（闭区间）/ nums[..2] 开头切片 / nums[3..] 尾部切片。
+// 注：值语境 range（`let r = a..b;` 作一等值）为 dhv 独有能力（BNF v1.5 已知限制 #10），
+// 用例在 tests/conformance.rs 内嵌测试中锁定。
+
+export fn sum_to(n: i64) -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..n {
+        acc = acc + i;
+    }
+    acc
+}
+
+export fn inclusive_range(a: i64, b: i64) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+    for i in a..=b {
+        out.push(i);
+    }
+    out
+}
+
+export fn open_bounds(nums: Vec<i64>) -> Vec<i64> {
+    let head: Vec<i64> = nums[..2].to_vec();
+    let tail: Vec<i64> = nums[3..].to_vec();
+    let _ = head;
+    tail
+}
+
+export fn closed_slice(nums: Vec<i64>) -> Vec<i64> {
+    nums[1..=3].to_vec()
+}

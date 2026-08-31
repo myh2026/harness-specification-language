@@ -1,0 +1,18 @@
+// 回归锁定 S7：结构体字面量简写字段 `Report { verdict, .. }` 视为对外层绑定的使用。
+// 此前简写字段不标记 → dsh.hsl 的 `verdict` 误报未使用。
+
+struct Report {
+    task: String,
+    verdict: String,
+}
+
+export fn build(accepted: bool) -> Report {
+    let verdict = if accepted { String::from("ok") } else { String::from("no") };
+    Report { task: String::from("t"), verdict: verdict }
+}
+
+export fn build_shorthand(accepted: bool) -> Report {
+    let task = String::from("t2");
+    let verdict = if accepted { String::from("ok2") } else { String::from("no2") };
+    Report { task: task, verdict: verdict }
+}

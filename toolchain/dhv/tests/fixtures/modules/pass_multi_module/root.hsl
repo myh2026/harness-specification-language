@@ -1,0 +1,19 @@
+// 回归锁定（跨模块）：linker 加载依赖模块 ——
+// - S6 穷尽性可见导入枚举 Verdict（AgentLoop 内全变体覆盖合法）
+// - P4 静态资源判定可见导入的 block 资源（resources -> yaml 合法）
+import { Verdict, resources } from "./types.hsl";
+
+export fn judge(v: Verdict) -> i64 {
+    let mut score: i64 = 0;
+    loop {
+        match v {
+            Verdict::Accept { score: s } => { score = s; break; },
+            Verdict::Reject { reason } => { score = -reason.len(); break; },
+        }
+    }
+    score
+}
+
+project {
+    resources -> "config/res.yml" : yaml,
+}

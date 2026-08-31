@@ -1,0 +1,16 @@
+// 回归锁定 P4：block/static 资源只能投射静态后端，代码项只能投射代码后端
+// （本文件内直接定义的形态；跨模块形态见 modules/）。
+
+block config_yaml {
+    name = demo
+    retries = 3
+}
+
+export fn logic(x: i64) -> i64 {
+    x * 2
+}
+
+project {
+    config_yaml -> "config/demo.yml" : yaml,
+    logic      -> "src/logic.rs"     : rust,
+}

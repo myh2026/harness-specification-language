@@ -1,0 +1,737 @@
+// ============================================================================
+// hsl.pest — HSL (Harness Specification Language) PEG Grammar
+// ============================================================================
+// 权威文法来源：hsl-spec/BNF.md (v1.0)
+// 本文件是 BNF.md 第 1-3 章到 pest PEG 的忠实映射（映射约定见 BNF.md 第 6 章）。
+//
+// 工程约定（P0 → P2 的关键）：
+//   * 所有需要在 AST 构建时区分的 token（二元/一元运算符、mut、move、async、
+//     分界符类别等）都定义为 **named 规则** —— pest 的字符串字面量不出现在
+//     Pair 树中，named 规则会。
+//   * WHITESPACE / COMMENT 为 pest 隐式插入规则。
+//   * 原始代码区（block 体 / native 体）按 BNF §1.9 的模式切换语义实现。
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// §1.2 空白与注释（隐式规则：自动插入所有非原子规则之间）
+// ---------------------------------------------------------------------------
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT    = _{ line_comment | block_comment }
+line_comment  = @{ "//" ~ (!NEWLINE ~ ANY)* }
+block_comment = ${ "/*" ~ (block_comment | !"*/" ~ ANY)* ~ "*/" }   // 可嵌套
+
+// ---------------------------------------------------------------------------
+// §1.3 标识符与关键字
+// ---------------------------------------------------------------------------
+non_ascii      = @{ !(ASCII) ~ ANY }
+ident_start    = { ASCII_ALPHA | "_" | non_ascii }
+ident_continue = { ASCII_ALPHANUMERIC | "_" | non_ascii }
+
+// 严格关键字（与 BNF §1.4 一致；node/with/monolith/microkernel 为上下文关键字）
+keyword = {
+      "as" | "async" | "await" | "block" | "break" | "const" | "continue"
+    | "dyn" | "edge" | "else" | "enum" | "export" | "false" | "fn" | "for"
+    | "graph" | "if" | "impl" | "import" | "in" | "let" | "loop"
+    | "match" | "mod" | "mut" | "native" | "on" | "project" | "return"
+    | "scale" | "static" | "struct" | "trait" | "true" | "type" | "where"
+    | "while" | "move" | "use"
+}
+keyword_word = @{ keyword ~ !ident_continue }
+
+identifier     = @{ !keyword_word ~ ident_start ~ ident_continue* }
+raw_identifier = @{ "r#" ~ ident_start ~ ident_continue* }
+
+// 上下文关键字（仅特定位置有语法含义）
+node_kw = @{ "node" ~ !ident_continue }
+with_kw = @{ "with" ~ !ident_continue }
+pat_mut = @{ "mut" ~ !ident_continue }
+move_kw = @{ "move" ~ !ident_continue }
+async_kw = @{ "async" ~ !ident_continue }
+as_kw   = @{ "as" ~ !ident_continue }
+
+// §1.6 标签（循环标签，唯一用途；`'ident`）
+label_token = @{ "'" ~ identifier }
+
+// ---------------------------------------------------------------------------
+// §1.5 字面量
+// ---------------------------------------------------------------------------
+hex_digit = @{ ASCII_HEX_DIGIT }
+dec_digit = @{ ASCII_DIGIT }
+
+dec_literal = @{ ASCII_DIGIT ~ (ASCII_DIGIT | "_")* }
+hex_literal = @{ "0x" ~ (hex_digit | "_")+ }
+oct_literal = @{ "0o" ~ ('0'..'7' | "_")+ }
+bin_literal = @{ "0b" ~ ("0" | "1" | "_")+ }
+
+integer_suffix = @{
+      "i128" | "i64" | "i32" | "i16" | "i8" | "isize"
+    | "u128" | "u64" | "u32" | "u16" | "u8" | "usize"
+}
+
+integer_literal = @{
+      hex_literal | oct_literal | bin_literal
+    | dec_literal ~ !("." ~ ASCII_DIGIT) ~ !("." ~ ("e" | "E"))
+    ~ integer_suffix?
+}
+
+float_exponent = @{ ("e" | "E") ~ ("+" | "-")? ~ (dec_digit | "_")+ }
+float_suffix   = @{ "f32" | "f64" }
+float_literal  = @{
+      dec_literal ~ "." ~ (dec_digit | "_")+ ~ float_exponent? ~ float_suffix?
+    | dec_literal ~ float_exponent ~ float_suffix?
+    | dec_literal ~ float_suffix
+}
+
+escape = @{
+      "\\n" | "\\r" | "\\t" | "\\\\" | "\\0" | "\\'" | "\\\""
+    | "\\x" ~ hex_digit ~ hex_digit
+    | "\\u{" ~ (hex_digit | "_")+ ~ "}"
+}
+
+char_literal    = @{ "'" ~ (escape | !("'" | "\\" | NEWLINE) ~ ANY) ~ "'" }
+string_literal  = @{ "\"" ~ (escape | !("\"" | "\\" | NEWLINE) ~ ANY)* ~ "\"" }
+// 原始字符串（v0.2.11 修复：原 `ANY* ~ "\"" ~ raw_string_hash` 形态在 pest 下
+// 永不匹配（raw_string_lit 从未被成功解析过）；与 dhv-ts 词法器对齐支持 r"…" 与 r#"…"#）
+raw_string_lit  = @{
+      "r#" ~ "\"" ~ (!("\"#") ~ ANY)* ~ "\"#"
+    | "r"  ~ "\"" ~ (!("\"")  ~ ANY)* ~ "\""
+}
+
+boolean_literal = { "true" | "false" }
+
+// compound-atomic（$）：内部 named 规则产生 pair（供 AST 按 integer/float/string 分类）
+// 且不插入 WHITESPACE/COMMENT —— 字面量内部本无空白，与 atomic 语义等价
+// （v1.4.10 修复：atomic @ 下 into_inner() 恒空，literal() 的 sole panic）
+literal = ${
+      float_literal
+    | integer_literal
+    | raw_string_lit
+    | string_literal
+    | char_literal
+    | boolean_literal
+}
+
+// ---------------------------------------------------------------------------
+// §1.7 运算符与标点（宏/属性的 token 层）
+// ---------------------------------------------------------------------------
+operator_or_punct = {
+      ">>=" | "<<=" | "..=" | "&&" | "||" | "==" | "!=" | "<=" | ">="
+    | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+    | "<<" | ">>" | "->" | "=>" | "::" | ".."
+    | "+" | "-" | "*" | "/" | "%" | "^" | "!" | "&" | "|"
+    | "<" | ">" | "=" | "." | "," | ";" | ":" | "?" | "@" | "$"
+    // 括号字符 ( ) [ ] { } 不在此列：它们是 delim_token_tree 的边界，
+    // 永远不作为独立 token（与 rustc token 树模型一致；
+    // v1.4.10 修复：token 贪婪吞闭合括号导致 attr_args/matcher 永不闭合）
+}
+
+// ---------------------------------------------------------------------------
+// §2.13 Token / TokenTree（宏与属性的基础）
+// ---------------------------------------------------------------------------
+token = { identifier | raw_identifier | literal | label_token | operator_or_punct }
+token_tree = { delim_token_tree | token }
+delim_token_tree = {
+      "(" ~ token_tree* ~ ")"
+    | "[" ~ token_tree* ~ "]"
+    | "{" ~ token_tree* ~ "}"
+}
+
+// ---------------------------------------------------------------------------
+// §2.2 属性
+// ---------------------------------------------------------------------------
+attr_path = { simple_path }
+attr_args = { "(" ~ token_tree* ~ ")" | "=" ~ literal }
+attribute = { "#" ~ "[" ~ attr_path ~ attr_args? ~ "]" }
+outer_attributes = _{ attribute* }
+
+simple_path = { "::"? ~ identifier ~ ("::" ~ identifier)* }
+
+// ---------------------------------------------------------------------------
+// §2.9 类型
+// ---------------------------------------------------------------------------
+type_rule = { impl_trait_type | trait_object_type | type_no_bounds }
+type_no_bounds = {
+      never_type
+    | paren_type
+    | tuple_type
+    | array_type
+    | slice_type
+    | reference_type
+    | fn_ptr_type
+    | path_type
+    | infer_type
+}
+infer_type     =  { "_" }
+never_type     =  { "!" }
+paren_type     =  { "(" ~ type_rule ~ ")" }
+tuple_type     =  {
+      "(" ~ ")"
+    | "(" ~ type_rule ~ "," ~ (type_rule ~ ",")* ~ type_rule ~ ","? ~ ")"
+    | "(" ~ type_rule ~ "," ~ ")"
+}
+array_type     =  { "[" ~ type_rule ~ ";" ~ const_arg ~ "]" }
+slice_type     =  { "[" ~ type_rule ~ "]" }
+reference_type =  { "&" ~ pat_mut? ~ type_no_bounds }
+fn_ptr_type    =  { "fn" ~ fn_params ~ ("->" ~ type_rule)? }
+path_type      =  { type_path }
+
+type_path = { "::"? ~ type_path_segment ~ ("::" ~ type_path_segment)* }
+type_path_segment = { "::"? ~ identifier ~ generic_args? }
+
+generic_args = { "<" ~ (generic_arg ~ ("," ~ generic_arg)*)? ~ ","? ~ ">" }
+generic_arg  = { type_rule | const_arg_literal }
+const_arg_literal = { literal }
+const_arg   = { literal | block_expression }
+
+trait_object_type = { "dyn" ~ type_bound ~ ("+" ~ type_bound)* }
+impl_trait_type   = { "impl" ~ type_bound ~ ("+" ~ type_bound)* }
+
+// ---------------------------------------------------------------------------
+// §2.8 泛型参数与约束
+// ---------------------------------------------------------------------------
+type_bound     =  { type_no_bounds }                       // D1: 无 lifetime bound
+generic_params = { "<" ~ (generic_param ~ ("," ~ generic_param)*)? ~ ","? ~ ">" }
+generic_param  = { type_param | const_param }
+type_param     = { identifier ~ (":" ~ type_bound ~ ("+" ~ type_bound)*)? ~ ("=" ~ type_rule)? }
+const_param    = { "const" ~ identifier ~ ":" ~ type_rule }
+
+where_clause = { "where" ~ where_predicate ~ ("," ~ where_predicate)* ~ ","? }
+where_predicate = { type_rule ~ ":" ~ type_bound ~ ("+" ~ type_bound)* }
+
+// ---------------------------------------------------------------------------
+// §2.10 模式
+// ---------------------------------------------------------------------------
+pattern = { single_pattern ~ ("|" ~ single_pattern)* }
+// 无顶层 or-模式的模式（闭包参数专用，与 Rust PatternNoTopAlt 同源）：
+// `|x| x` 中若参数允许 `A | B`，or-模式会吞掉闭合 `|` 与闭包体首token（歧义）
+pattern_no_top_alt = { single_pattern }
+single_pattern = {
+      range_pattern
+    | literal_pattern
+    | wildcard_pattern
+    | identifier_pattern
+    | rest_pattern
+    | struct_pattern
+    | tuple_struct_pattern
+    | tuple_pattern
+    | grouped_pattern
+    | path_pattern
+}
+literal_pattern = {
+      boolean_literal | char_literal | string_literal
+    | "-"? ~ (integer_literal | float_literal)
+}
+// 守卫：identifier 后跟 ::/{/( 时让位给 path_pattern/struct_pattern/tuple_struct_pattern
+// （v1.4.10 修复：`Action::CallTool` 被 identifier_pattern 抢先吃掉 `Action`，
+//   导致 edge on 守卫 / match 路径模式永远解析失败）
+identifier_pattern = { pat_mut? ~ identifier ~ !("::" | "{" | "(") ~ ("@" ~ pattern)? }
+wildcard_pattern   =  { "_" ~ !ident_continue }
+rest_pattern       =  { ".." }
+range_pattern      = { range_pattern_bound ~ range_op ~ range_pattern_bound }
+range_pattern_bound = { literal_pattern | path_pattern }
+struct_pattern = {
+    path_pattern ~ "{" ~ (struct_pattern_elem ~ ("," ~ struct_pattern_elem)* ~ ","?)? ~ "}"
+}
+struct_pattern_elem = {
+      identifier ~ ":" ~ pattern
+    | pat_mut? ~ identifier
+    | rest_pattern
+}
+tuple_struct_pattern = { path_pattern ~ "(" ~ tuple_struct_items? ~ ")" }
+tuple_struct_items   = { pattern ~ ("," ~ pattern)* ~ rest_pattern? | rest_pattern }
+tuple_pattern  = { "(" ~ ")" | "(" ~ pattern ~ ("," ~ pattern)* ~ ","? ~ ")" | "(" ~ pattern ~ "," ~ ")" }
+grouped_pattern = { "(" ~ pattern ~ ")" }
+path_pattern    = { "::"? ~ path_segment_pattern ~ ("::" ~ path_segment_pattern)* }
+path_segment_pattern = { identifier ~ generic_args? }
+range_op = @{ "..=" | ".." }
+
+// ---------------------------------------------------------------------------
+// §2.11 表达式（优先级链自低向高，见 BNF.md §5.6）
+// ---------------------------------------------------------------------------
+expression = { expression_with_block | assignment_expression }
+
+// §2.11.1 含块表达式（BNF v1.4.5 定义补全；此前本规则被引用但从未定义 —— pest_derive 编译失败）
+//
+// 有序选择语义：块表达式优先匹配且**块尾自终止**——
+//   `while let Some(x) = e { } - 1` 的 `- 1` 不再被吞进二元链（块表达式不作二元 LHS，
+//   与 dhv-ts 二元层 exprIsWithBlock 守卫同源：BNF v1.4.2 #4）；
+//   后缀链（.field / .method() / ? / .await / [i]）允许跟在块表达式之后（dhv-ts 同）。
+expression_with_block = { block_primary ~ postfix_op* }
+block_primary = {
+      block_expression
+    | async_block_expression
+    | native_block_expression
+    | if_expression
+    | if_let_expression
+    | match_expression
+    | loop_expression
+    | while_expression
+    | while_let_expression
+    | for_expression
+}
+
+// 赋值（右结合）
+// 赋值（右结合）—— LHS 先过 range 层（`let r = 0..5;` 的值语境）
+assignment_expression = { range_expression ~ (assign_op ~ assignment_expression)? }
+assign_op = { "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" }
+
+// 范围表达式（v0.2.11：0..5 / a..=b / n.. / ..n —— 此前 range 仅存在于下标 [a..b]，
+// for-in 与 let 值语境的范围字面量不可表达，与 dhv-ts / BNF §2.11 语义不符）
+range_expression = {
+      or_expression ~ range_op ~ or_expression    // a..b / a..=b
+    | or_expression ~ range_op                    // n..
+    | range_op ~ or_expression                    // ..n
+    | or_expression
+}
+
+// 二元链（每层的运算符是 named 规则，保证 Pair 树可恢复运算符）
+or_expression            = { and_expression ~ (or_op ~ and_expression)* }
+or_op                    = @{ "||" }
+and_expression           = { bit_or_expression ~ (and_op ~ bit_or_expression)* }
+and_op                   = @{ "&&" }
+bit_or_expression        = { bit_xor_expression ~ (bitor_op ~ bit_xor_expression)* }
+bitor_op                 = @{ "|" }
+bit_xor_expression       = { bit_and_expression ~ (bitxor_op ~ bit_and_expression)* }
+bitxor_op                = @{ "^" }
+bit_and_expression       = { equality_expression ~ (bitand_op ~ equality_expression)* }
+bitand_op                = @{ "&" }
+equality_expression      = { relational_expression ~ (eq_op ~ relational_expression)* }
+eq_op                    = @{ "==" | "!=" }
+relational_expression    = { shift_expression ~ (rel_op ~ shift_expression)* }
+rel_op                   = @{ "<=" | ">=" | "<" | ">" }
+shift_expression         = { additive_expression ~ (shift_op ~ additive_expression)* }
+shift_op                 = @{ "<<" | ">>" }
+additive_expression      = { multiplicative_expression ~ (add_op ~ multiplicative_expression)* }
+add_op                   = @{ "+" | "-" }
+multiplicative_expression = { cast_expression ~ (mul_op ~ cast_expression)* }
+mul_op                   = @{ "*" | "/" | "%" }
+cast_expression          = { unary_expression ~ (as_kw ~ type_no_bounds)* }
+
+unary_expression = {
+      unary_op ~ unary_expression
+    | ref_op ~ unary_expression
+    | postfix_expression
+}
+unary_op = @{ "-" | "!" | "*" }
+ref_op   = { "&" ~ pat_mut? }
+
+postfix_expression = { primary_expression ~ postfix_op* }
+postfix_op = {
+      try_op                 // expr?
+    | await_op               // expr.await
+    | "." ~ method_call      // expr.method(args)
+    | "." ~ field_access     // expr.field / expr.0
+    | call_op                // expr(args)
+    | index_op               // expr[i] / expr[a..b]
+}
+try_op    =  @{ "?" }
+await_op  =  { "." ~ "await" ~ !ident_continue }
+call_op   =  { "(" ~ call_args? ~ ")" }
+index_op  =  { "[" ~ index_or_range ~ "]" }
+field_access = { identifier | integer_literal }
+// v0.2.12：turbofish —— `.collect::<Vec<String>>()` / `.parse::<f64>()` 的 `::` 前缀
+// 此前缺失，导致方法泛型实参在任何含 `::<` 的后缀链上解析失败
+method_call  = { identifier ~ ("::" ~ generic_args)? ~ "(" ~ call_args? ~ ")" }
+call_args    = { expression ~ ("," ~ expression)* ~ ","? }
+index_or_range = { range_full | expression }
+range_full  = { expression? ~ range_op ~ expression? }
+
+primary_expression = {
+      literal_expression
+    | native_block_expression             // HSL §3.3
+    | macro_invocation
+    | closure_expression
+    | struct_expression
+    | path_expression
+    | tuple_expression
+    | grouped_expression
+    | array_expression
+    | if_expression
+    | if_let_expression
+    | match_expression
+    | loop_expression
+    | while_expression
+    | while_let_expression
+    | for_expression
+    | block_expression
+    | async_block_expression
+    | break_expression
+    | continue_expression
+    | return_expression
+}
+
+// ---------------------------------------------------------------------------
+// §2.11.7 无结构体字面量语境（no-struct-literal，对齐 dhv-ts parseExprNoStruct）
+//
+// Rust 规则：if/while 条件、if let/while let 的 "=" 右侧、match 待匹配对象、
+// for 迭代对象中**禁用结构体字面量**——否则 `if turns > hi { hi }` 的 `hi { hi }`
+// 会被贪婪解析为简写字段的结构体字面量，吞掉 if 块（PEG 有序选择无法回溯已成功
+// 的规则，块表达式作为“更外层”语法无法优先抢占）。
+// 以下 ns_* 阶梯与上方二元阶梯逐层同构，仅 primary 层移除 struct_expression。
+// ---------------------------------------------------------------------------
+no_struct_expression = { expression_with_block | ns_assignment_expression }
+ns_assignment_expression = { ns_range_expression ~ (assign_op ~ ns_assignment_expression)? }
+ns_range_expression = {
+      ns_or_expression ~ range_op ~ ns_or_expression
+    | ns_or_expression ~ range_op
+    | range_op ~ ns_or_expression
+    | ns_or_expression
+}
+ns_or_expression     = { ns_and_expression ~ (or_op ~ ns_and_expression)* }
+ns_and_expression    = { ns_bit_or_expression ~ (and_op ~ ns_bit_or_expression)* }
+ns_bit_or_expression = { ns_bit_xor_expression ~ (bitor_op ~ ns_bit_xor_expression)* }
+ns_bit_xor_expression = { ns_bit_and_expression ~ (bitxor_op ~ ns_bit_and_expression)* }
+ns_bit_and_expression = { ns_equality_expression ~ (bitand_op ~ ns_equality_expression)* }
+ns_equality_expression = { ns_relational_expression ~ (eq_op ~ ns_relational_expression)* }
+ns_relational_expression = { ns_shift_expression ~ (rel_op ~ ns_shift_expression)* }
+ns_shift_expression  = { ns_additive_expression ~ (shift_op ~ ns_additive_expression)* }
+ns_additive_expression = { ns_multiplicative_expression ~ (add_op ~ ns_multiplicative_expression)* }
+ns_multiplicative_expression = { ns_cast_expression ~ (mul_op ~ ns_cast_expression)* }
+ns_cast_expression   = { ns_unary_expression ~ (as_kw ~ type_no_bounds)* }
+ns_unary_expression  = {
+      unary_op ~ ns_unary_expression
+    | ref_op ~ ns_unary_expression
+    | ns_postfix_expression
+}
+ns_postfix_expression = { ns_primary_expression ~ postfix_op* }
+ns_primary_expression = {
+      literal_expression
+    | native_block_expression
+    | macro_invocation
+    | closure_expression
+    | path_expression
+    | tuple_expression
+    | grouped_expression
+    | array_expression
+    | if_expression
+    | if_let_expression
+    | match_expression
+    | loop_expression
+    | while_expression
+    | for_expression
+    | block_expression
+    | async_block_expression
+    | break_expression
+    | continue_expression
+    | return_expression
+}
+
+literal_expression = { literal }
+
+path_expression   = { path_in_expr }
+path_in_expr      = { "::"? ~ path_expr_segment ~ ("::" ~ path_expr_segment)* }
+path_expr_segment = { "::"? ~ identifier ~ generic_args? }
+
+struct_expression = { path_in_expr ~ "{" ~ struct_expr_fields? ~ "}" }
+struct_expr_fields = { struct_expr_field ~ ("," ~ struct_expr_field)* ~ ","? }
+struct_expr_field = {
+      identifier ~ ":" ~ expression      // k: v
+    | identifier                          // 简写
+    | ".." ~ expression                   // 功能更新
+}
+// 注：对齐 dhv-ts looksLikeStructLiteral 启发式，裸 integer_literal（元组下标）
+// 不再作为字段形态——`if x < lo { 1 }` 类语境此前会被误判为元组结构体字面量。
+
+// 元组（含 unit）与分组表达式分离，Pair 规则名即语义
+tuple_expression = {
+      "(" ~ ")"                                            // ()
+    | "(" ~ expression ~ "," ~ tuple_tail ~ ")"            // (a,) / (a, b)
+}
+tuple_tail = { (expression ~ ",")* ~ expression? }
+grouped_expression = { "(" ~ expression ~ ")" }
+
+array_expression = { "[" ~ array_elements? ~ "]" }
+array_elements = {
+      expression ~ ";" ~ expression        // [0; 256] 重复
+    | expression ~ ("," ~ expression)* ~ ","?
+}
+
+closure_expression = {
+      move_kw? ~ async_kw? ~ "||" ~ closure_params? ~ ("->" ~ type_rule)? ~ block_expression
+    | move_kw? ~ async_kw? ~ "|" ~ closure_params? ~ "|" ~ ("->" ~ type_rule)? ~ (block_expression | or_expression)
+}
+closure_params = { closure_param ~ ("," ~ closure_param)* ~ ","? }
+closure_param  = { pattern_no_top_alt ~ (":" ~ type_rule)? }
+
+if_expression = {
+    "if" ~ no_struct_expression ~ block_expression
+    ~ ("else" ~ (if_expression | if_let_expression | block_expression))?
+}
+if_let_expression = {
+    "if" ~ "let" ~ pattern ~ "=" ~ no_struct_expression ~ block_expression
+    ~ ("else" ~ (if_expression | if_let_expression | block_expression))?
+}
+
+match_expression = {
+    "match" ~ no_struct_expression ~ "{" ~ (match_arm ~ (","? ~ match_arm)*)? ~ ","? ~ "}"
+}
+match_arm = {
+    outer_attributes ~ pattern ~ ("if" ~ guard_expr)? ~ "=>" ~ expression
+}
+guard_expr = { expression }
+
+loop_label = { label_token ~ ":" }
+loop_expression       = { loop_label? ~ "loop" ~ block_expression }
+while_expression      = { loop_label? ~ "while" ~ no_struct_expression ~ block_expression }
+while_let_expression  = { loop_label? ~ "while" ~ "let" ~ pattern ~ "=" ~ no_struct_expression ~ block_expression }
+for_expression        = { loop_label? ~ "for" ~ pattern ~ "in" ~ no_struct_expression ~ block_expression }
+
+break_expression    = { "break" ~ label_token? ~ expression? }
+continue_expression = { "continue" ~ label_token? }
+return_expression   = { "return" ~ expression? }
+
+block_expression       = { "{" ~ statement* ~ "}" }
+async_block_expression = { async_kw ~ move_kw? ~ block_expression }
+
+// ---------------------------------------------------------------------------
+// §2.12 语句
+// ---------------------------------------------------------------------------
+statement = { ";" | let_statement | item | expression_statement }
+let_statement = {
+    outer_attributes ~ "let" ~ pat_mut? ~ pattern
+    ~ (":" ~ type_rule)?
+    ~ ("=" ~ expression)?
+    ~ let_else_block?
+    ~ ";"
+}
+let_else_block = { "else" ~ block_expression }
+expression_statement = { expression ~ ";"? }
+
+// ---------------------------------------------------------------------------
+// §2.2-§2.7 项（Items）
+// ---------------------------------------------------------------------------
+item = {
+      struct_def
+    | enum_def
+    | trait_def
+    | impl_def
+    | fn_def
+    | const_def
+    | type_alias_def
+    | graph_def              // HSL §3.1
+    | static_resource_def    // HSL §3.2
+    | import_decl
+    | export_item
+    | macro_rules_definition
+    | macro_invocation_semi
+}
+macro_invocation_semi = { simple_path ~ "!" ~ delim_token_tree ~ ";" }
+
+struct_def = { outer_attributes ~ "struct" ~ identifier ~ generic_params? ~ struct_body }
+struct_body = {
+      "{" ~ (named_field ~ ("," ~ named_field)* ~ ","?)? ~ "}"
+    | "(" ~ (tuple_field ~ ("," ~ tuple_field)*)? ~ ")" ~ ";"
+    | ";"
+}
+named_field = { outer_attributes ~ identifier ~ ":" ~ type_rule }
+tuple_field = { outer_attributes ~ type_rule }
+
+enum_def = {
+    outer_attributes ~ "enum" ~ identifier ~ generic_params?
+    ~ "{" ~ (enum_variant ~ ("," ~ enum_variant)* ~ ","?)? ~ "}"
+}
+enum_variant = {
+    outer_attributes ~ identifier
+    ~ ("(" ~ (tuple_field ~ ("," ~ tuple_field)*)? ~ ")"
+       | "{" ~ (named_field ~ ("," ~ named_field)* ~ ","?)? ~ "}")?
+    ~ ("=" ~ integer_literal)?
+}
+
+trait_def = {
+    outer_attributes ~ "trait" ~ identifier ~ generic_params?
+    ~ trait_super? ~ "{" ~ trait_item* ~ "}"
+}
+trait_super = { ":" ~ type_bound ~ ("+" ~ type_bound)* }
+trait_item = {
+      trait_fn_sig ~ ";"
+    | const_def
+    | type_alias_def
+    | fn_def                              // 默认实现
+}
+trait_fn_sig = {
+    async_kw? ~ "fn" ~ identifier ~ generic_params? ~ fn_params ~ ("->" ~ type_rule)?
+}
+impl_def = {
+    outer_attributes ~ "impl" ~ generic_params? ~ impl_target ~ where_clause? ~ "{" ~ impl_item* ~ "}"
+}
+impl_target = { type_rule ~ ("for" ~ type_rule)? }
+impl_item   = { fn_def | const_def | type_alias_def }
+
+fn_def = {
+    outer_attributes ~ async_kw? ~ "fn" ~ identifier ~ generic_params?
+    ~ fn_params ~ ("->" ~ type_rule)? ~ where_clause? ~ fn_body
+}
+fn_body    = { block_expression | ";" }
+fn_params  = { "(" ~ (fn_param ~ ("," ~ fn_param)*)? ~ ","? ~ ")" }
+fn_param   = { outer_attributes ~ (self_param | pat_mut? ~ pattern ~ ":" ~ type_rule) }
+self_param = { self_ref_mut | self_ref | self_mut | self_value }
+self_ref_mut = { "&" ~ "mut" ~ "self" }
+self_ref    = { "&" ~ "self" }
+self_mut    = { "mut" ~ "self" }
+self_value  = { "self" }
+
+const_def = {
+    outer_attributes ~ "const" ~ identifier ~ ":" ~ type_rule ~ "=" ~ expression ~ ";"
+}
+type_alias_def = {
+    outer_attributes ~ "type" ~ identifier ~ generic_params? ~ "=" ~ type_rule ~ ";"
+}
+
+// ---------------------------------------------------------------------------
+// §2.3 import / export
+// ---------------------------------------------------------------------------
+import_decl = { "import" ~ import_spec ~ "from" ~ string_literal ~ ";" }
+import_spec = { import_braced | import_namespace | import_single }
+import_braced   = { "{" ~ (import_item ~ ("," ~ import_item)* ~ ","?)? ~ "}" }
+import_namespace = { "*" ~ "as" ~ identifier }
+import_single   = { identifier ~ (as_kw ~ identifier)? }
+import_item     = { identifier ~ (as_kw ~ identifier)? }
+// v0.2.12：outer_attributes? 前导 —— `#[derive(..)] export struct X { .. }` 形态
+// （模块文件大量使用 derive + export 组合；此前属性只能写在非 export 项内）
+export_item = { outer_attributes? ~ "export" ~ item }
+
+// ---------------------------------------------------------------------------
+// §2.13 宏
+// ---------------------------------------------------------------------------
+macro_rules_definition = {
+    "macro_rules" ~ "!" ~ identifier ~ "!"? ~ "{" ~ macro_rule_semi+ ~ "}"
+}
+macro_rule_semi = {
+    "(" ~ macro_match* ~ ")" ~ "=>" ~ macro_transcriber ~ ";"
+}
+macro_match = {
+      macro_frag_binding
+    | macro_rep
+    | delim_token_tree
+    | macro_token
+}
+macro_frag_binding = { "$" ~ identifier ~ ":" ~ macro_frag_spec }
+macro_frag_spec = {
+      "ident" | "path" | "expr" | "ty" | "pat" | "stmt"
+    | "block" | "item" | "literal" | "tt" | "meta"
+}
+macro_rep = {
+    "$" ~ "(" ~ macro_match+ ~ ")" ~ macro_rep_sep? ~ macro_rep_op
+}
+macro_rep_sep = @{ "," | ";" | "=>" }
+macro_rep_op  = @{ "*" | "+" | "?" }
+macro_token = { keyword | token }
+
+// transcriber 限定为单个 delimited token tree（Rust 官方指南风格 `=> { ... };`）
+// —— 无界 token 流会贪婪吞掉规则分隔 `;` 与闭合 `}`（PEG 歧义，v1.4.10 修复）
+macro_transcriber = { transcriber_delim }
+transcriber_delim = {
+      "(" ~ transcriber_tt* ~ ")"
+    | "[" ~ transcriber_tt* ~ "]"
+    | "{" ~ transcriber_tt* ~ "}"
+}
+// 顶层 token 支持宏变量 / 宏重复 / 嵌套 delim / 关键字 / 普通 token
+transcriber_tt = { macro_var | macro_trans_rep | delim_token_tree | keyword | token }
+macro_var = { "$" ~ identifier }
+macro_trans_rep = {
+    "$" ~ "(" ~ transcriber_tt* ~ ")" ~ macro_rep_sep? ~ macro_rep_op
+}
+
+macro_invocation = { simple_path ~ "!" ~ delim_token_tree }
+
+// ---------------------------------------------------------------------------
+// §3.1 graph / edge —— HSL 拓扑层
+// ---------------------------------------------------------------------------
+graph_def = {
+    outer_attributes ~ "graph" ~ identifier ~ generic_params?
+    ~ graph_params? ~ ("->" ~ type_rule)? ~ where_clause?
+    ~ "{" ~ graph_body ~ "}"
+}
+graph_params = { "(" ~ (graph_param ~ ("," ~ graph_param)*)? ~ ","? ~ ")" }
+graph_param  = { pat_mut? ~ identifier ~ ":" ~ type_rule }
+
+graph_body = { graph_stmt* }
+graph_stmt = {
+      node_decl
+    | edge_decl
+    | let_statement
+    | statement
+}
+
+node_decl = {
+    node_kw ~ pat_mut? ~ identifier ~ ":" ~ type_rule ~ ("=" ~ expression)? ~ ";"
+}
+edge_decl = {
+    "edge" ~ edge_endpoint ~ ("->" ~ edge_endpoint)+
+    ~ ("on" ~ edge_guard)?
+    ~ edge_attrs? ~ ";"
+}
+edge_endpoint = { path_in_expr }
+edge_guard    = { pattern | expression }
+edge_attrs    = { with_kw ~ edge_attr ~ ("," ~ edge_attr)* }
+edge_attr     = { identifier ~ ("=" ~ literal)? }
+
+// ---------------------------------------------------------------------------
+// §3.2 block / static —— 静态资源原生块（原始代码区，模式 A）
+// ---------------------------------------------------------------------------
+static_resource_def = { resource_kind ~ identifier ~ "{" ~ block_body ~ "}" }
+resource_kind = { "block" | "static" }
+
+block_body = { block_element* }
+block_element = {
+      interpolation
+    | block_nested_brace
+    | block_text
+}
+// 编译期插值：{{ expr }}
+interpolation = { "{{" ~ expression ~ "}}" }
+// 嵌套花括号（JSON 对象等）：深度计数（BNF §1.9 模式 A）
+block_nested_brace = { "{" ~ block_body ~ "}" }
+// 原始文本：遇 "{{"、单独 "{" 或 "}" 停止
+block_text = { ( !("{{") ~ !("{") ~ !("}") ~ ANY )+ }
+
+// ---------------------------------------------------------------------------
+// §3.3 native —— 跨语言逃生舱（原始代码区，模式 B）
+// ---------------------------------------------------------------------------
+native_block_expression = {
+    "native" ~ lang_ident ~ "{" ~ native_body ~ "}"
+}
+lang_ident = { identifier }
+
+native_body = { native_element* }
+native_element = {
+      native_string           // 字符串字面量（括号不计深度）
+    | native_line_comment     // 行注释
+    | native_block_comment
+    | native_brace            // 嵌套大括号
+    | native_text
+}
+native_brace = { "{" ~ native_body ~ "}" }
+native_string = @{
+      "\"" ~ ( "\\" ~ ANY | !"\"" ~ ANY )* ~ "\""
+    | "'" ~ ( "\\" ~ ANY | !"'" ~ ANY )* ~ "'"
+    | "\"\"\"" ~ ( !"\"\"\"" ~ ANY )* ~ "\"\"\""
+    | "'''" ~ ( !"'''" ~ ANY )* ~ "'''"
+    | "`" ~ ( !"`" ~ ANY )* ~ "`"
+}
+native_line_comment  = @{ ( "//" | "#" ) ~ (!NEWLINE ~ ANY)* }
+native_block_comment = ${ "/*" ~ (native_block_comment | !"*/" ~ ANY)* ~ "*/" }
+native_text = @{ ( !("{") ~ !("}") ~ !("\"") ~ !("'") ~ !("`") ~ !"//" ~ !("#") ~ !"/*" ~ ANY )+ }
+
+// ---------------------------------------------------------------------------
+// §3.4 project / §3.5 scale —— 投射层
+// ---------------------------------------------------------------------------
+// §2.15（BNF v1.5）：project 块 = 显式单项映射 | 投射规则组（可交错）
+// `rules { kind -> "path/{name}.ext" : lang }` 按项类型批量投射，显式映射优先（R1）。
+project_block = { "project" ~ "{" ~ (projection_item | rules_block)* ~ "}" }
+projection_item = { path_in_expr ~ "->" ~ string_literal ~ ":" ~ lang_ident ~ ","? }
+rules_block     = { "rules" ~ "{" ~ rules_item* ~ "}" }
+rules_item      = { item_kind ~ "->" ~ string_literal ~ ":" ~ lang_ident ~ ","? }
+item_kind       = {
+      "graph" | "fn" | "struct" | "enum" | "trait"
+    | "const" | "type" | "block" | "static"
+}
+
+scale_decl = { "scale" ~ "=" ~ scale_mode ~ ";" }
+scale_mode = { "monolith" | "microkernel" | identifier }
+
+// ---------------------------------------------------------------------------
+// §2.1 源文件
+// ---------------------------------------------------------------------------
+item_or_projection = { item | scale_decl | project_block }
+source_file = { SOI ~ item_or_projection* ~ EOI }

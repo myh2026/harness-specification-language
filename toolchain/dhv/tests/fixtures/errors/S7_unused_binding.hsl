@@ -1,0 +1,6 @@
+// 期望 S7：绑定声明后未使用（`_` 前缀豁免不适用于裸名）。
+export fn f() -> i64 {
+    let used = 1;
+    let unused = 2;
+    used
+}

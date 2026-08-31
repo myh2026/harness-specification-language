@@ -1,0 +1,7 @@
+// 期望 P5：未知规则类型（R4）。
+
+project {
+    rules {
+        widget -> "src/w/{name}.rs" : rust,
+    }
+}
