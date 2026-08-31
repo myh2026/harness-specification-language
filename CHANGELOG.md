@@ -2,6 +2,21 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.35] — 2026-09-01 · 「Contract 后端覆盖扩展」版
+
+### 改进
+- **Contract 后端覆盖扩展**（codegen/contract.rs）：此前 26 种 contract 语言对 impl/const/type_alias/static_resource 项直接报错。现全部生成类型契约注释：
+  - `impl Trait for Type { fn ... }` → 方法签名列表
+  - `const NAME: Type = ...` → 常量声明注释
+  - `type Alias = ...` → 类型别名注释
+  - `static NAME / block NAME（N 部分）` → 静态资源大小注释
+- **类型渲染改进**：新增 Array（`[T; _]`）、Slice（`[T]`）、FnPtr（`fn(T) -> R`）、Never（`!`）的正确类型语法输出（此前全部降级为 `Any`）。
+- **错误消息改进**：`"暂不支持 {:?} 项"` 改为 `"暂不支持 {} 项"`（显示可读的项类型名，替代 `std::mem::discriminant` 数字）。
+- 新增 `fn_sig_text()` 复用函数签名生成（减少 Fn arm 重复代码）。
+
+### 变更
+- 版本统一：dhv 0.2.35 · dhv-ts 0.2.35 · BNF v1.5.0。
+
 ## [0.2.34] — 2026-09-01 · 「Go 后端 match 解构赋值」版
 
 ### 改进

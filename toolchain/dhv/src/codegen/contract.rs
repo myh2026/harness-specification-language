@@ -56,6 +56,18 @@ impl ContractBackend {
                 format!("({})", parts.join(", "))
             }
             TypeKind::Paren(inner) => self.ty_text(inner),
+            TypeKind::Array { elem, .. } => {
+                format!("[{}; _]", self.ty_text(elem))
+            }
+            TypeKind::Slice { 0: base, .. } => {
+                format!("[{}]", self.ty_text(base))
+            }
+            TypeKind::FnPtr { params, ret } => {
+                let ps: Vec<String> = params.iter().map(|t| self.ty_text(t)).collect();
+                let r = ret.as_ref().map(|t| format!(" -> {}", self.ty_text(t))).unwrap_or_default();
+                format!("fn({}){}", ps.join(", "), r)
+            }
+            TypeKind::Never => "!".into(),
             _ => "Any".to_string(),
         }
     }
@@ -71,6 +83,12 @@ impl ContractBackend {
                 Some(format!("{}: {}", name, self.ty_text(&p.ty)))
             }
         }
+    }
+
+    fn fn_sig_text(&self, f: &FnDef) -> String {
+        let params: Vec<String> = f.params.iter().filter_map(|p| self.param_text(p)).collect();
+        let ret = f.ret.as_ref().map(|t| format!(" -> {}", self.ty_text(t))).unwrap_or_default();
+        format!("{}fn {}({}){}", if f.is_async { "async " } else { "" }, f.name.name, params.join(", "), ret)
     }
 
     fn item_signature(&self, item: &Item) -> Option<String> {
@@ -117,25 +135,48 @@ impl ContractBackend {
                     .collect();
                 format!("trait {} {{ {} }}", t.name.name, methods.join("; "))
             }
-            Item::Fn(f) => {
-                let params: Vec<String> =
-                    f.params.iter().filter_map(|p| self.param_text(p)).collect();
-                let ret = f
-                    .ret
-                    .as_ref()
-                    .map(|t| format!(" -> {}", self.ty_text(t)))
-                    .unwrap_or_default();
-                format!(
-                    "{}fn {}({}){}",
-                    if f.is_async { "async " } else { "" },
-                    f.name.name,
-                    params.join(", "),
-                    ret
-                )
-            }
+            Item::Fn(f) => self.fn_sig_text(f),
             Item::Graph(g) => format!("graph {}（AgentLoop 拓扑）", g.name.name),
+            Item::Impl(i) => {
+                let target = self.ty_text(&i.self_ty);
+                let trait_bound = i.trait_ty.as_ref()
+                    .map(|t| format!(" {}", self.ty_text(t)))
+                    .unwrap_or_default();
+                let methods: Vec<String> = i.items.iter().filter_map(|it| match it {
+                    ImplItem::Fn(f) => Some(self.fn_sig_text(f)),
+                    _ => None,
+                }).collect();
+                format!("impl{} {} {{ {} }}", trait_bound, target, methods.join("; "))
+            }
+            Item::Const(c) => {
+                format!("const {}{} = /* ... */", c.name.name, format!(": {}", self.ty_text(&c.ty)))
+            }
+            Item::TypeAlias(a) => {
+                format!("type {} = {}", a.name.name, self.ty_text(&a.ty))
+            }
+            Item::StaticResource(r) => {
+                format!("static {} / block {}（{} 部分）", r.name.name, r.name.name, r.content.len())
+            }
             _ => return None,
         })
+    }
+
+    fn item_kind_name(item: &Item) -> &'static str {
+        match item {
+            Item::Struct(_) => "struct",
+            Item::Enum(_) => "enum",
+            Item::Trait(_) => "trait",
+            Item::Impl(_) => "impl",
+            Item::Fn(_) => "fn",
+            Item::Const(_) => "const",
+            Item::TypeAlias(_) => "type alias",
+            Item::Graph(_) => "graph",
+            Item::StaticResource(_) => "static/block",
+            Item::Import(_) => "import",
+            Item::Export(_) => "export",
+            Item::MacroRules(_) => "macro_rules",
+            Item::MacroCall { .. } => "macro call",
+        }
     }
 }
 
@@ -149,7 +190,7 @@ impl CodegenBackend for ContractBackend {
             return Err(format!(
                 "contract 后端（{}）暂不支持 {:?} 项的契约投射",
                 self.spec.id,
-                std::mem::discriminant(item)
+                Self::item_kind_name(item)
             ));
         };
         let mut out: Vec<String> = Vec::new();
