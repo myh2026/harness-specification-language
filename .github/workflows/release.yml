@@ -74,7 +74,7 @@ jobs:
         working-directory: toolchain/dhv
         shell: pwsh
         run: |
-          $src = "toolchain/dhv/target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          $src = "target/${{ matrix.target }}/release/${{ matrix.exe }}"
           $dst = Join-Path $env:RUNNER_TEMP "dhv-${{ github.ref_name }}-windows-x86_64.zip"
           Compress-Archive -Path $src -DestinationPath $dst
 

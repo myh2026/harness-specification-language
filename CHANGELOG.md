@@ -2,6 +2,15 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.26] — 2026-09-01 · 「Release CI Windows 路径修复」版
+
+### 修复
+- **release.yml Windows 打包路径**：PowerShell 脚本中 `$src` 路径重复了 `toolchain/dhv/` 前缀（`working-directory` 已设为 `toolchain/dhv`，路径应为 `target/...` 而非 `toolchain/dhv/target/...`），导致 `Compress-Archive` 找不到文件（exit 1）
+- **v0.2.25 Release 失败回退**：删除 v0.2.25 tag
+
+### 变更
+- 版本统一：dhv 0.2.26 · dhv-ts 0.2.26 · BNF v1.5.0。
+
 ## [0.2.25] — 2026-09-01 · 「Release CI Windows 打包再修复」版
 
 ### 修复
