@@ -2,6 +2,16 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.32] — 2026-09-01 · 「E-1 重复项名检查」版
+
+### 新增
+- **E-1 顶层重名检查**（typecheck.rs）：同一文件内出现同名顶层项（fn / struct / enum / trait / const / typealias / graph / static / macrodef）时输出 `ERROR[M-E1]`，附带 note 建议重命名或移除重复项。作用域为每文件独立（不跨模块），首次定义静默接受、后续重复报错。跳过 import / impl / macro_call（无独立项名）。对齐 dhv-ts `checker.ts` E-001。
+- 回归用例 `errors/E1_duplicate_top_item.hsl`（双编译器一致：fn 与 struct 同名 → E-1）。
+
+### 变更
+- 版本统一：dhv 0.2.32 · dhv-ts 0.2.32 · BNF v1.5.0。
+- 双编译器一致性：38 → 39 组用例。
+
 ## [0.2.31] — 2026-09-01 · 「G-3 无条件环检测」版
 
 ### 新增

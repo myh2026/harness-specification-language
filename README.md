@@ -5,7 +5,7 @@
 **从逻辑到 38 个后端的工程投射 · 为编写 AI Agent harness 而生的编译型语言**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-[![Toolchain](https://img.shields.io/badge/toolchain-v0.2.31-success.svg)](#%EF%B8%8F-当前版本)
+[![Toolchain](https://img.shields.io/badge/toolchain-v0.2.32-success.svg)](#%EF%B8%8F-当前版本)
 [![BNF](https://img.shields.io/badge/BNF-v1.5.0-blue.svg)](toolchain/hsl-spec/BNF.md)
 [![Backend](https://img.shields.io/badge/backends-38-orange.svg)](toolchain/hsl-spec/BNF.md)
 
@@ -77,7 +77,7 @@ project {
 | 套件 | 覆盖 |
 |:---|:---|
 | `dhv/tests/conformance.rs`（cargo test） | parse / check / errors（S4·S6·S7·S8·P4·P5·M2）/ 多模块 linker / 值语境 range（dhv 独有） |
-| `toolchain/tests/run_conformance.sh` | **双编译器一致性**：38 组用例，dhv ↔ dhv-ts「通过/失败」结论逐一对照 |
+| `toolchain/tests/run_conformance.sh` | **双编译器一致性**：39 组用例，dhv ↔ dhv-ts「通过/失败」结论逐一对照 |
 | `dhv/tests/grammar_probe.rs` | pest 文法探针（raw string） |
 
 回归原则：**修复一个 bug，就锁定一个用例。**
@@ -94,7 +94,7 @@ project {
 
 ## 🛡️ 当前版本
 
-**v0.2.31**（工具链统一版本：dhv 0.2.31 · dhv-ts 0.2.31 · BNF v1.5.0 · 指南 v0.2.31）
+**v0.2.32**（工具链统一版本：dhv 0.2.32 · dhv-ts 0.2.32 · BNF v1.5.0 · 指南 v0.2.32）
 
 - 版本号以 `toolchain/dhv/Cargo.toml` 与 `toolchain/dhv-ts/package.json` 为准，随每次功能/修复递增；
 - 详见 [CHANGELOG.md](CHANGELOG.md)。

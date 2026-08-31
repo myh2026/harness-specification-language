@@ -148,6 +148,8 @@ impl TypeChecker {
 
     /// 对整个文件执行全部检查（根文件入口：含 Scale / Project / S 系列）
     pub fn check_file(&mut self, file: &SourceFile) -> &Diagnostics {
+        // E-1: 顶层重名检查（对齐 dhv-ts checker.ts E-001）
+        self.check_e1_duplicate_items(file);
         // Pass 0: 收集项名 / enum 注册表 / import 符号
         for top in &file.items {
             if let TopLevel::Item(item) = top {
@@ -183,6 +185,9 @@ impl TypeChecker {
 
         let diag_start = self.diags.items.len();
 
+        // E-1: 顶层重名检查（对齐 dhv-ts checker.ts E-001）
+        self.check_e1_duplicate_items(file);
+
         // Pass 0: 收集项名 / import 符号（enum 已由 harvest_module 收集）
         for top in &file.items {
             if let TopLevel::Item(item) = top {
@@ -203,6 +208,44 @@ impl TypeChecker {
         // 为本模块产生的诊断标记文件名（多文件渲染需要）
         for d in &mut self.diags.items[diag_start..] {
             d.file_hint = module_name.to_string();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // E-1: 顶层重名检查（对齐 dhv-ts checker.ts E-001）
+    // ------------------------------------------------------------------
+
+    /// 检查同一文件内是否存在重复的顶层项名。
+    ///
+    /// 作用域：每文件独立（不跨模块），与 dhv-ts 行为一致。
+    /// 首次定义静默接受，后续重复定义报错。
+    /// 跳过 import / impl / macro_call（无独立项名）。
+    fn check_e1_duplicate_items(&mut self, file: &SourceFile) {
+        let mut seen: HashSet<String> = HashSet::new();
+        for top in &file.items {
+            if let TopLevel::Item(item) = top {
+                let name = match item {
+                    Item::Import(_) | Item::Impl(_) | Item::MacroCall { .. } => continue,
+                    Item::Export(e) => e.item.name(),
+                    _ => item.name(),
+                };
+                let ident = match name {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if seen.contains(&ident.name) {
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::NameResolution("E1"),
+                            format!("重复定义顶层项 \"{}\"", ident.name),
+                            ident.span,
+                        )
+                        .note("首个定义已在此文件前方声明，移除此重复项或重命名"),
+                    );
+                } else {
+                    seen.insert(ident.name.clone());
+                }
+            }
         }
     }
 

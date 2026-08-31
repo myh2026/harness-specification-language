@@ -1,0 +1,3 @@
+// 期望 E-1：同文件顶层重复项名（函数与结构体重名）。
+export fn Foo() -> i64 { 0 }
+export struct Foo { x: i64 }
