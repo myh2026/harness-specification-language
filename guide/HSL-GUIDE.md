@@ -6,9 +6,9 @@
 
 | | |
 |:---|:---|
-| 文档版本 | v0.2.15（与 dhv-ts 参考解释器同步） |
+| 文档版本 | v0.2.19（与 dhv-ts 参考解释器同步） |
 | 语言规范 | BNF v1.5.0（`toolchain/hsl-spec/BNF.md`；新增 §3.4 投射规则组 rules） |
-| 参考实现 | dhv-ts v0.2.15（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.15 |
+| 参考实现 | dhv-ts v0.2.19（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.19 |
 | 许可证 | MIT |
 | 后端 | 38 个：32 编程语言 + 6 静态格式 |
 
@@ -3730,7 +3730,7 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 |:---|:---|:---|
 | 1 | **dhv-ts 无完整类型推导**：类型注解在解释期基本忽略；S-1/S-3 的编译期完整形态、泛型单态化由 dhv Rust 编译器负责 | 写显式类型注解；把 check 的结构级铁律当作安全网而非完整类型系统 |
 | 2 | ~~`?` 的 From 转换运行期未接线~~ **v0.2.1 已修复**：`impl From<E1> for E2` 经 `?` 真实转换（见 §3.11 与 tests/hsl From 回归用例） | 已无此限制 |
-| 3 | **contract 后端函数体不翻译**：26 种语言只翻译类型与签名，函数体是围栏 + NotImplementedError | 用 manifest.json 的 tier 字段决定哪些后端可「拿来即用」；函数体落地需 full/logic 语言或人工接管 |
+| 3 | **contract 后端函数体不翻译**：Go（v0.2.17 升级为 logic 后端，含真实函数体骨架）与 rust/go/cpp 之外的 25 种语言只翻译类型与签名，函数体是围栏 + NotImplementedError | 用 manifest.json 的 tier 字段决定哪些后端可「拿来即用」；函数体落地需 full/logic 语言或人工接管 |
 | 4 | **logic 翻译器是语句子集**：rust/go/cpp 遇到不支持构件回退 contract（如实测中 `content.lines()` 迭代使 stats_of 回退） | 把回退当特性：围栏里有完整 HSL 原文，接手的人有据可依 |
 | 5 | **命名不做语言习惯转换**：`snake_case` 的 HSL 名字在 Java/C# 产物里保持原样（C# 记录字段做了首字母大写例外） | 投射路径按语言分目录（gen/java/…）缓解；命名风格在 HSL 侧自律 |
 | 6 | **impl 方法按类型名全局注册**：跨模块同名类型的方法解析会冲突 | 一个工程内类型名保持全局唯一 |
@@ -3782,6 +3782,9 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 | 52 | **rust String 语境的字面量需源码侧 `String::from`**：`m.insert("a", 1)` 的 HashMap<String,_> 在 rust 真机编译报 `expected String, found &str`（interp 宽松通过） | 与 Rust 本身语义一致：字面量入 String 容器写 `String::from("a")`（backends-demo 即此风格） |
 | 53 | **nova/macros.hsl 的宏 transcriber `{{ ... }}` 与 block 插值语法冲突**：双花括号块形态触发 dhv-ts 解析器按插值处理（资源块缺名称报错）——独立实验文件，不影响 nova 主入口 15 模块 | 单花括号 transcriber（`{ ... }`）即可 |
 | 54 | **go/rust 多文件工程的 mod/package 组织文件不随 emit 生成**：rust 跨文件 use 按 crate mod 链路径生成（`crate::gen::rust::prompt`），需自组 lib.rs/mod.rs 链（或 cargo 工程）方可编译；go 多文件同 package 已可直接编译 | rust：按目录层级组装 mod 链（参考 tests v1.4.10 用例做法）；后续版本考虑 emit 自动生成 mod.rs |
+| 55 | ~~dhv-ts 不支持值语境 range~~ **v0.2.14 已修复**：`let r = a..b;` / `let r = a..=b;` / `let r = 0..n;` 等值语境 range 现已支持解析与校验（BNF v1.5 已知限制 #10 同步关闭） | 已无此限制 |
+| 56 | **dhv Go 后端函数体为骨架转译**（v0.2.17 新增）：struct/enum/fn 生成合法 Go 代码，但表达式仅覆盖 binary/unary/call/method/field/await/cast；match/for/while/if/闭包/赋值/索引等语句构件缺失（遇不可转译构件产 `/* TODO */`） | 简单算术/调用场景可直接使用；控制流密集逻辑待人工接手或等后续版本补齐 |
+| 57 | **Go 后端类型映射为近似**（v0.2.17）：Option→`*T`（Go 指针，nil 代表 None）、Result→`(any, error)`（非变体通道，Err 详情不可模式匹配）、HashMap→`map[string]any`（丢失键值类型）、Vec→`[]any`（丢失元素类型） | 简单数据结构可直接使用；类型安全场景需人工调整 |
 
 
 ---

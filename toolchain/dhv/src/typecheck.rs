@@ -1210,7 +1210,10 @@ impl TypeChecker {
                 DiagCode::Strictness("S8"),
                 format!("绑定 `{}` 遮蔽了外层作用域同名绑定（S8：跨作用域遮蔽警告）", name.name),
                 name.span,
-            ));
+            ).note(format!(
+                "如非有意遮蔽，建议将内层 `{}` 重命名为不同名称以避免混淆",
+                name.name
+            )));
         }
         self.symbols.declare(&name.name, mutable, TypeKind::Infer, kind, name.span);
     }
