@@ -2,6 +2,21 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.23] — 2026-09-01 · 「Release CI 原生 Runners 重写」版
+
+### 修复
+- **release.yml 彻底重写为原生 runner 方案**：
+  - Windows：`windows-latest` + `x86_64-pc-windows-msvc`（原生 MSVC，无需 zig/gnu）
+  - macOS arm64：`macos-latest` 原生构建
+  - macOS x86_64：`macos-latest` 上 Rust 原生交叉编译（Rust 对 apple targets 原生支持，无需外部工具链）
+  - Linux：`ubuntu-latest` 原生构建
+  - Windows 打包改用 PowerShell `Compress-Archive`（预装，无需 7z）
+  - 消除所有 zig / cargo-zigbuild / cargo-binstall 依赖
+- **v0.2.22 Release 失败回退**：删除 v0.2.22 tag
+
+### 变更
+- 版本统一：dhv 0.2.23 · dhv-ts 0.2.23 · BNF v1.5.0。
+
 ## [0.2.22] — 2026-09-01 · 「Release CI 再修复」版
 
 ### 修复

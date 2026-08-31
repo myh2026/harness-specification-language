@@ -1,4 +1,5 @@
 # HSL/DHV Release — push tag v* 时自动四平台构建并发布
+# 使用原生 GitHub-hosted runners，无需交叉编译工具链
 
 name: Release
 
@@ -11,7 +12,6 @@ permissions:
   contents: write
 
 jobs:
-  # ── Job 1: 构建四平台二进制 ─────────────────────────────
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -21,20 +21,20 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            artifact: dhv-${{ github.ref_name }}-linux-x86_64.tar.gz
-            cross: false
-          - target: x86_64-pc-windows-gnu
-            runner: ubuntu-latest
-            artifact: dhv-${{ github.ref_name }}-windows-x86_64.zip
-            cross: true
+            exe: dhv
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            exe: dhv.exe
+            archive: zip
           - target: aarch64-apple-darwin
-            runner: ubuntu-latest
-            artifact: dhv-${{ github.ref_name }}-macos-aarch64.tar.gz
-            cross: true
+            runner: macos-latest
+            exe: dhv
+            archive: tar.gz
           - target: x86_64-apple-darwin
-            runner: ubuntu-latest
-            artifact: dhv-${{ github.ref_name }}-macos-x86_64.tar.gz
-            cross: true
+            runner: macos-latest
+            exe: dhv
+            archive: tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -54,63 +54,32 @@ jobs:
           key: rust-${{ matrix.target }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
           restore-keys: rust-${{ matrix.target }}-
 
-      # 交叉编译工具链：zig（通过 setup-zig action）+ cargo-zigbuild（通过 binstall）
-      - name: Install Zig
-        if: ${{ matrix.cross }}
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: ${{ matrix.cross }}
-        uses: taiki-e/install-action@cargo-zigbuild
-
-      - name: Build (native)
-        if: ${{ !matrix.cross }}
+      - name: Build
         working-directory: toolchain/dhv
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build (cross via zig)
-        if: ${{ matrix.cross }}
-        working-directory: toolchain/dhv
-        run: cargo zigbuild --release --target ${{ matrix.target }}
-
       - name: Package (tar.gz)
-        if: ${{ matrix.target != 'x86_64-pc-windows-gnu' }}
+        if: matrix.archive == 'tar.gz'
         working-directory: toolchain/dhv
+        shell: bash
         run: |
-          EXE=target/${{ matrix.target }}/release/dhv
-          [ -f "$EXE" ] || EXE=target/${{ matrix.target }}/release/dhv.exe
+          EXE="target/${{ matrix.target }}/release/${{ matrix.exe }}"
           strip "$EXE" 2>/dev/null || true
-          OUT=/tmp/${{ matrix.artifact }}
-          tar czf "$OUT" -C "target/${{ matrix.target }}/release" dhv
-          echo "packaged=$OUT" >> $GITHUB_ENV
+          tar czf "/tmp/dhv-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" "${{ matrix.exe }}"
 
-      - name: Package (zip for Windows)
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
         working-directory: toolchain/dhv
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full > /dev/null 2>&1
-          EXE=target/${{ matrix.target }}/release/dhv.exe
-          OUT=/tmp/${{ matrix.artifact }}
-          7z a -bd -y "$OUT" -w"target/${{ matrix.target }}/release" dhv.exe
-          echo "packaged=$OUT" >> $GITHUB_ENV
+        shell: pwsh
+        run: Compress-Archive -Path "target\${{ matrix.target }}\release\${{ matrix.exe }}" -DestinationPath "/tmp/dhv-${{ github.ref_name }}-windows-x86_64.zip"
 
-      - name: Verify binary
-        run: |
-          if [ -f "${{ env.packaged }}" ]; then
-            echo "Artifact: ${{ env.packaged }} ($(du -h ${{ env.packaged }} | cut -f1))"
-          else
-            echo "ERROR: packaged artifact not found"
-            exit 1
-          fi
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ env.packaged }}
+          name: dhv-${{ github.ref_name }}-${{ matrix.target }}
+          path: /tmp/dhv-${{ github.ref_name }}-*
 
-  # ── Job 2: 创建 GitHub Release 并上传产物 ─────────────
   release:
     name: Publish GitHub Release
     needs: build
@@ -121,11 +90,9 @@ jobs:
       - name: Generate release notes from CHANGELOG
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          # 提取 CHANGELOG 中对应版本条目（匹配 ## [x.y.z] 格式）
-          awk "/^## \\\[${TAG}\\\]/,/^## \\[" CHANGELOG.md \
+          awk "/^## \\[${TAG}\\]/,/^## \\[" CHANGELOG.md \
             | head -n -1 \
             > /tmp/release-notes.md
-          # 兜底：未匹配到则用简短说明
           if [ ! -s /tmp/release-notes.md ]; then
             echo "## ${TAG}" > /tmp/release-notes.md
             echo '' >> /tmp/release-notes.md
@@ -139,9 +106,6 @@ jobs:
           path: /tmp/artifacts
           merge-multiple: true
 
-      - name: List artifacts
-        run: ls -lh /tmp/artifacts/
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -154,24 +118,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Job 3: Release 后 CI 验证 ──────────────────────────
   post-release-ci:
-    name: Post-release CI validation
+    name: Post-release CI
     needs: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: oven-sh/setup-bun@v2
-
       - name: cargo test
         working-directory: toolchain/dhv
         run: cargo test --release --quiet
-
       - name: conformance
         working-directory: toolchain
         run: bash tests/run_conformance.sh
