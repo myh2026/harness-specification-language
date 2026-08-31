@@ -2,6 +2,21 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.34] — 2026-09-01 · 「Go 后端 match 解构赋值」版
+
+### 改进
+- **Go 后端 match 模式解构赋值**（codegen/go_backend.rs）：此前 Go 后端将所有 match 生成 `switch` 语句，TupleStruct/Struct 带绑定模式输出为注释（如 `/* Some(x) */ true`），无法实际使用。现自动检测解构模式并生成 `if/else if` 链：
+  - `Option::Some(x)` → `if v != nil { x := *v; ... }`
+  - `Option::None` → `else { ... }`
+  - `Enum::Variant { field: binding }` → `if ... { binding := v.Field; ... }`
+  - 简单字面/标识符模式保留 `switch`（无回归风险）
+  - 对齐 dhv-ts `body.ts matchDispatch` 的 Go 路径（if/else if 链 + 绑定提取）
+- 新增辅助函数：`go_arm_info()`（模式→条件+绑定提取）、`emit_match_dispatch()`（统一调度 switch/if-else）、`emit_match_as_if_chain()`、`export_capitalize()`。
+- 尾位置 match（函数返回值）正确包装 return（`as_return` 参数）。
+
+### 变更
+- 版本统一：dhv 0.2.34 · dhv-ts 0.2.34 · BNF v1.5.0。
+
 ## [0.2.33] — 2026-09-01 · 「Parser 错误消息中文化」版
 
 ### 改进

@@ -346,19 +346,7 @@ fn emit_block_go(block: &BlockExpr, indent: usize) -> String {
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
-                let ip = "    ".repeat(pad.len() / 4 + 1);
-                out.push_str(&format!("{}switch {} {{\n", pad, emit_expr_go(scrutinee)));
-                for arm in arms {
-                    let pat_str = go_pattern(&arm.pattern);
-                    out.push_str(&format!("{}case {}:\n", pad, pat_str));
-                    if let ExprKind::Block(b) = &arm.body.kind {
-                        emit_block_stmts_return(b, &ip, &mut out);
-                        out.push_str(&format!("{}\n", ip));
-                    } else {
-                        out.push_str(&format!("{}return {}\n", ip, emit_expr_go(&arm.body)));
-                    }
-                }
-                out.push_str(&format!("{}}}\n", pad));
+                out.push_str(&emit_match_dispatch(scrutinee, arms, &pad, true));
             }
             _ => {
                 out.push_str(&format!("{}return {}\n", pad, emit_expr_go(tail)));
@@ -452,7 +440,7 @@ fn emit_stmt_expr_go(expr: &Expr, pad: &str) -> String {
             out
         }
         ExprKind::Match { scrutinee, arms } => {
-            emit_match_as_switch(scrutinee, arms, pad)
+            emit_match_dispatch(scrutinee, arms, pad, false)
         }
         _ => {
             // 普通表达式语句
@@ -461,23 +449,192 @@ fn emit_stmt_expr_go(expr: &Expr, pad: &str) -> String {
     }
 }
 
-/// match → Go switch（穷尽性用 default 兜底）
-fn emit_match_as_switch(scrutinee: &Expr, arms: &[MatchArm], pad: &str) -> String {
+/// match 统一调度：简单模式 → Go switch；解构模式 → if/else if 链
+/// as_return：尾位置模式（body 内 tail 表达式需包装 return）
+/// 对齐 dhv-ts body.ts matchDispatch：
+///   - Option::Some(x) → if v != nil { x := *v; ... } else { ... }
+///   - Option::None → else { ... }
+///   - Enum::Variant { field: binding } → if true { binding := v.Field; ... }
+///   - 简单字面/标识符模式 → switch（保留）
+fn emit_match_dispatch(scrutinee: &Expr, arms: &[MatchArm], pad: &str, as_return: bool) -> String {
+    let scrut_str = emit_expr_go(scrutinee);
+    let inner = "    ".repeat(pad.len() / 4 + 1);
+
+    // 检测是否有解构模式（需要 if/else if 链）
+    let has_destructure = arms.iter().any(|arm| {
+        match &arm.pattern.kind {
+            PatternKind::TupleStruct { elems, .. } => !elems.is_empty(),
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| f.pattern.is_some()),
+            _ => false,
+        }
+    });
+
+    if has_destructure {
+        return emit_match_as_if_chain(scrutinee, arms, pad, &scrut_str, &inner, as_return);
+    }
+
+    // 简单模式：保留 switch
     let mut out = String::new();
-    out.push_str(&format!("{}switch {} {{\n", pad, emit_expr_go(scrutinee)));
+    out.push_str(&format!("{}switch {} {{\n", pad, scrut_str));
     for arm in arms {
         let pat_str = go_pattern(&arm.pattern);
         out.push_str(&format!("{}case {}:\n", pad, pat_str));
-        let inner_pad = "    ".repeat(pad.len() / 4 + 1);
         if let ExprKind::Block(b) = &arm.body.kind {
-            out.push_str(&emit_block_go(b, pad.len() / 4 + 1));
-            out.push_str(&format!("{}\n", inner_pad));
+            if as_return {
+                emit_block_stmts_return(b, &inner, &mut out);
+            } else {
+                out.push_str(&emit_block_go(b, pad.len() / 4 + 1));
+            }
+            out.push_str(&format!("{}\n", inner));
         } else {
-            out.push_str(&format!("{}return {}\n", inner_pad, emit_expr_go(&arm.body)));
+            out.push_str(&format!("{}return {}\n", inner, emit_expr_go(&arm.body)));
         }
     }
     out.push_str(&format!("{}}}\n", pad));
     out
+}
+
+/// ArmInfo：从模式提取条件、绑定名、是否为通配
+struct ArmInfo {
+    /// Go 条件表达式（如 `v != nil`、`true`），null 表示通配
+    cond: Option<String>,
+    /// 绑定语句列表（如 `x := *v`）
+    binds: Vec<String>,
+}
+
+/// 分析单个 match arm 模式，提取条件和绑定
+fn go_arm_info(pat: &Pattern, scrut: &str) -> ArmInfo {
+    match &pat.kind {
+        PatternKind::Wildcard => ArmInfo { cond: None, binds: vec![] },
+        PatternKind::Literal(lit) => ArmInfo {
+            cond: Some(format!("{} == {}", scrut, lit.raw)),
+            binds: vec![],
+        },
+        PatternKind::Ident { name, sub: None, .. } => ArmInfo {
+            cond: Some(format!("true")),
+            binds: vec![format!("{} := {}", export_name(&name.name), scrut)],
+        },
+        PatternKind::Path(p) => {
+            if p.segments.len() >= 2 {
+                let head = &p.segments[0].name;
+                let variant = export_name(&p.last().name);
+                // Option::None
+                if head == "Option" && variant == "None" {
+                    return ArmInfo { cond: Some(format!("{} == nil", scrut)), binds: vec![] };
+                }
+                // Option::Some (无子模式，即 Some(_))
+                if head == "Option" && variant == "Some" {
+                    return ArmInfo { cond: Some(format!("{} != nil", scrut)), binds: vec![] };
+                }
+                // 简单枚举变体（unit variant）
+                ArmInfo { cond: Some(format!("{} == {}", scrut, variant)), binds: vec![] }
+            } else {
+                ArmInfo { cond: Some(format!("{} == {}", scrut, export_name(&p.last().name))), binds: vec![] }
+            }
+        }
+        PatternKind::TupleStruct { path, elems, .. } => {
+            let head = &path.segments[0].name;
+            let variant = export_name(&path.last().name);
+            if head == "Option" && variant == "Some" && elems.len() == 1 {
+                // Option::Some(x) → if v != nil { x := *v }
+                let mut binds = vec![];
+                if let PatternKind::Ident { name, .. } = &elems[0].kind {
+                    if name.name != "_" {
+                        binds.push(format!("{} := *{}", export_name(&name.name), scrut));
+                    }
+                }
+                return ArmInfo { cond: Some(format!("{} != nil", scrut)), binds };
+            }
+            // 其他 TupleStruct: Enum::Variant(x, y) → 条件为 variant 匹配，绑定从 v.F0/F1
+            let mut binds = vec![];
+            for (i, elem) in elems.iter().enumerate() {
+                if let PatternKind::Ident { name, .. } = &elem.kind {
+                    if name.name != "_" {
+                        binds.push(format!("{} := {}.F{}", export_name(&name.name), scrut, i));
+                    }
+                }
+            }
+            ArmInfo { cond: Some(format!("{} == {}", scrut, variant)), binds }
+        }
+        PatternKind::Struct { path, fields, .. } => {
+            let variant = export_name(&path.last().name);
+            let mut binds = vec![];
+            for f in fields {
+                let fname = export_capitalize(&f.name.name);
+                if let Some(pat) = &f.pattern {
+                    if let PatternKind::Ident { name, .. } = &pat.kind {
+                        if name.name != "_" {
+                            binds.push(format!("{} := {}.{}", export_name(&name.name), scrut, fname));
+                        }
+                    }
+                }
+            }
+            ArmInfo { cond: Some(format!("{} == {}", scrut, variant)), binds }
+        }
+        _ => ArmInfo { cond: None, binds: vec![] },
+    }
+}
+
+/// match → Go if/else if 链（解构模式支持）
+fn emit_match_as_if_chain(
+    _scrutinee: &Expr, arms: &[MatchArm], pad: &str, scrut_str: &str, inner: &str, as_return: bool,
+) -> String {
+    let mut out = String::new();
+    let mut first = true;
+
+    for arm in arms {
+        let info = go_arm_info(&arm.pattern, scrut_str);
+
+        if info.cond.is_none() {
+            // 通配：直接输出块
+            if !first {
+                out.push_str(&format!("{}}} else {{\n", pad));
+            }
+            for bind in &info.binds {
+                out.push_str(&format!("{}{}\n", inner, bind));
+            }
+            if let ExprKind::Block(b) = &arm.body.kind {
+                if as_return {
+                    emit_block_stmts_return(b, inner, &mut out);
+                } else {
+                    out.push_str(&emit_block_go(b, pad.len() / 4 + 1));
+                }
+            } else {
+                out.push_str(&format!("{}return {}\n", inner, emit_expr_go(&arm.body)));
+            }
+            first = false;
+            continue;
+        }
+
+        let kw = if first { "if" } else { "} else if" };
+        out.push_str(&format!("{}{} {} {{\n", pad, kw, info.cond.unwrap()));
+        for bind in &info.binds {
+            out.push_str(&format!("{}{}\n", inner, bind));
+        }
+        if let ExprKind::Block(b) = &arm.body.kind {
+            if as_return {
+                emit_block_stmts_return(b, inner, &mut out);
+            } else {
+                out.push_str(&emit_block_go(b, pad.len() / 4 + 1));
+            }
+        } else {
+            out.push_str(&format!("{}return {}\n", inner, emit_expr_go(&arm.body)));
+        }
+        first = false;
+    }
+    if !first {
+        out.push_str(&format!("{}}}\n", pad));
+    }
+    out
+}
+
+/// Go 首字母大写（用于结构体字段名，对齐 dhv-ts capitalize）
+fn export_capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().to_string() + c.as_str(),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────
