@@ -2,6 +2,18 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.21] — 2026-09-01 · 「Release CI 修复」版
+
+### 修复
+- **release.yml 交叉编译工具链**：`pip install ziglang`（不可靠）→ `goto-bus-stop/setup-zig@v2` action（固定 0.13.0）；
+  `cargo install cargo-zigbuild --locked`（从源编译，慢且脆）→ `cargo binstall cargo-zigbuild`（预编译二进制）
+- **release.yml CHANGELOG 发布说明提取**：awk 模式修正为匹配 `## [x.y.z]` 方括号格式（此前无方括号导致永远命中兜底）
+- **release.yml 构建验证**：新增 artifact 存在性检查（缺失时立即报错而非静默上传空文件）
+- **release.yml 缓存**：交叉编译目标也启用 Cargo 缓存（此前 `if: !matrix.cross` 跳过）
+
+### 变更
+- 版本统一：dhv 0.2.21 · dhv-ts 0.2.21 · BNF v1.5.0。
+
 ## [0.2.20] — 2026-09-01 · 「Go 后端完整转译」版
 
 ### 改进

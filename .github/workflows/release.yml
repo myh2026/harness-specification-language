@@ -1,4 +1,4 @@
-# HSL/DHV Release — push tag v* 时自动三平台构建并发布
+# HSL/DHV Release — push tag v* 时自动四平台构建并发布
 
 name: Release
 
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  # ── Job 1: 构建三平台二进制 ─────────────────────────────
+  # ── Job 1: 构建四平台二进制 ─────────────────────────────
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -22,21 +22,18 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             artifact: dhv-${{ github.ref_name }}-linux-x86_64.tar.gz
-            archive_cmd: tar czf
+            cross: false
           - target: x86_64-pc-windows-gnu
             runner: ubuntu-latest
             artifact: dhv-${{ github.ref_name }}-windows-x86_64.zip
-            archive_cmd: 'cd toolchain/dhv/target/${{ matrix.target }}/release && 7z a -bd -y ../../../../../${{ matrix.artifact }} dhv.exe'
             cross: true
           - target: aarch64-apple-darwin
             runner: ubuntu-latest
             artifact: dhv-${{ github.ref_name }}-macos-aarch64.tar.gz
-            archive_cmd: tar czf
             cross: true
           - target: x86_64-apple-darwin
             runner: ubuntu-latest
             artifact: dhv-${{ github.ref_name }}-macos-x86_64.tar.gz
-            archive_cmd: tar czf
             cross: true
 
     steps:
@@ -48,7 +45,6 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo
-        if: ${{ !matrix.cross }}
         uses: actions/cache@v4
         with:
           path: |
@@ -58,12 +54,16 @@ jobs:
           key: rust-${{ matrix.target }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
           restore-keys: rust-${{ matrix.target }}-
 
-      # 交叉编译工具链：zig + cargo-zigbuild
+      # 交叉编译工具链：zig（通过 setup-zig action）+ cargo-zigbuild（通过 binstall）
       - name: Install Zig
         if: ${{ matrix.cross }}
-        run: |
-          pip install ziglang
-          cargo install cargo-zigbuild --locked
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.cross }}
+        run: cargo install cargo-binstall && cargo binstall cargo-zigbuild --no-confirm -y
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
@@ -90,16 +90,19 @@ jobs:
         if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
         working-directory: toolchain/dhv
         run: |
-          apt-get update -qq && apt-get install -y -qq p7zip-full > /dev/null 2>&1
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full > /dev/null 2>&1
           EXE=target/${{ matrix.target }}/release/dhv.exe
           OUT=/tmp/${{ matrix.artifact }}
           7z a -bd -y "$OUT" -w"target/${{ matrix.target }}/release" dhv.exe
           echo "packaged=$OUT" >> $GITHUB_ENV
 
-      - name: Verify binary runs
+      - name: Verify binary
         run: |
           if [ -f "${{ env.packaged }}" ]; then
             echo "Artifact: ${{ env.packaged }} ($(du -h ${{ env.packaged }} | cut -f1))"
+          else
+            echo "ERROR: packaged artifact not found"
+            exit 1
           fi
 
       - uses: actions/upload-artifact@v4
@@ -118,8 +121,8 @@ jobs:
       - name: Generate release notes from CHANGELOG
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          # 提取 CHANGELOG 中对应版本条目（从版本标题到下一个版本标题或 EOF）
-          awk "/^## ${TAG}$/,/^## [0-9]/" CHANGELOG.md \
+          # 提取 CHANGELOG 中对应版本条目（匹配 ## [x.y.z] 格式）
+          awk "/^## \\\[${TAG}\\\]/,/^## \\[" CHANGELOG.md \
             | head -n -1 \
             > /tmp/release-notes.md
           # 兜底：未匹配到则用简短说明
@@ -150,8 +153,6 @@ jobs:
           files: /tmp/artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # 自动更新网站版本号和 README 徽章由下一个 cron 轮次处理
 
   # ── Job 3: Release 后 CI 验证 ──────────────────────────
   post-release-ci:
