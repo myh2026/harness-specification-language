@@ -6,9 +6,9 @@
 
 | | |
 |:---|:---|
-| 文档版本 | v0.2.12（与 dhv-ts 参考解释器同步） |
+| 文档版本 | v0.2.15（与 dhv-ts 参考解释器同步） |
 | 语言规范 | BNF v1.5.0（`toolchain/hsl-spec/BNF.md`；新增 §3.4 投射规则组 rules） |
-| 参考实现 | dhv-ts v0.2.12（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.12 |
+| 参考实现 | dhv-ts v0.2.15（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.15 |
 | 许可证 | MIT |
 | 后端 | 38 个：32 编程语言 + 6 静态格式 |
 
@@ -64,6 +64,8 @@
   - [5.4 静态资源：block / static 与 {{}} 插值](#54-静态资源block--static-与-插值)
   - [5.5 scale 对脚手架的影响](#55-scale-对脚手架的影响)
   - [5.6 manifest.json 与诚实边界协议](#56-manifestjson-与诚实边界协议)
+  - [5.7 跨文件类型依赖：投射产物之间的自动接线](#57-跨文件类型依赖投射产物之间的自动接线)
+  - [5.8 投射规则组 rules {}（BNF v1.5）](#58-投射规则组-rules--bnf-v15)
 - [第六章 native 逃生舱](#第六章-native-逃生舱)
   - [6.1 native typescript 与 native python：直接可执行](#61-native-typescript-与-native-python直接可执行)
   - [6.2 运行期 ABI：$host 与捕获变量](#62-运行期-abihost-与捕获变量)
@@ -1979,6 +1981,138 @@ using Action = std::variant<CallTool, Respond, Stop>;
 
 graph 脚手架（monolith/microkernel）的类型名只出现在 HSL 镜像注释里，
 不参与依赖接线（脚手架本体是通用插件注册表，不活体引用类型）。
+
+---
+
+## 5.8 投射规则组 `rules {}`（BNF v1.5）
+
+§5.1 的显式映射适合小项目——每个项手写一行路径。当一个模块有
+几十个 struct / fn / enum 时，逐项映射就变成了体力活。
+`rules {}` 让你**按项类型批量投射**，用 `{name}` 占位符自动展开。
+
+### 语法
+
+`rules {}` 写在 `project {}` 内部，与显式映射项混排：
+
+```hsl
+project {
+    // 显式映射（优先级最高）
+    process -> "src/core/process.rs" : rust,
+
+    // 批量规则
+    rules {
+        struct -> "src/types/{name}.rs"  : rust,
+        enum   -> "src/types/{name}.rs"  : rust,
+        fn     -> "src/logic/{name}.rs"  : rust,
+        graph  -> "src/graphs/{name}.rs" : rust,
+        block  -> "config/{name}.yml"    : yaml,
+        const  -> "src/consts/{name}.rs" : rust,
+    }
+}
+```
+
+规则类型限定 9 种：`graph` / `fn` / `struct` / `enum` / `trait` /
+`const` / `type` / `block` / `static`。`block` 与 `static` 同义（均指
+`StaticResourceDef`）。路径模板目前只支持 `{name}` 一个占位符，
+展开时替换为该项的标识符名。
+
+### 语义六条（R1-R6）
+
+| 规则 | 含义 |
+|:---|:---|
+| **R1 遮蔽原则** | 显式单项映射始终优先；未被显式覆盖的命名项按其类型匹配唯一规则展开 |
+| **R2 占位符白名单** | 路径模板 v1 仅支持 `{name}`；出现其他占位符（如 `{module}`）→ 诊断 P5 |
+| **R3 唯一性** | 同一规则类型只允许声明一条；重复声明 → P5 |
+| **R4 类型注册** | 规则类型必须是上述 9 种之一；未知类型（如 `widget`）→ P5 |
+| **R5 展开池** | 展开池 = 本文件命名项 + import 依赖模块的导出命名项；`impl`（匿名）、import、宏调用不参与 |
+| **R6 一致性** | 展开产生的投射项与显式项同等参与 P2（路径唯一）/ P4（后端层级）校验 |
+
+### 完整示例
+
+以下示例经 `dhv check` 与 `dhv-ts check` 双编译器实测通过：
+
+```hsl
+struct Point { x: i64, y: i64 }
+enum Status { Active, Inactive }
+const MAX: i64 = 100;
+
+block app_cfg {
+mode = production
+port = 8080
+}
+
+export fn process(p: Point) -> Status {
+    Active
+}
+
+export graph Agent {
+    node start: String = String::from("");
+    node end: String = String::from("");
+    edge start -> end;
+    loop { break; }
+}
+
+project {
+    // 显式映射：process 走专用路径，不触发 fn 规则
+    process -> "src/core/process.rs" : rust,
+
+    rules {
+        struct -> "src/types/{name}.rs"  : rust,
+        enum   -> "src/types/{name}.rs"  : rust,
+        fn     -> "src/logic/{name}.rs"  : rust,
+        graph  -> "src/graphs/{name}.rs" : rust,
+        block  -> "config/{name}.yml"    : yaml,
+        const  -> "src/consts/{name}.rs" : rust,
+    }
+}
+```
+
+展开后等价于（`process` 走显式，其余走规则）：
+
+```hsl
+// 等价展开（编译器内部视图）
+project {
+    process  -> "src/core/process.rs"   : rust,   // 显式
+    Point    -> "src/types/Point.rs"     : rust,   // struct 规则
+    Status   -> "src/types/Status.rs"    : rust,   // enum 规则
+    MAX      -> "src/consts/MAX.rs"      : rust,   // const 规则
+    app_cfg  -> "config/app_cfg.yml"     : yaml,   // block 规则
+    Agent    -> "src/graphs/Agent.rs"    : rust,   // graph 规则
+}
+```
+
+### 跨模块展开（R5）
+
+规则不仅展开本文件定义的项，还覆盖 **import 依赖模块的导出项**。
+假设 `lib.hsl` 导出了 `Saved` 结构体和 `save_all` 函数：
+
+```hsl
+// lib.hsl
+export struct Saved { id: String }
+export fn save_all(items: Vec<Saved>) -> i64 { items.len() as i64 }
+```
+
+```hsl
+// root.hsl
+import { Saved, save_all } from "./lib.hsl";
+
+export fn run() -> i64 {
+    let s = Saved { id: String::from("a") };
+    save_all(vec![s])
+}
+
+project {
+    rules {
+        struct -> "src/types/{name}.rs" : rust,
+        fn     -> "src/logic/{name}.rs" : rust,
+    }
+}
+```
+
+展开池包含 `run`（本文件）、`Saved` 和 `save_all`（lib.hsl 导出），
+三个项全部按规则投射。注意 `impl`、`import` 语句和宏调用
+不参与展开——它们要么匿名（impl）、要么不是命名项（import）、
+要么展开时机不同（宏在解析期展开）。
 
 ---
 

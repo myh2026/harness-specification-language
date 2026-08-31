@@ -1,0 +1,34 @@
+// Guide §5.8 example: basic rules
+struct Point { x: i64, y: i64 }
+enum Status { Active, Inactive }
+const MAX: i64 = 100;
+
+block app_cfg {
+    mode = production
+    port = 8080
+}
+
+export fn process(p: Point) -> Status {
+    Active
+}
+
+export graph Agent {
+    node start: String = String::from("");
+    node end: String = String::from("");
+    edge start -> end;
+    loop { break; }
+}
+
+project {
+    // 显式映射优先
+    process -> "src/core/process.rs" : rust,
+
+    rules {
+        struct -> "src/types/{name}.rs"  : rust,
+        enum   -> "src/types/{name}.rs"  : rust,
+        fn     -> "src/logic/{name}.rs"  : rust,
+        graph  -> "src/graphs/{name}.rs" : rust,
+        block  -> "config/{name}.yml"    : yaml,
+        const  -> "src/consts/{name}.rs" : rust,
+    }
+}
