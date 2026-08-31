@@ -1,6 +1,6 @@
 {
   "name": "dhv-ts",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "type": "module",
   "description": "dhv-ts — HSL (Harness Specification Language) 参考解释器：check / run / emit / targets / sync / watch，38 后端投射（BNF v1.5 可执行子集）。",
   "scripts": {

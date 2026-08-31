@@ -445,11 +445,14 @@ impl TypeChecker {
                         let last = ep.last().name.clone();
                         let _ = self.symbols.lookup(&last); // 端点引用即使用
                         if !declared_nodes.contains(&last) {
-                            self.diags.push(Diagnostic::error(
-                                DiagCode::Topology("G2"),
-                                format!("edge 端点 `{last}` 未在 graph 体内声明（需先 node/let 声明）"),
-                                ep.span,
-                            ));
+                            self.diags.push(
+                                Diagnostic::error(
+                                    DiagCode::Topology("G2"),
+                                    format!("edge 端点 `{last}` 未在 graph 体内声明（需先 node/let 声明）"),
+                                    ep.span,
+                                )
+                                .note(format!("在此 graph 内添加声明：`node {last}: <类型>;`")),
+                            );
                         }
                     }
                     match &edge.on {
@@ -509,26 +512,32 @@ impl TypeChecker {
         for p in &proj.projections {
             // P2: 路径唯一
             if let Some(existing) = seen_paths.get(&p.path) {
-                self.diags.push(Diagnostic::error(
-                    DiagCode::Projection("P2"),
-                    format!(
-                        "物理路径 `{}` 被两个投射项占据：`{existing}` 与 `{}`",
-                        p.path,
-                        p.target.last().name
-                    ),
-                    p.span,
-                ));
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Projection("P2"),
+                        format!(
+                            "物理路径 `{}` 被两个投射项占据：`{existing}` 与 `{}`",
+                            p.path,
+                            p.target.last().name
+                        ),
+                        p.span,
+                    )
+                    .note(format!("为 `{}` 选择不同的目标路径以避免冲突", p.target.last().name)),
+                );
             } else {
                 seen_paths.insert(p.path.clone(), p.target.last().name.clone());
             }
             // P3: 目标项必须存在
             let target_name = p.target.last().name.clone();
             if !self.declared_items.contains(&target_name) {
-                self.diags.push(Diagnostic::error(
-                    DiagCode::Projection("P3"),
-                    format!("投射目标 `{target_name}` 在本文件中未定义（或未 import）"),
-                    p.span,
-                ));
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Projection("P3"),
+                        format!("投射目标 `{target_name}` 在本文件中未定义（或未 import）"),
+                        p.span,
+                    )
+                    .note(format!("确认 `{target_name}` 已在本文件定义，或通过 `import` 引入")),
+                );
             } else {
                 self.mark_import_used(&target_name);
             }
@@ -543,26 +552,35 @@ impl TypeChecker {
             // P-4：后端合法性查 38 语言注册表（BNF v1.4 §5.2）
             match crate::langs::resolve(lang) {
                 None => {
-                    self.diags.push(Diagnostic::error(
-                        DiagCode::Projection("P4"),
-                        format!("未注册的后端语言 `{lang}`（注册表见 dhv targets / BNF v1.4 §5.2，共 38 个）"),
-                        p.span,
-                    ));
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::Projection("P4"),
+                            format!("未注册的后端语言 `{lang}`（注册表见 dhv targets / BNF v1.4 §5.2，共 38 个）"),
+                            p.span,
+                        )
+                        .note("运行 `dhv targets` 查看全部合法后端 id"),
+                    );
                 }
                 Some(spec) => {
                     if is_block_target && spec.tier != 0 {
-                        self.diags.push(Diagnostic::error(
-                            DiagCode::Projection("P4"),
-                            format!("block/static 资源 `{target_name}` 只能投射到静态格式后端 yaml/markdown/json/toml/ini/xml（当前: {lang}）"),
-                            p.span,
-                        ));
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::Projection("P4"),
+                                format!("block/static 资源 `{target_name}` 只能投射到静态格式后端 yaml/markdown/json/toml/ini/xml（当前: {lang}）"),
+                                p.span,
+                            )
+                            .note(format!("将 `{target_name}` 的目标后端改为 yaml / json / toml / markdown / ini / xml 之一")),
+                        );
                     }
                     if !is_block_target && spec.tier == 0 {
-                        self.diags.push(Diagnostic::error(
-                            DiagCode::Projection("P4"),
-                            format!("代码项 `{target_name}` 不能投射到静态格式 `{lang}`（需编程语言后端）"),
-                            p.span,
-                        ));
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::Projection("P4"),
+                                format!("代码项 `{target_name}` 不能投射到静态格式 `{lang}`（需编程语言后端）"),
+                                p.span,
+                            )
+                            .note(format!("将 `{target_name}` 的目标后端改为编程语言，如 rust / python / typescript 等")),
+                        );
                     }
                 }
             }
@@ -587,22 +605,28 @@ impl TypeChecker {
         let mut kind_rules: BTreeMap<String, &ProjectionRule> = BTreeMap::new();
         for rule in &proj.rules {
             if !KNOWN.contains(&rule.kind.as_str()) {
-                self.diags.push(Diagnostic::error(
-                    DiagCode::Projection("P5"),
-                    format!(
-                        "投射规则类型 `{}` 未注册（支持：graph/fn/struct/enum/trait/const/type/block/static）",
-                        rule.kind
-                    ),
-                    rule.span,
-                ));
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Projection("P5"),
+                        format!(
+                            "投射规则类型 `{}` 未注册（支持：graph/fn/struct/enum/trait/const/type/block/static）",
+                            rule.kind
+                        ),
+                        rule.span,
+                    )
+                    .note("R4：规则类型必须是 graph/fn/struct/enum/trait/const/type/block/static 之一（block 与 static 同义）"),
+                );
                 continue;
             }
             if kind_rules.contains_key(&rule.kind) {
-                self.diags.push(Diagnostic::error(
-                    DiagCode::Projection("P5"),
-                    format!("投射规则类型 `{}` 重复声明（R3：同一类型只允许一条规则）", rule.kind),
-                    rule.span,
-                ));
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Projection("P5"),
+                        format!("投射规则类型 `{}` 重复声明（R3：同一类型只允许一条规则）", rule.kind),
+                        rule.span,
+                    )
+                    .note(format!("R3：每种类型只能有一条规则；删除重复的 `{}` 规则或合并路径", rule.kind)),
+                );
                 continue;
             }
             // R2：占位符白名单 {name}
@@ -611,19 +635,25 @@ impl TypeChecker {
                 if let Some(end) = rest[start..].find('}') {
                     let ph = &rest[start + 1..start + end];
                     if ph != "name" {
-                        self.diags.push(Diagnostic::error(
-                            DiagCode::Projection("P5"),
-                            format!("投射规则路径占位符 `{{{ph}}}` 未注册（v1 仅支持 {{name}}）"),
-                            rule.span,
-                        ));
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::Projection("P5"),
+                                format!("投射规则路径占位符 `{{{ph}}}` 未注册（v1 仅支持 {{name}}）"),
+                                rule.span,
+                            )
+                            .note("R2：路径模板 v1 仅支持 {name} 占位符，其他占位符暂未注册"),
+                        );
                     }
                     rest = &rest[start + end + 1..];
                 } else {
-                    self.diags.push(Diagnostic::error(
-                        DiagCode::Projection("P5"),
-                        "投射规则路径模板缺少闭合 `}`".to_string(),
-                        rule.span,
-                    ));
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::Projection("P5"),
+                            "投射规则路径模板缺少闭合 `}`".to_string(),
+                            rule.span,
+                        )
+                        .note("检查路径模板中的 `{` 是否有对应的 `}`"),
+                    );
                     break;
                 }
             }
@@ -1164,14 +1194,17 @@ impl TypeChecker {
     /// S8: 同作用域遮蔽错误 / 跨作用域遮蔽警告；随后登记符号
     fn declare_binding(&mut self, name: &Ident, mutable: bool, kind: SymbolKind) {
         if self.symbols.current_scope_has(&name.name) {
-            self.diags.push(Diagnostic::error(
-                DiagCode::Strictness("S8"),
-                format!(
-                    "绑定 `{}` 在同一作用域内重复声明（S8：同作用域遮蔽为错误）",
-                    name.name
-                ),
-                name.span,
-            ));
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::Strictness("S8"),
+                    format!(
+                        "绑定 `{}` 在同一作用域内重复声明（S8：同作用域遮蔽为错误）",
+                        name.name
+                    ),
+                    name.span,
+                )
+                .note(format!("重命名其中一个 `{}` 绑定以消除冲突", name.name)),
+            );
         } else if kind == SymbolKind::Let && self.symbols.outer_scope_has(&name.name) {
             self.diags.push(Diagnostic::warning(
                 DiagCode::Strictness("S8"),
@@ -1217,11 +1250,14 @@ impl TypeChecker {
                     ),
                     SymbolKind::Param => continue,
                 };
-                self.diags.push(Diagnostic::error(
-                    DiagCode::Strictness("S7"),
-                    msg,
-                    span,
-                ));
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Strictness("S7"),
+                        msg,
+                        span,
+                    )
+                    .note(format!("如确认不需要此绑定，请以 `_` 开头命名（如 `_{name}`）以豁免 S7 检查")),
+                );
             }
         }
         self.symbols.pop_scope();
