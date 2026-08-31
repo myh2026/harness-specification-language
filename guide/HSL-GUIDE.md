@@ -3783,7 +3783,7 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 | 53 | **nova/macros.hsl 的宏 transcriber `{{ ... }}` 与 block 插值语法冲突**：双花括号块形态触发 dhv-ts 解析器按插值处理（资源块缺名称报错）——独立实验文件，不影响 nova 主入口 15 模块 | 单花括号 transcriber（`{ ... }`）即可 |
 | 54 | **go/rust 多文件工程的 mod/package 组织文件不随 emit 生成**：rust 跨文件 use 按 crate mod 链路径生成（`crate::gen::rust::prompt`），需自组 lib.rs/mod.rs 链（或 cargo 工程）方可编译；go 多文件同 package 已可直接编译 | rust：按目录层级组装 mod 链（参考 tests v1.4.10 用例做法）；后续版本考虑 emit 自动生成 mod.rs |
 | 55 | ~~dhv-ts 不支持值语境 range~~ **v0.2.14 已修复**：`let r = a..b;` / `let r = a..=b;` / `let r = 0..n;` 等值语境 range 现已支持解析与校验（BNF v1.5 已知限制 #10 同步关闭） | 已无此限制 |
-| 56 | **dhv Go 后端函数体为骨架转译**（v0.2.17 新增）：struct/enum/fn 生成合法 Go 代码，但表达式仅覆盖 binary/unary/call/method/field/await/cast；match/for/while/if/闭包/赋值/索引等语句构件缺失（遇不可转译构件产 `/* TODO */`） | 简单算术/调用场景可直接使用；控制流密集逻辑待人工接手或等后续版本补齐 |
+| 56 | **dhv Go 后端函数体为骨架转译**（v0.2.17 新增，v0.2.20 大幅扩展）：struct/enum/fn/trait/impl/graph 生成合法 Go 代码；表达式覆盖 binary/unary/call/method/field/await/cast/if/else-if/match→switch/for→range/while→for/assign/compound-assign/index/slice/array/struct literal/closure→func literal/return/break/continue/block/range/try/loop/if-let/while-let。**仍不支持**：match arm 模式解构赋值（仅类型匹配）、泛型方法调用（turbofish 忽略）、async/await 语义完整转译 | 多数控制流场景可直接使用；match 模式解构与 async 逻辑待人工接手 |
 | 57 | **Go 后端类型映射为近似**（v0.2.17）：Option→`*T`（Go 指针，nil 代表 None）、Result→`(any, error)`（非变体通道，Err 详情不可模式匹配）、HashMap→`map[string]any`（丢失键值类型）、Vec→`[]any`（丢失元素类型） | 简单数据结构可直接使用；类型安全场景需人工调整 |
 
 

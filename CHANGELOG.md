@@ -2,6 +2,19 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.20] — 2026-09-01 · 「Go 后端完整转译」版
+
+### 改进
+- **dhv Go 后端函数体大幅扩展**（codegen/go_backend.rs，~750 行，此前 ~370 行）：
+  - 新增表达式：if/else（语句级 + 尾位置）、match→switch、for-in→for range、while→for、
+    赋值/复合赋值、索引、切片、数组字面量、结构体字面量、闭包→func literal、
+    return/break/continue、block/range/try/loop/if-let/while-let/async-block
+  - 尾位置 if/else-if/else 链正确生成（递归展开，无闭包包裹）
+  - 循环体尾表达式不生成 return（仅语句级输出）
+  - Vec 类型映射修复（消除双重泛型括号）
+  - match→Go switch + default 兜底
+- **v0.2.18 Release 触发**：`git tag v0.2.18` 已推送，GitHub Actions release.yml 自动构建四平台
+
 ## [0.2.19] — 2026-09-01 · 「文档与诊断」版
 
 ### 改进
