@@ -11,6 +11,7 @@
 //!   （BNF §1.9 模式 A/B）；
 //! - 表达式优先级已由 PEG 分层固化，本层只做树的直接映射。
 
+use pest::error::ErrorVariant;
 use pest::iterators::{Pair, Pairs};
 use pest::Parser as _;
 use pest_derive::Parser;
@@ -52,12 +53,18 @@ pub fn parse(file_id: FileId, src: &str) -> Result<SourceFile, Diagnostics> {
         }
         Err(err) => {
             let mut diags = Diagnostics::new();
-            let (start, _end) = match err.line_col {
+            let (start, end) = match err.line_col {
                 pest::error::LineColLocation::Pos((l, c)) => byte_offset(src, l, c),
-                pest::error::LineColLocation::Span((l, c), _) => byte_offset(src, l, c),
+                pest::error::LineColLocation::Span((l, c), (le, ce)) => {
+                    let (s, _) = byte_offset(src, l, c);
+                    let (e, _) = byte_offset(src, le, ce);
+                    (s, e.max(s + 1))
+                }
             };
+            let msg = localize_pest_error(&err.variant);
+            let span = Span::new(file_id, start, end);
             diags.push(
-                Diagnostic::error(DiagCode::Parse, format!("语法错误: {err}"), Span::new(file_id, start, start))
+                Diagnostic::error(DiagCode::Parse, msg, span)
                     .note("文法依据: hsl-spec/BNF.md"),
             );
             Err(diags)
@@ -79,6 +86,87 @@ fn byte_offset(src: &str, line: usize, col: usize) -> (usize, usize) {
     }
     off += col.saturating_sub(1);
     (off.min(src.len()), off.min(src.len()))
+}
+
+/// 将 pest 规则名映射为用户友好的中文名称（对齐 dhv-ts 期望/得到格式）。
+/// 未知规则名直接使用 `Debug` 输出作为降级。
+fn rule_friendly_name(rule: &Rule) -> String {
+    // 隐藏 pest 内部规则（注释/空白/原子标记）
+    match rule {
+        Rule::block_comment | Rule::line_comment | Rule::COMMENT | Rule::WHITESPACE => return "注释或空白".into(),
+        Rule::EOI => return "文件结束".into(),
+        _ => {}
+    }
+    // 关键结构规则
+    let name = format!("{rule:?}");
+    match name.as_str() {
+        "identifier" | "raw_identifier" => "标识符".into(),
+        "fn_param" => "函数参数".into(),
+        "type_rule" | "type_no_bounds" => "类型".into(),
+        "expression" | "expr_no_struct" | "assignment_expr" | "or_expr"
+        | "and_expr" | "comparison_expr" | "additive_expr" | "multiplicative_expr"
+        | "unary_expr" | "postfix_expr" | "primary_expr" => "表达式".into(),
+        "block_expression" => "\"{\" 块".into(),
+        "pattern" | "single_pattern" => "模式".into(),
+        "statement" | "let_statement" | "expr_statement" => "语句".into(),
+        "simple_path" | "type_path" => "路径".into(),
+        "generic_args" | "generic_param" => "泛型参数".into(),
+        "where_clause" => "where 子句".into(),
+        "token_tree" | "delim_token_tree" => "宏参数".into(),
+        "attribute" | "outer_attributes" => "属性".into(),
+        "operator_or_punct" => "运算符或标点".into(),
+        "edge_guard" | "graph_body" | "graph_stmt" => "守卫表达式".into(),
+        "node_decl" => "node 声明".into(),
+        "edge_decl" => "edge 声明".into(),
+        "source_file" | "item" | "item_or_projection" => "项定义".into(),
+        "literal" | "integer_literal" | "float_literal" | "string_literal"
+        | "char_literal" | "boolean_literal" | "raw_string_lit" => "字面量".into(),
+        _ => name,
+    }
+}
+
+/// 将 pest 原始英文错误消息转为中文「期望 X，得到 Y」格式（对齐 dhv-ts）。
+fn localize_pest_error(variant: &ErrorVariant<Rule>) -> String {
+    match variant {
+        ErrorVariant::ParsingError { positives, negatives } => {
+            // 过滤掉 pest 内部规则（注释/空白），只保留有意义的期望项
+            let expected: Vec<String> = positives
+                .iter()
+                .map(rule_friendly_name)
+                .filter(|n| n != "注释或空白")
+                .collect();
+            let found: Vec<String> = negatives
+                .iter()
+                .map(rule_friendly_name)
+                .filter(|n| n != "注释或空白")
+                .collect();
+
+            let expected_str = if expected.is_empty() {
+                String::new()
+            } else if expected.len() == 1 {
+                expected[0].clone()
+            } else {
+                format!("{} 或 {}", expected[..expected.len()-1].join("、"), expected.last().unwrap())
+            };
+
+            let found_str = if found.is_empty() {
+                "文件结束".into()
+            } else if found.len() == 1 {
+                found[0].clone()
+            } else {
+                format!("{} 或 {}", found[..found.len()-1].join("、"), found.last().unwrap())
+            };
+
+            if expected_str.is_empty() {
+                format!("语法错误：意外的 {found_str}")
+            } else {
+                format!("期望 {expected_str}，得到 {found_str}")
+            }
+        }
+        ErrorVariant::CustomError { message } => {
+            format!("语法错误: {message}")
+        }
+    }
 }
 
 // ============================================================================
