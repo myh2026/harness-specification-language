@@ -63,7 +63,7 @@ jobs:
 
       - name: Install cargo-zigbuild
         if: ${{ matrix.cross }}
-        run: cargo install cargo-binstall && cargo binstall cargo-zigbuild --no-confirm -y
+        uses: taiki-e/install-action@cargo-zigbuild
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
