@@ -6,9 +6,9 @@
 
 | | |
 |:---|:---|
-| 文档版本 | v0.2.19（与 dhv-ts 参考解释器同步） |
+| 文档版本 | v0.2.27（与工具链同步） |
 | 语言规范 | BNF v1.5.0（`toolchain/hsl-spec/BNF.md`；新增 §3.4 投射规则组 rules） |
-| 参考实现 | dhv-ts v0.2.19（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.19 |
+| 参考实现 | dhv-ts v0.2.27（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.27 |
 | 许可证 | MIT |
 | 后端 | 38 个：32 编程语言 + 6 静态格式 |
 
@@ -3730,7 +3730,7 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 |:---|:---|:---|
 | 1 | **dhv-ts 无完整类型推导**：类型注解在解释期基本忽略；S-1/S-3 的编译期完整形态、泛型单态化由 dhv Rust 编译器负责 | 写显式类型注解；把 check 的结构级铁律当作安全网而非完整类型系统 |
 | 2 | ~~`?` 的 From 转换运行期未接线~~ **v0.2.1 已修复**：`impl From<E1> for E2` 经 `?` 真实转换（见 §3.11 与 tests/hsl From 回归用例） | 已无此限制 |
-| 3 | **contract 后端函数体不翻译**：Go（v0.2.17 升级为 logic 后端，含真实函数体骨架）与 rust/go/cpp 之外的 25 种语言只翻译类型与签名，函数体是围栏 + NotImplementedError | 用 manifest.json 的 tier 字段决定哪些后端可「拿来即用」；函数体落地需 full/logic 语言或人工接管 |
+| 3 | **contract 后端函数体不翻译**：Go（v0.2.17 升级为 logic 后端，含真实函数体骨架）与 rust/go/cpp 之外的 26 种语言只翻译类型与签名，函数体是围栏 + NotImplementedError | 用 manifest.json 的 tier 字段决定哪些后端可「拿来即用」；函数体落地需 full/logic 语言或人工接管 |
 | 4 | **logic 翻译器是语句子集**：rust/go/cpp 遇到不支持构件回退 contract（如实测中 `content.lines()` 迭代使 stats_of 回退） | 把回退当特性：围栏里有完整 HSL 原文，接手的人有据可依 |
 | 5 | **命名不做语言习惯转换**：`snake_case` 的 HSL 名字在 Java/C# 产物里保持原样（C# 记录字段做了首字母大写例外） | 投射路径按语言分目录（gen/java/…）缓解；命名风格在 HSL 侧自律 |
 | 6 | **impl 方法按类型名全局注册**：跨模块同名类型的方法解析会冲突 | 一个工程内类型名保持全局唯一 |
@@ -3791,11 +3791,14 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 
 # 附录A 38 后端语言完整注册表
 
-来源：`dhv-ts/src/backends/registry.ts`（BNF v1.4 §5.2）。
+来源：`dhv-ts/src/backends/registry.ts` + `dhv/src/langs.rs`（BNF v1.5 §5.2）。
 能力级：full = 活体语句翻译 / logic = 语句子集（回退 contract）/
 contract = 类型契约 + 围栏 / static = 原文 + 插值。
 「native」列 = dhv-ts 运行期可直接执行 native 块；
 「校验」列 = emit 时的交叉语法校验工具。
+
+**dhv 专属后端实现**（7 个，其余 31 语言走通用契约后端）：
+python / typescript / rust / go（以上 4 个为编程语言 logic/full 级别，含真实函数体转译）+ yaml / markdown / json（以上 3 个为静态格式后端）。
 
 ### Tier 1 · Harness 核心（10）
 
@@ -3805,7 +3808,7 @@ contract = 类型契约 + 围栏 / static = 原文 + 插值。
 | typescript | TypeScript | .ts | full | 是 | bun-ts | interface + switch-kind match |
 | javascript | JavaScript | .js | full | 是 | bun-js | JSDoc 契约 + 工厂函数 |
 | rust | Rust | .rs | logic | — | — | 原生 match / derive |
-| go | Go | .go | logic | — | — | 类型开关 match；Result → (T, error) |
+| go | Go | .go | logic | — | — | v0.2.17 升级为 logic 级专属后端；v0.2.20 大幅扩展函数体转译（30+ 种表达式）；struct→type X struct / enum→interface+变体 / fn→func / trait→interface / impl→方法集 / graph→func main() / match→switch / for-in→for range |
 | cpp | C++ | .cpp | logic | — | — | holds_alternative 分发 |
 | java | Java | .java | contract | — | — | 顶层 sealed interface + record（Java 17+）；fn/const 宿主 class Dhv<stem>（v0.2.5） |
 | csharp | C# | .cs | contract | — | — | abstract record + 派生 record（C# 9+） |
@@ -4176,4 +4179,4 @@ HSL 的核心赌注是：**Agent 工程值得一门语言**。它的判断依据
 规范细节以 `hsl-spec/BNF.md` 为准，行为以 dhv-ts 为准，问题以
 worklog 与测试套件为史。
 
-— HSL / DHV · MIT · dhv-ts v0.2.0
+— HSL / DHV · MIT · v0.2.27

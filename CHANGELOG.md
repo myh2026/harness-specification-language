@@ -2,6 +2,19 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.27] — 2026-09-01 · 「Guide 后端注册表更新」版
+
+### 变更
+- **guide 附录 A 后端注册表更新**：
+  - 来源引用增加 dhv langs.rs，BNF 版本更新至 v1.5
+  - 新增「dhv 专属后端实现」说明：7 个专属后端（python/typescript/rust/go + yaml/markdown/json），其余 31 语言走通用契约后端
+  - Go 条目备注大幅扩展（v0.2.17 升级 / v0.2.20 函数体覆盖 30+ 种表达式 / 各项映射细节）
+- **guide 已知限制 #3 修正**：contract 语言数量 25→26（与实际 38-3-3-6=26 一致）
+- **guide 版本同步**：头部版本表、参考实现、尾部署名全部更新至 v0.2.27
+
+### 修复
+- 无
+
 ## [0.2.26] — 2026-09-01 · 「Release CI Windows 路径修复」版
 
 ### 修复
