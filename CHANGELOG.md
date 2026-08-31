@@ -2,6 +2,15 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.22] — 2026-09-01 · 「Release CI 再修复」版
+
+### 修复
+- **release.yml cargo-zigbuild 安装**：`cargo install cargo-binstall && cargo binstall cargo-zigbuild`（binstall 需先编译，极慢且可能超时）→ `taiki-e/install-action@cargo-zigbuild`（直接下载预编译二进制，Rust 社区标准方式）
+- **v0.2.21 Release 失败回退**：删除 v0.2.21 tag（CI 因 binstall 超时失败），改用 v0.2.22 重新触发
+
+### 变更
+- 版本统一：dhv 0.2.22 · dhv-ts 0.2.22 · BNF v1.5.0。
+
 ## [0.2.21] — 2026-09-01 · 「Release CI 修复」版
 
 ### 修复
