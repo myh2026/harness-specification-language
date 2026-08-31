@@ -515,9 +515,16 @@ impl TypeChecker {
 
         // Pass B: 边与语句
         let mut edge_nodes: HashSet<String> = HashSet::new();
+        let mut edge_list: Vec<(String, String, bool)> = Vec::new(); // (from, to, guarded) — G-3 用
         for stmt in &graph.body {
             match stmt {
                 GraphStmt::Edge(edge) => {
+                    let guarded = edge.on.is_some();
+                    for i in 0..edge.endpoints.len().saturating_sub(1) {
+                        let from = edge.endpoints[i].last().name.clone();
+                        let to = edge.endpoints[i + 1].last().name.clone();
+                        edge_list.push((from, to, guarded));
+                    }
                     for ep in &edge.endpoints {
                         let last = ep.last().name.clone();
                         let _ = self.symbols.lookup(&last); // 端点引用即使用
@@ -554,6 +561,48 @@ impl TypeChecker {
                 GraphStmt::Stmt(s) => self.walk_stmt(s),
                 GraphStmt::Item(i) => self.check_item(i),
                 GraphStmt::Node(_) | GraphStmt::Let(_) => {} // Pass A 已处理
+            }
+        }
+
+        // G-3: 无条件环检测（编译期可判定死锁）
+        let mut adj: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+        for (from, to, guarded) in &edge_list {
+            adj.entry(from.clone()).or_default().push((to.clone(), *guarded));
+        }
+        for start in adj.keys() {
+            // DFS 寻找回连 start 的路径，且路径上无 guard
+            let mut stack: Vec<(String, bool)> = vec![(start.clone(), false)];
+            let mut visited: HashSet<String> = HashSet::new();
+            while let Some((node, any_guard)) = stack.pop() {
+                // 回到起点但路径上有 guard → 跳过（不是无条件环）
+                if node == *start && any_guard && stack.is_empty() && !visited.is_empty() {
+                    continue;
+                }
+                if let Some(edges) = adj.get(&node) {
+                    for (to, guarded) in edges {
+                        if to == start {
+                            if !any_guard && !guarded {
+                                self.diags.push(
+                                    Diagnostic::error(
+                                        DiagCode::Topology("G3"),
+                                        format!("拓扑存在无条件环：{} -> ... -> {}", start, start),
+                                        span,
+                                    )
+                                    .note("无条件环意味着运行时必然死锁；给环上至少一条 edge 添加 `on Guard` 条件"),
+                                );
+                                stack.clear();
+                                break;
+                            }
+                            continue;
+                        }
+                        let key = format!("{}->{}", node, to);
+                        if visited.contains(&key) {
+                            continue;
+                        }
+                        visited.insert(key);
+                        stack.push((to.clone(), any_guard || *guarded));
+                    }
+                }
             }
         }
 

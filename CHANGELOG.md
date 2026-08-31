@@ -2,6 +2,16 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.31] — 2026-09-01 · 「G-3 无条件环检测」版
+
+### 新增
+- **G-3 无条件环检测**（typecheck.rs）：graph 拓扑中若存在所有边均无 `on Guard` 的环，输出 `ERROR[G-G3]`（编译期可判定死锁）。算法：构建邻接表 → 对每个起点 DFS 寻找回连路径且路径上无 guard → 报错。链式边（`a -> b -> c`）展开为二元边参与检测。对齐 dhv-ts `checker.ts` G-3。
+- 回归用例 `errors/G3_unconditional_cycle.hsl`（双编译器一致：无条件环 → G-3）。
+
+### 变更
+- `check_graph` Pass B 新增 `edge_list` 收集（为 G-3 提供邻接表数据）
+- 版本统一：dhv 0.2.31 · dhv-ts 0.2.31 · BNF v1.5.0。
+
 ## [0.2.30] — 2026-09-01 · 「M3 import 未 export 检查」版
 
 ### 新增

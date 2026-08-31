@@ -1,0 +1,19 @@
+// 回归锁定：graph 拓扑存在无条件环（所有边无 on Guard）→ G3 错误。
+// v0.2.31 新增检查，对齐 dhv-ts checker.ts G-3。
+// 有 guard 的环不报错（条件边可在运行时打破死锁）。
+
+enum Action { Go, Stop }
+
+export graph Cycle {
+    node A: i64;
+    node B: i64;
+    edge A -> B;
+    edge B -> A;
+    loop {
+        let action: Action = Action::Go;
+        match action {
+            Action::Go => { let mut x: i64 = 0; x = x + 1; }
+            Action::Stop => { break; }
+        }
+    }
+}
