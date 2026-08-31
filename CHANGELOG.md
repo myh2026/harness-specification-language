@@ -2,6 +2,24 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.17] — 2026-09-01 · 「Go 后端」版
+
+### 新增
+- **dhv Go 后端（codegen/go_backend.rs）**—— 专用 Go 代码生成后端（此前 Go 走通用契约后端，只生成注释）
+  - struct → `type X struct { Fields... }`（字段首字母大写导出）
+  - unit enum → `const (X = iota)`（Go 惯用）
+  - 数据 enum → interface + 各变体 struct
+  - fn → `func Signature { body }`（Go 函数签名 + 语句级骨架）
+  - trait → Go interface（方法签名）
+  - impl → Go 方法集（`func (self *T) Method()`）
+  - graph → `func main() error {}` 入口函数
+  - 类型映射：HSL int/float → Go int/float64，String→string，Vec→[]T，Option→*T，Result→(T, error)
+  - 表达式级骨架：binary/unary/call/method/field/await/cast
+  - 后端注册优先于通用契约后端，现在 6 个语言有专属后端（rust/go/python/typescript + 3 静态）
+
+### 变更
+- 版本统一：dhv 0.2.17 · dhv-ts 0.2.17 · BNF v1.5.0。
+
 ## [0.2.16] — 2026-09-01 · 「诊断信息质量提升」版
 
 ### 改进
