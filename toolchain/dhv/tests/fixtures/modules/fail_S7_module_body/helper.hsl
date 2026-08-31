@@ -1,0 +1,6 @@
+// 回归锁定：依赖模块体级 S7 检查（对齐 dhv-ts 先链接后逐文件检查）
+// helper 模块含未使用绑定 —— dhv 和 dhv-ts 均须报 S7
+export fn helper() -> i64 {
+    let unused_var = 42;
+    10
+}

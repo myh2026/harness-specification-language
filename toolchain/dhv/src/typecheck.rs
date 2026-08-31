@@ -143,7 +143,7 @@ impl TypeChecker {
         }
     }
 
-    /// 对整个文件执行全部检查
+    /// 对整个文件执行全部检查（根文件入口：含 Scale / Project / S 系列）
     pub fn check_file(&mut self, file: &SourceFile) -> &Diagnostics {
         // Pass 0: 收集项名 / enum 注册表 / import 符号
         for top in &file.items {
@@ -164,6 +164,43 @@ impl TypeChecker {
         // S7: 未使用 import
         self.report_unused_imports();
         &self.diags
+    }
+
+    /// 对依赖模块执行体级 S 系列检查（对齐 dhv-ts：先链接后逐文件检查）。
+    ///
+    /// 跨模块注册表（enums / static_resources / module_items / diags）保持共享，
+    /// 每文件状态（symbols / imports / declared_items / in_agent_loop）独立重置。
+    /// 不检查 Scale / Project（仅根文件拥有）。
+    pub fn check_module_body(&mut self, module_name: &str, file: &SourceFile) {
+        // 重置每文件状态
+        self.symbols = SymbolTable::default();
+        self.imports = Vec::new();
+        self.declared_items = Vec::new();
+        self.in_agent_loop = 0;
+
+        let diag_start = self.diags.items.len();
+
+        // Pass 0: 收集项名 / import 符号（enum 已由 harvest_module 收集）
+        for top in &file.items {
+            if let TopLevel::Item(item) = top {
+                self.collect_item(item);
+            }
+        }
+        // Pass 1: 逐项检查（降入 fn / graph / impl 体）
+        self.symbols.push_scope();
+        for top in &file.items {
+            if let TopLevel::Item(item) = top {
+                self.check_item(item);
+            }
+        }
+        self.symbols.pop_scope();
+        // S7: 该模块的未使用 import
+        self.report_unused_imports();
+
+        // 为本模块产生的诊断标记文件名（多文件渲染需要）
+        for d in &mut self.diags.items[diag_start..] {
+            d.file_hint = module_name.to_string();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -316,7 +353,15 @@ impl TypeChecker {
                 self.walk_type(&a.ty);
             }
             Item::Export(exp) => self.check_item(&exp.item),
-            Item::StaticResource(_) | Item::Import(_) | Item::MacroRules(_) => {}
+            Item::StaticResource(r) => {
+                // block/static 体内 {{expr}} 插值 — 标记导入使用（对齐 dhv-ts regex 扫描）
+                for part in &r.content {
+                    if let RawContentPart::Interpolation { expr, .. } = part {
+                        self.walk_expr(expr);
+                    }
+                }
+            }
+            Item::Import(_) | Item::MacroRules(_) => {}
             // 语句级宏调用（println!(..); 等）：实参 token 树里的标识符按名使用，
             // 防 S7 误报（agent.hsl `println!("...", p.total_len())` 类形态）
             Item::MacroCall { args, .. } => {
@@ -351,6 +396,16 @@ impl TypeChecker {
     /// G1-G6 拓扑校验 + graph 体内 S 系列检查
     fn check_graph(&mut self, graph: &GraphDef) {
         let span = graph.span;
+        // 遍历参数类型和返回类型（S7 导入使用标记）
+        for p in &graph.params {
+            self.walk_type(&p.ty);
+            if let ParamKind::Pattern(pat) = &p.kind {
+                self.walk_pattern(pat, SymbolKind::Param);
+            }
+        }
+        if let Some(ret) = &graph.ret {
+            self.walk_type(ret);
+        }
         self.symbols.push_scope();
         let mut has_agent_loop = false;
         let mut declared_nodes: Vec<String> = Vec::new();
@@ -788,6 +843,7 @@ impl TypeChecker {
             ExprKind::Closure { params, ret, body, .. } => {
                 self.symbols.push_scope();
                 for p in params {
+                    self.walk_type(&p.ty); // S7: 类型注解中的导入使用标记
                     if let ParamKind::Pattern(pat) = &p.kind {
                         self.walk_pattern(pat, SymbolKind::Param);
                     }

@@ -1,0 +1,6 @@
+// 根文件导入 helper（其体内有 S7 违规）
+import { helper } from "./helper.hsl";
+
+export fn main() -> i64 {
+    helper()
+}

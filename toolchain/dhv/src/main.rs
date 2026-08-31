@@ -88,7 +88,23 @@ fn cmd_check(path: &Path) -> Result<(), String> {
     let name = path.display().to_string();
     let result = dhv::compile_check(&name, &src);
     if result.diags.has_errors() {
-        eprint!("{}", result.diags.render_all(&src, &name));
+        // 构建文件名→源码映射（含依赖模块），用于多文件诊断渲染
+        let mut sources: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        sources.insert(name.clone(), src.as_str());
+        for (mpath, msrc) in &result.module_sources {
+            sources.insert(mpath.clone(), msrc.as_str());
+        }
+        let mut out = String::new();
+        for d in &result.diags.items {
+            let hint = if d.file_hint.is_empty() { &name } else { &d.file_hint };
+            let render_src = sources.get(hint).map(|s| *s).unwrap_or("");
+            out.push_str(&dhv::diagnostics::render(d, render_src, hint));
+        }
+        out.push_str(&format!(
+            "error: aborting due to {} previous error(s)\n",
+            result.diags.error_count()
+        ));
+        eprint!("{out}");
         Err("校验失败".into())
     } else {
         println!("✓ 校验通过: {name}");

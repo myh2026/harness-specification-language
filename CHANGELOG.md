@@ -2,6 +2,28 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.13] — 2026-08-31 · 「模块体 S 检查」版
+
+### 新增
+- **dhv 依赖模块体级 S 系列检查**（对齐 dhv-ts「先链接后逐文件检查」）：
+  `TypeChecker::check_module_body()` 对每个依赖模块重置每文件状态（symbols / imports / declared_items），
+  共享跨模块注册表（enums / static_resources / module_items），降入 fn / graph / impl 体执行 S4/S6/S7/S8。
+- **多文件诊断渲染**：`Diagnostic::file_hint` + `CompileResult::module_sources` + 链接器保存模块源码；
+  CLI `cmd_check` 按诊断来源查找正确源码，显示准确的文件名 / 行列 / 源码摘录。
+- 回归用例 `modules/fail_S7_module_body`（双编译器一致：依赖模块体未使用绑定 → S7）。
+
+### 修复（dhv，全部以回归用例锁定）
+- S7 导入使用标记遗漏：`block`/`static` 体内 `{{expr}}` 插值（如 `{{MAX_ITERATIONS}}`）未遍历 → 导入误报未使用。
+  → `check_item` 遍历 `StaticResourceDef.content` 中的 `RawContentPart::Interpolation`。
+- S7 导入使用标记遗漏：`graph` 参数类型和返回类型中的路径引用未遍历。
+  → `check_graph` 新增参数/返回类型的 `walk_type` 调用（对齐 `check_fn`）。
+- S7 导入使用标记遗漏：闭包参数类型注解（`|c: Citation| ...`）未遍历。
+  → `walk_expr` 的 `Closure` 分支新增 `walk_type(&p.ty)`。
+
+### 变更
+- 版本统一：dhv 0.2.13 · dhv-ts 0.2.13 · BNF v1.5.0。
+- 双编译器一致性：31 → 32 组用例（新增 `fail_S7_module_body`）。
+
 ## [0.2.12] — 2026-08-31 · 「工程化与一致性」版
 
 ### 新增

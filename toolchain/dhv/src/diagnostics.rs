@@ -72,14 +72,16 @@ pub struct Diagnostic {
     pub span: Span,
     /// 附注（帮助信息 / 关联位置）
     pub notes: Vec<String>,
+    /// 文件名提示（多模块检查时标记诊断来自哪个依赖模块）
+    pub file_hint: String,
 }
 
 impl Diagnostic {
     pub fn error(code: DiagCode, message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { severity: Severity::Error, code, message: message.into(), span, notes: vec![] }
+        Diagnostic { severity: Severity::Error, code, message: message.into(), span, notes: vec![], file_hint: String::new() }
     }
     pub fn warning(code: DiagCode, message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { severity: Severity::Warning, code, message: message.into(), span, notes: vec![] }
+        Diagnostic { severity: Severity::Warning, code, message: message.into(), span, notes: vec![], file_hint: String::new() }
     }
     pub fn note(mut self, msg: impl Into<String>) -> Self {
         self.notes.push(msg.into());
@@ -106,32 +108,36 @@ pub fn line_col_of(src: &str, offset: usize) -> (usize, usize) {
 
 /// 把诊断渲染为人可读文本（带源码摘录与波泚线）
 pub fn render(diag: &Diagnostic, src: &str, file_name: &str) -> String {
-    let (line, col) = line_col_of(src, diag.span.start);
+    let display_name = if !diag.file_hint.is_empty() { &diag.file_hint } else { file_name };
+    let span_start = diag.span.start.min(src.len());
+    let (line, col) = line_col_of(src, span_start);
     let mut out = String::new();
     out.push_str(&format!(
         "{}[{}] {}:{}:{}: {}\n",
         diag.severity.label().to_uppercase(),
         diag.code.as_str(),
-        file_name,
+        display_name,
         line,
         col,
         diag.message
     ));
     // 源码摘录：定位行首/行尾
-    if let Some(line_start) = src[..diag.span.start.min(src.len())].rfind('\n').map(|i| i + 1) {
-        let line_end = src[diag.span.start.min(src.len())..]
-            .find('\n')
-            .map(|i| diag.span.start + i)
-            .unwrap_or(src.len());
-        let snippet = &src[line_start..line_end];
-        out.push_str(&format!("  {line} | {snippet}\n"));
-        let caret_col = diag.span.start - line_start;
-        out.push_str(&format!(
-            "  {} | {}{}\n",
-            " ".repeat(line.to_string().len()),
-            " ".repeat(caret_col),
-            "^".repeat((diag.span.end - diag.span.start).max(1))
-        ));
+    if !src.is_empty() {
+        if let Some(line_start) = src[..span_start].rfind('\n').map(|i| i + 1) {
+            let line_end = src[span_start..]
+                .find('\n')
+                .map(|i| span_start + i)
+                .unwrap_or(src.len());
+            let snippet = &src[line_start..line_end];
+            out.push_str(&format!("  {line} | {snippet}\n"));
+            let caret_col = span_start - line_start;
+            out.push_str(&format!(
+                "  {} | {}{}\n",
+                " ".repeat(line.to_string().len()),
+                " ".repeat(caret_col),
+                "^".repeat((diag.span.end - diag.span.start).max(1))
+            ));
+        }
     }
     for note in &diag.notes {
         out.push_str(&format!("  = note: {note}\n"));

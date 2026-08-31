@@ -6,8 +6,7 @@
 //! - enum 变体注册表（S6 跨模块穷尽性校验）
 //! - 静态资源清单（P4 跨模块 block/static 投射合法性）
 //!
-//! 范围（v0.1）：只做加载与注册表收集；模块体内的 S/G 系列检查沿用
-//! dhv-ts linker 的「先链接后检查」次序，由后续版本逐文件开启。
+//! 模块体内的 S 系列检查由 TypeChecker::check_module_body 逐文件执行（对齐 dhv-ts）。
 
 use crate::ast::{Item, SourceFile, TopLevel};
 use crate::parser;
@@ -15,8 +14,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub struct LinkedProject {
-    /// 依赖模块（BFS 序，不含根文件）：(展示路径, AST)
+    /// 依赖模块（BFS 序，不含根文件）：(展示路径, AST, 源码)
     pub modules: Vec<(String, SourceFile)>,
+    /// 依赖模块源码（展示路径 → 源码，用于多文件诊断渲染）
+    pub module_sources: Vec<(String, String)>,
     /// 加载失败列表：(导入方文件, 模块路径, 原因)
     pub errors: Vec<(String, String, String)>,
 }
@@ -36,7 +37,7 @@ fn import_paths(file: &SourceFile) -> Vec<String> {
 
 /// 从根文件出发加载整个模块闭包（BFS）
 pub fn link(root_name: &str, root: &SourceFile) -> LinkedProject {
-    let mut project = LinkedProject { modules: Vec::new(), errors: Vec::new() };
+    let mut project = LinkedProject { modules: Vec::new(), module_sources: Vec::new(), errors: Vec::new() };
     let Some(root_dir) = Path::new(root_name).parent().map(|p| p.to_path_buf()) else {
         return project;
     };
@@ -96,7 +97,8 @@ pub fn link(root_name: &str, root: &SourceFile) -> LinkedProject {
                 ));
             }
         }
-        project.modules.push((display, ast));
+        project.modules.push((display.clone(), ast));
+        project.module_sources.push((display, src));
     }
     project
 }

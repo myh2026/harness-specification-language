@@ -28,6 +28,8 @@ pub struct CompileResult {
     pub ast: Option<ast::SourceFile>,
     pub diags: Diagnostics,
     pub files: Vec<codegen::GeneratedFile>,
+    /// 依赖模块源码（file_hint → source，用于多文件诊断渲染）
+    pub module_sources: Vec<(String, String)>,
 }
 
 pub fn compile(file_name: &str, src: &str) -> CompileResult {
@@ -41,6 +43,7 @@ pub fn compile_check(file_name: &str, src: &str) -> CompileResult {
 }
 
 fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
+    let empty = || CompileResult { ast: None, diags: Diagnostics::new(), files: vec![], module_sources: vec![] };
     let mut all_diags = Diagnostics::new();
 
     // 1. Parse
@@ -49,7 +52,7 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
         Ok(f) => Some(f),
         Err(d) => {
             all_diags.extend(d.items);
-            return CompileResult { ast: None, diags: all_diags, files: vec![] };
+            let mut r = empty(); r.diags = all_diags; return r;
         }
     };
     let file = file.unwrap();
@@ -70,10 +73,15 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
     for (_mpath, mfile) in &linked.modules {
         tc.harvest_module(mfile);
     }
+    // 依赖模块体级 S 系列检查（对齐 dhv-ts：先链接后逐文件检查）
+    for (mpath, mfile) in &linked.modules {
+        tc.check_module_body(mpath, mfile);
+    }
     tc.check_file(&file);
     all_diags.extend(tc.diags.items.clone());
+    let module_sources: Vec<(String, String)> = linked.module_sources;
     if all_diags.has_errors() || !do_codegen {
-        return CompileResult { ast: Some(file), diags: all_diags, files: vec![] };
+        let mut r = empty(); r.ast = Some(file); r.diags = all_diags; r.module_sources = module_sources; return r;
     }
 
     // 4. Codegen：跨模块投射需要依赖模块的项（agent.hsl 投射 model.hsl 的 Prompt 等），
@@ -94,7 +102,7 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
         .unwrap_or_default();
     let ctx = codegen::CodegenContext::new(file_name, scale, &merged);
     match ctx.emit(&merged) {
-        Ok(files) => CompileResult { ast: Some(file), diags: all_diags, files },
+        Ok(files) => CompileResult { ast: Some(file), diags: all_diags, files, module_sources },
         Err(errors) => {
             for e in errors {
                 all_diags.push(diagnostics::Diagnostic::error(
@@ -103,7 +111,7 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
                     ast::Span::default(),
                 ));
             }
-            CompileResult { ast: Some(file), diags: all_diags, files: vec![] }
+            let mut r = empty(); r.ast = Some(file); r.diags = all_diags; r.module_sources = module_sources; r
         }
     }
 }
