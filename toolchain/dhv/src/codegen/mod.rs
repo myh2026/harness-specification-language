@@ -7,6 +7,7 @@
 pub mod contract;
 pub mod cpp_backend;
 pub mod csharp_backend;
+pub mod dart_backend;
 pub mod go_backend;
 pub mod java_backend;
 pub mod kotlin_backend;
@@ -166,6 +167,7 @@ impl CodegenContext {
         backends.insert("kotlin".into(), Box::new(kotlin_backend::KotlinBackend));
         backends.insert("swift".into(), Box::new(swift_backend::SwiftBackend));
         backends.insert("scala".into(), Box::new(scala_backend::ScalaBackend));
+        backends.insert("dart".into(), Box::new(dart_backend::DartBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));
