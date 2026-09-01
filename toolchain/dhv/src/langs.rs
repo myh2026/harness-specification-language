@@ -4,8 +4,8 @@
 // 32 编程语言 + 6 静态格式 = 38 后端。
 // 能力分级（诚实边界）：
 //   full    (3)  —— 活体语句翻译（函数体真实转译）：python / typescript / javascript
-//   logic   (11) —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart / elixir / haskell
-//   contract(18) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
+//   logic   (12) —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart / elixir / haskell / ruby
+//   contract(17) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
 //   raw     (6)  —— 静态资源原文 + {{}} 插值渲染：yaml / markdown / json / toml / ini / xml
 // ============================================================================
 
@@ -41,7 +41,7 @@ pub const LANGS: &[LangSpec] = &[
     LangSpec { id: "kotlin", name: "Kotlin", tier: 1, ext: ".kt", line_comment: "//", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "swift", name: "Swift", tier: 1, ext: ".swift", line_comment: "//", comment_close: None, capability: Capability::Logic },
     // ===== Tier 2 · 脚本与动态（8）=====
-    LangSpec { id: "ruby", name: "Ruby", tier: 2, ext: ".rb", line_comment: "#", comment_close: None, capability: Capability::Contract },
+    LangSpec { id: "ruby", name: "Ruby", tier: 2, ext: ".rb", line_comment: "#", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "php", name: "PHP", tier: 2, ext: ".php", line_comment: "//", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "lua", name: "Lua", tier: 2, ext: ".lua", line_comment: "--", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "perl", name: "Perl", tier: 2, ext: ".pl", line_comment: "#", comment_close: None, capability: Capability::Contract },
@@ -116,9 +116,9 @@ pub enum LangFamily {
 pub fn family_for(lang_id: &str) -> LangFamily {
     match lang_id {
         "java" | "csharp" | "kotlin" | "swift" | "scala" | "dart" | "groovy"
-        | "fsharp" | "vb" | "crystal" => LangFamily::OOClass,
+        | "fsharp" | "vb" | "crystal" | "ruby" => LangFamily::OOClass,
         "cpp" | "d" | "zig" | "nim" | "objectivec" => LangFamily::CFamily,
-        "ruby" | "php" | "lua" | "perl" | "bash" | "powershell"
+        "php" | "lua" | "perl" | "bash" | "powershell"
         | "r" | "julia" => LangFamily::Script,
         "elixir" | "erlang" | "haskell" | "ocaml" => LangFamily::Functional,
         _ => LangFamily::OOClass,

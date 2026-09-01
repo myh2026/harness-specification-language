@@ -15,6 +15,7 @@ pub mod java_backend;
 pub mod kotlin_backend;
 pub mod swift_backend;
 pub mod python;
+pub mod ruby_backend;
 pub mod rust_backend;
 pub mod scala_backend;
 pub mod static_res;
@@ -172,6 +173,7 @@ impl CodegenContext {
         backends.insert("dart".into(), Box::new(dart_backend::DartBackend));
         backends.insert("elixir".into(), Box::new(elixir_backend::ElixirBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
+        backends.insert("ruby".into(), Box::new(ruby_backend::RubyBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));
         backends.insert("haskell".into(), Box::new(haskell_backend::HaskellBackend));
@@ -180,7 +182,7 @@ impl CodegenContext {
         backends.insert("yaml".into(), Box::new(static_res::YamlBackend));
         backends.insert("markdown".into(), Box::new(static_res::MarkdownBackend));
         backends.insert("json".into(), Box::new(static_res::JsonBackend));
-        // 38 后端注册表（BNF v1.5 §5.2）：3 full + 11 logic + 18 contract + 6 raw
+        // 38 后端注册表（BNF v1.5 §5.2）：3 full + 12 logic + 17 contract + 6 raw
         for spec in crate::langs::LANGS {
             if backends.contains_key(spec.id) {
                 continue;
