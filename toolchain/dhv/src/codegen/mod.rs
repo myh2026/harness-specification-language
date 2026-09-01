@@ -9,6 +9,7 @@ pub mod cpp_backend;
 pub mod csharp_backend;
 pub mod go_backend;
 pub mod java_backend;
+pub mod kotlin_backend;
 pub mod python;
 pub mod rust_backend;
 pub mod static_res;
@@ -160,6 +161,7 @@ impl CodegenContext {
         let mut backends: BTreeMap<String, Box<dyn CodegenBackend>> = BTreeMap::new();
         backends.insert("csharp".into(), Box::new(csharp_backend::CSharpBackend));
         backends.insert("java".into(), Box::new(java_backend::JavaBackend));
+        backends.insert("kotlin".into(), Box::new(kotlin_backend::KotlinBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));
