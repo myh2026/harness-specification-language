@@ -4,8 +4,8 @@
 // 32 编程语言 + 6 静态格式 = 38 后端。
 // 能力分级（诚实边界）：
 //   full    (3)  —— 活体语句翻译（函数体真实转译）：python / typescript / javascript
-//   logic   (9)  —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart
-//   contract(20) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
+//   logic   (10) —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart / elixir
+//   contract(19) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
 //   raw     (6)  —— 静态资源原文 + {{}} 插值渲染：yaml / markdown / json / toml / ini / xml
 // ============================================================================
 
@@ -51,7 +51,7 @@ pub const LANGS: &[LangSpec] = &[
     LangSpec { id: "julia", name: "Julia", tier: 2, ext: ".jl", line_comment: "#", comment_close: None, capability: Capability::Contract },
     // ===== Tier 3 · 函数式（6）=====
     LangSpec { id: "scala", name: "Scala", tier: 3, ext: ".scala", line_comment: "//", comment_close: None, capability: Capability::Logic },
-    LangSpec { id: "elixir", name: "Elixir", tier: 3, ext: ".ex", line_comment: "#", comment_close: None, capability: Capability::Contract },
+    LangSpec { id: "elixir", name: "Elixir", tier: 3, ext: ".ex", line_comment: "#", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "erlang", name: "Erlang", tier: 3, ext: ".erl", line_comment: "%", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "haskell", name: "Haskell", tier: 3, ext: ".hs", line_comment: "--", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "ocaml", name: "OCaml", tier: 3, ext: ".ml", line_comment: "(*", comment_close: Some("*)"), capability: Capability::Contract },
