@@ -2,6 +2,19 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.37] — 2026-09-01 · 「Rust 后端表达式全面覆盖」版
+
+### 改进
+- **Rust 后端从骨架升级为完整表达式覆盖**（codegen/rust_backend.rs）：
+  - 表达式种类从 8 种（literal/path/binary/unary/call/method/field/await/try/cast/native）扩展到全部 30+ 种
+  - 新增：if/else if/else、match（含 guard）、for、while、while-let、for-in range、loop、closure（含 async/move）、return、break（含 label+value）、continue、array、array-repeat、struct literal（含 spread）、tuple、block expression、async block、assign、compound-assign、index、slice、range、if-let、macro
+  - 新增语句级 if/match/for/while/loop 处理（正确缩进与格式，无需 return 包装）
+  - 新增 `let mut` 支持（读取 LetStmt.mutable 字段）
+  - 赋值语句自动追加分号
+  - 新增模式转译函数 `rs_pattern()`（覆盖 ident/wildcard/rest/literal/path/tuple-struct/struct/tuple/or/range）
+  - 新增 Const 和 TypeAlias 项支持
+- 模块头注释更新：从「P3 骨架」改为「HSL 与 Rust 高度同构，转译接近直译」
+
 ## [0.2.36] — 2026-09-01 · 「Contract 后端真实语法输出」版
 
 ### 改进
