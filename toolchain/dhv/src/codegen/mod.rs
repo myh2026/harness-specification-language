@@ -5,6 +5,7 @@
 //! 后端在 v0.1 已完整可用，rust/python/typescript 为骨架。
 
 pub mod contract;
+pub mod cpp_backend;
 pub mod go_backend;
 pub mod python;
 pub mod rust_backend;
@@ -155,6 +156,7 @@ pub struct CodegenContext {
 impl CodegenContext {
     pub fn new(source_file: impl Into<String>, scale: Scale, ast: &SourceFile) -> Self {
         let mut backends: BTreeMap<String, Box<dyn CodegenBackend>> = BTreeMap::new();
+        backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));
         backends.insert("python".into(), Box::new(python::PythonBackend));
