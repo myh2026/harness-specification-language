@@ -2,6 +2,10 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## 0.2.44 (2026-09-01)
+
+- **Swift 专属后端新增**（codegen/swift_backend.rs，~1100 行）：Swift 是 Tier 1 Harness 核心语言，此前走通用 contract 后端（纯注释式契约），现生成真实 Swift 5.9+ 代码。struct → struct (named) / final class (tuple/unit)；enum → enum（unit）/ indirect enum（data，关联值原生支持）；trait → protocol（支持默认实现）；impl → extension；fn → 顶层 func（支持 async）；const → static let；graph → @main struct with static func main()。完整表达式转译（30+ 种 ExprKind）：if/else、switch（match，含 where guard）、for-in/while/while-let/loop（支持 label）、closure（{ x in ... }）、range（..< / ...）、try、await（async）、cast（as!）、if-let（if case let）等。70+ Swift 关键字避让表（用反引号转义）。Swift 类型映射（对齐 registry.ts TypeMap）：String/Character/Bool/Int8-Int64/UInt8-UInt64/Int/Float/Double/[T]/[K:V]/Set<T>/T?/Result<T,E>/Void/Never。专属后端数量 11 → 12（rust/go/python/typescript/cpp/java/csharp/kotlin/swift + 3 static），消除 dhv 与 dhv-ts 的 Swift 能力声明不一致。
+
 ## 0.2.43 (2026-09-01)
 
 - **Kotlin 专属后端新增**（codegen/kotlin_backend.rs，~1100 行）：Kotlin 是 Tier 1 Harness 核心语言，此前走通用 contract 后端，现生成真实 Kotlin 代码。struct → data class（named）/ class（tuple/unit）；enum → sealed class + data class/object；trait → interface（支持默认实现）；impl → class implementing interface；fn → 顶层 fun（支持 suspend）；const → const val；graph → class { companion object { @JvmStatic fun main() } }。完整表达式转译（30+ 种 ExprKind）：if/else、when（match）、for/while/while-let/loop（支持 label）、closure（lambda）、range（.. / until）、try/catch、await（suspend）、cast（as）等。60+ Kotlin 关键字避让表。Kotlin 类型映射：String/Boolean/Byte/Short/Int/Long/Float/Double/List/Map/Set/HashMap/HashSet/Pair/Triple/Array/Nothing。专属后端数量 10 → 11（rust/go/python/typescript/cpp/java/csharp/kotlin + 3 static），首个 JVM（非 Java）语言专属后端。

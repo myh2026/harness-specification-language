@@ -10,6 +10,7 @@ pub mod csharp_backend;
 pub mod go_backend;
 pub mod java_backend;
 pub mod kotlin_backend;
+pub mod swift_backend;
 pub mod python;
 pub mod rust_backend;
 pub mod static_res;
@@ -162,6 +163,7 @@ impl CodegenContext {
         backends.insert("csharp".into(), Box::new(csharp_backend::CSharpBackend));
         backends.insert("java".into(), Box::new(java_backend::JavaBackend));
         backends.insert("kotlin".into(), Box::new(kotlin_backend::KotlinBackend));
+        backends.insert("swift".into(), Box::new(swift_backend::SwiftBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));
