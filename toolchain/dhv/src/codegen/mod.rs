@@ -7,6 +7,7 @@
 pub mod contract;
 pub mod cpp_backend;
 pub mod go_backend;
+pub mod java_backend;
 pub mod python;
 pub mod rust_backend;
 pub mod static_res;
@@ -156,6 +157,7 @@ pub struct CodegenContext {
 impl CodegenContext {
     pub fn new(source_file: impl Into<String>, scale: Scale, ast: &SourceFile) -> Self {
         let mut backends: BTreeMap<String, Box<dyn CodegenBackend>> = BTreeMap::new();
+        backends.insert("java".into(), Box::new(java_backend::JavaBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));

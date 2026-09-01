@@ -2,11 +2,13 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
-## 0.2.39 (2026-09-01)
+## 0.2.41 (2026-09-01)
 
-- **TypeScript 后端表达式全面覆盖**：typescript.rs 从 190 行（~8 种表达式）扩展到 1256 行（33 种 ExprKind 全覆盖），新增完整语句块转译（emit_block_ts/emit_stmt_expr_ts）、模式转译（ts_pattern/ts_match_pattern/ts_match_condition）、TypeScript 关键字避让表（54 个关键字）、常用 std 方法映射表（50+ 方法，对齐 dhv-ts body.ts）、format!→模板字符串/println!→console.log 宏转译；新增 Item::Enum（判别联合类型+便捷构造器）/Impl/Trait/FnSig/Const/TypeAlias/StaticResource/MacroRules/Graph 项支持；类型映射扩展 HashMap→Map<K,V>/HashSet→Set<T>/FnPtr→函数类型/FnPtr→函数类型/Result→T|Error/Never→never/Paren→包装类型/char→string/Box→内层类型。
+- **Java 专属后端新增**（codegen/java_backend.rs，~1300 行）：Java 是 Tier 1 Harness 核心语言，此前走通用 contract 后端（纯注释式契约），现生成真实 Java 17+ 代码。struct → record（Java 17+）/ class（tuple/unit）；enum → sealed interface + record（data）/ enum（unit）；trait → interface；impl → class implements interface；fn → static method；const → static final；graph → public static void main(String[] args)。表达式全覆盖（30+ 种 ExprKind）：binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/if-let/match(switch)/for/while/while-let/loop/closure/return/break/continue/array/struct/tuple/block/try/await/cast/native/macro。新增 70+ Java 关键字避让表、50+ Java std 方法映射表（Vec→List/Map/Set/Optional）、Java 类型映射（对齐 registry.ts TypeMap）。专属后端数量 8 → 9（rust/go/python/typescript/cpp/java + 3 static），消除 dhv 与 dhv-ts 的 Java 能力声明不一致。
 
-- **Python 后端表达式全面覆盖**：python.rs 从 ~8 种表达式扩展到全部 33 种 ExprKind（literal/path/binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/if-let/match/for/while/while-let/loop/closure/return/break/continue/array/array-repeat/struct/tuple/block/async-block/try/await/cast/native/macro），新增完整语句块转译、模式转译、Python 关键字避让、常用 std 方法映射表（50+ 方法）、format!/println! 宏转译；新增 Item::Enum/Trait/Impl/Const/TypeAlias/MacroRules/Graph 项支持；类型映射扩展 FnPtr/Never/Paren/char/HashMap 泛型参数。
+## 0.2.40 (2026-09-01)
+
+- **C++ 专属后端新增**（codegen/cpp_backend.rs，~860 行）：C++ 是 Tier 1 Harness 核心语言，此前走通用 contract 后端，现生成真实 C++17 代码。
 
 ## [0.2.37] — 2026-09-01 · 「Rust 后端表达式全面覆盖」版
 
