@@ -2,6 +2,17 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.36] — 2026-09-01 · 「Contract 后端真实语法输出」版
+
+### 改进
+- **Contract 后端从纯注释式升级为真实目标语言语法输出**（codegen/contract.rs）：
+  - 31 种 contract 语言不再输出注释式契约，而是生成目标语言可读代码（struct→class/struct、enum→enum、fn→method、const→常量、typealias→using/typealias、trait→interface/protocol）
+  - 按语法族（LangFamily）分组生成：OOClass（Java/C#/Kotlin/Swift/…）、CFamily（C++/D/Zig/…）、Script（Ruby/PHP/Lua/…）、Functional（Elixir/Haskell/…）
+  - 类型输出使用每语言专属类型映射（i64→long for Java, i64→int for Go, String→str for Python 等）
+- **32 语言类型映射表**（langs.rs）：新增 `type_map_for()` 函数，为全部 32 种编程语言提供 HSL→目标类型映射（对齐 dhv-ts backends/registry.ts types: TypeMap），覆盖 String/char/bool/i32~f64/Vec/HashMap/HashSet/Option/Result/Box/unit 等 17 种 HSL 类型
+- **语言语法族分类**（langs.rs）：新增 `LangFamily` 枚举（OOClass/CFamily/Script/Functional）和 `family_for()` 函数，32 种编程语言按语法风格归入四族
+- 新增回归测试 `type_map_coverage`（每语言必须有 String/i64/bool 映射）和 `family_coverage`（每编程语言必须有语法族）
+
 ## [0.2.35] — 2026-09-01 · 「Contract 后端覆盖扩展」版
 
 ### 改进

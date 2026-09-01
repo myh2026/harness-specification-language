@@ -99,6 +99,269 @@ pub fn is_code(lang: &str) -> bool {
     resolve(lang).map(|l| l.tier != 0).unwrap_or(false)
 }
 
+/// 语言语法族（决定 contract 后端的声明输出风格）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LangFamily {
+    /// Java, C#, Kotlin, Swift, Scala, Dart, Groovy, F#, VB, Crystal — class-based OOP
+    OOClass,
+    /// C++, D, Zig, Nim, Objective-C — C-family systems
+    CFamily,
+    /// Ruby, PHP, Lua, Perl, Bash, PowerShell, R, Julia — dynamic/scripting
+    Script,
+    /// Elixir, Erlang, Haskell, OCaml — functional
+    Functional,
+}
+
+/// 返回语言的语法族
+pub fn family_for(lang_id: &str) -> LangFamily {
+    match lang_id {
+        "java" | "csharp" | "kotlin" | "swift" | "scala" | "dart" | "groovy"
+        | "fsharp" | "vb" | "crystal" => LangFamily::OOClass,
+        "cpp" | "d" | "zig" | "nim" | "objectivec" => LangFamily::CFamily,
+        "ruby" | "php" | "lua" | "perl" | "bash" | "powershell"
+        | "r" | "julia" => LangFamily::Script,
+        "elixir" | "erlang" | "haskell" | "ocaml" => LangFamily::Functional,
+        _ => LangFamily::OOClass,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 每语言 HSL→目标 类型映射表（对齐 dhv-ts backends/registry.ts types: TypeMap）
+// 占位符：%T = 唯一类型参数，%K/%V = 键/值，%E = Result 错误类型
+// ---------------------------------------------------------------------------
+
+/// 返回语言的 HSL→目标类型映射（基本类型 + 泛型容器）
+pub fn type_map_for(lang_id: &str) -> &'static [(&'static str, &'static str)] {
+    match lang_id {
+        "python" => &[
+            ("String", "str"), ("char", "str"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "int"), ("u32", "int"), ("u64", "int"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float"), ("f64", "float"),
+            ("Vec", "list[%T]"), ("HashMap", "dict[%K, %V]"), ("HashSet", "set[%T]"),
+            ("Option", "%T | None"), ("Result", "%T"), ("Box", "%T"), ("unit", "None"),
+        ],
+        "typescript" => &[
+            ("String", "string"), ("char", "string"), ("bool", "boolean"),
+            ("i32", "number"), ("i64", "number"), ("u32", "number"), ("u64", "number"),
+            ("usize", "number"), ("isize", "number"), ("f32", "number"), ("f64", "number"),
+            ("Vec", "%T[]"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "%T | null"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "javascript" => &[
+            ("String", "string"), ("char", "string"), ("bool", "boolean"),
+            ("i32", "number"), ("i64", "number"), ("u32", "number"), ("u64", "number"),
+            ("usize", "number"), ("isize", "number"), ("f32", "number"), ("f64", "number"),
+            ("Vec", "Array"), ("HashMap", "Map"), ("HashSet", "Set"),
+            ("Option", "?"), ("Result", "?"), ("Box", "?"), ("unit", "undefined"),
+        ],
+        "rust" => &[
+            ("String", "String"), ("char", "char"), ("bool", "bool"),
+            ("i32", "i32"), ("i64", "i64"), ("u32", "u32"), ("u64", "u64"),
+            ("usize", "usize"), ("isize", "isize"), ("f32", "f32"), ("f64", "f64"),
+            ("Vec", "Vec<%T>"), ("HashMap", "HashMap<%K, %V>"), ("HashSet", "HashSet<%T>"),
+            ("Option", "Option<%T>"), ("Result", "Result<%T, %E>"), ("Box", "Box<%T>"), ("unit", "()"),
+        ],
+        "go" => &[
+            ("String", "string"), ("char", "rune"), ("bool", "bool"),
+            ("i32", "int32"), ("i64", "int64"), ("u32", "uint32"), ("u64", "uint64"),
+            ("usize", "uint"), ("isize", "int"), ("f32", "float32"), ("f64", "float64"),
+            ("Vec", "[]%T"), ("HashMap", "map[%K]%V"), ("HashSet", "map[%T]struct{}"),
+            ("Option", "*%T"), ("Result", "(%T, error)"), ("Box", "*%T"), ("unit", "struct{}"),
+        ],
+        "cpp" => &[
+            ("String", "std::string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int32_t"), ("i64", "int64_t"), ("u32", "uint32_t"), ("u64", "uint64_t"),
+            ("usize", "size_t"), ("isize", "intptr_t"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "std::vector<%T>"), ("HashMap", "std::unordered_map<%K, %V>"), ("HashSet", "std::unordered_set<%T>"),
+            ("Option", "std::optional<%T>"), ("Result", "%T"), ("Box", "std::unique_ptr<%T>"), ("unit", "void"),
+        ],
+        "java" => &[
+            ("String", "String"), ("char", "char"), ("bool", "boolean"),
+            ("i32", "int"), ("i64", "long"), ("u32", "int"), ("u64", "long"),
+            ("usize", "long"), ("isize", "long"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "List<%T>"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "Optional<%T>"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "csharp" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "long"), ("u32", "uint"), ("u64", "ulong"),
+            ("usize", "nuint"), ("isize", "nint"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "List<%T>"), ("HashMap", "Dictionary<%K, %V>"), ("HashSet", "HashSet<%T>"),
+            ("Option", "%T?"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "kotlin" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Boolean"),
+            ("i32", "Int"), ("i64", "Long"), ("u32", "UInt"), ("u64", "ULong"),
+            ("usize", "UInt"), ("isize", "Int"), ("f32", "Float"), ("f64", "Double"),
+            ("Vec", "List<%T>"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "%T?"), ("Result", "%T"), ("Box", "%T"), ("unit", "Unit"),
+        ],
+        "swift" => &[
+            ("String", "String"), ("char", "Character"), ("bool", "Bool"),
+            ("i32", "Int32"), ("i64", "Int64"), ("u32", "UInt32"), ("u64", "UInt64"),
+            ("usize", "Int"), ("isize", "Int"), ("f32", "Float"), ("f64", "Double"),
+            ("Vec", "[%T]"), ("HashMap", "[%K: %V]"), ("HashSet", "Set<%T>"),
+            ("Option", "%T?"), ("Result", "Result<%T, %E>"), ("Box", "%T"), ("unit", "Void"),
+        ],
+        "scala" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Boolean"),
+            ("i32", "Int"), ("i64", "Long"), ("u32", "Int"), ("u64", "Long"),
+            ("usize", "Long"), ("isize", "Long"), ("f32", "Float"), ("f64", "Double"),
+            ("Vec", "Vector[%T]"), ("HashMap", "Map[%K, %V]"), ("HashSet", "Set[%T]"),
+            ("Option", "Option[%T]"), ("Result", "Either[%E, %T]"), ("Box", "%T"), ("unit", "Unit"),
+        ],
+        "dart" => &[
+            ("String", "String"), ("char", "String"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "int"), ("u32", "int"), ("u64", "int"),
+            ("usize", "int"), ("isize", "int"), ("f32", "double"), ("f64", "double"),
+            ("Vec", "List<%T>"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "%T?"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "groovy" => &[
+            ("String", "String"), ("char", "char"), ("bool", "boolean"),
+            ("i32", "int"), ("i64", "long"), ("u32", "int"), ("u64", "long"),
+            ("usize", "long"), ("isize", "long"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "List<%T>"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "Optional<%T>"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "fsharp" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int32"), ("i64", "int64"), ("u32", "uint32"), ("u64", "uint64"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float32"), ("f64", "float"),
+            ("Vec", "%T list"), ("HashMap", "Map<%K, %V>"), ("HashSet", "Set<%T>"),
+            ("Option", "%T option"), ("Result", "Result<%T, %E>"), ("Box", "%T"), ("unit", "unit"),
+        ],
+        "crystal" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Bool"),
+            ("i32", "Int32"), ("i64", "Int64"), ("u32", "UInt32"), ("u64", "UInt64"),
+            ("usize", "Int64"), ("isize", "Int64"), ("f32", "Float32"), ("f64", "Float64"),
+            ("Vec", "Array(%T)"), ("HashMap", "Hash(%K, %V)"), ("HashSet", "Set(%T)"),
+            ("Option", "%T | Nil"), ("Result", "%T"), ("Box", "%T"), ("unit", "Nil"),
+        ],
+        "vb" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Boolean"),
+            ("i32", "Integer"), ("i64", "Long"), ("u32", "UInteger"), ("u64", "ULong"),
+            ("usize", "ULong"), ("isize", "Long"), ("f32", "Single"), ("f64", "Double"),
+            ("Vec", "List(Of %T)"), ("HashMap", "Dictionary(Of %K, %V)"), ("HashSet", "HashSet(Of %T)"),
+            ("Option", "%T"), ("Result", "%T"), ("Box", "%T"), ("unit", "Sub"),
+        ],
+        "objectivec" => &[
+            ("String", "NSString *"), ("char", "unichar"), ("bool", "BOOL"),
+            ("i32", "int32_t"), ("i64", "int64_t"), ("u32", "uint32_t"), ("u64", "uint64_t"),
+            ("usize", "NSUInteger"), ("isize", "NSInteger"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "NSArray<%T> *"), ("HashMap", "NSDictionary<%K, %V> *"), ("HashSet", "NSSet<%T> *"),
+            ("Option", "%T"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "d" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "long"), ("u32", "uint"), ("u64", "ulong"),
+            ("usize", "size_t"), ("isize", "ptrdiff_t"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "%T[]"), ("HashMap", "%V[%K]"), ("HashSet", "%T[int]"),
+            ("Option", "%T"), ("Result", "%T"), ("Box", "%T*"), ("unit", "void"),
+        ],
+        "zig" => &[
+            ("String", "[]const u8"), ("char", "u8"), ("bool", "bool"),
+            ("i32", "i32"), ("i64", "i64"), ("u32", "u32"), ("u64", "u64"),
+            ("usize", "usize"), ("isize", "isize"), ("f32", "f32"), ("f64", "f64"),
+            ("Vec", "[]%T"), ("HashMap", "std.AutoHashMap(%K, %V)"), ("HashSet", "std.AutoHashMap(%T, void)"),
+            ("Option", "?%T"), ("Result", "%T"), ("Box", "*%T"), ("unit", "void"),
+        ],
+        "nim" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int32"), ("i64", "int64"), ("u32", "uint32"), ("u64", "uint64"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float32"), ("f64", "float64"),
+            ("Vec", "seq[%T]"), ("HashMap", "Table[%K, %V]"), ("HashSet", "HashSet[%T]"),
+            ("Option", "Option[%T]"), ("Result", "Result[%T, %E]"), ("Box", "ref %T"), ("unit", "void"),
+        ],
+        "ruby" => &[
+            ("String", "String"), ("char", "String"), ("bool", "Boolean"),
+            ("i32", "Integer"), ("i64", "Integer"), ("u32", "Integer"), ("u64", "Integer"),
+            ("usize", "Integer"), ("isize", "Integer"), ("f32", "Float"), ("f64", "Float"),
+            ("Vec", "Array"), ("HashMap", "Hash"), ("HashSet", "Set"),
+            ("Option", "nilable"), ("Result", "nilable"), ("Box", "Object"), ("unit", "nil"),
+        ],
+        "php" => &[
+            ("String", "string"), ("char", "string"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "int"), ("u32", "int"), ("u64", "int"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float"), ("f64", "float"),
+            ("Vec", "array"), ("HashMap", "array"), ("HashSet", "array"),
+            ("Option", "?%T"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "lua" => &[
+            ("String", "string"), ("char", "string"), ("bool", "boolean"),
+            ("i32", "number"), ("i64", "number"), ("u32", "number"), ("u64", "number"),
+            ("usize", "number"), ("isize", "number"), ("f32", "number"), ("f64", "number"),
+            ("Vec", "table"), ("HashMap", "table"), ("HashSet", "table"),
+            ("Option", "nilable"), ("Result", "nilable"), ("Box", "any"), ("unit", "nil"),
+        ],
+        "perl" => &[
+            ("String", "Str"), ("char", "Str"), ("bool", "Bool"),
+            ("i32", "Int"), ("i64", "Int"), ("u32", "Int"), ("u64", "Int"),
+            ("usize", "Int"), ("isize", "Int"), ("f32", "Num"), ("f64", "Num"),
+            ("Vec", "ArrayRef[%T]"), ("HashMap", "HashRef[%K, %V]"), ("HashSet", "HashRef[%T, Int]"),
+            ("Option", "Maybe[%T]"), ("Result", "%T"), ("Box", "%T"), ("unit", "Undef"),
+        ],
+        "bash" => &[
+            ("String", "string"), ("char", "string"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "int"), ("u32", "int"), ("u64", "int"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float"), ("f64", "float"),
+            ("Vec", "array"), ("HashMap", "assoc"), ("HashSet", "assoc"),
+            ("Option", "nullable"), ("Result", "retcode"), ("Box", "value"), ("unit", "void"),
+        ],
+        "powershell" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int"), ("i64", "long"), ("u32", "uint"), ("u64", "ulong"),
+            ("usize", "long"), ("isize", "long"), ("f32", "float"), ("f64", "double"),
+            ("Vec", "System.Collections.Generic.List[%T]"), ("HashMap", "System.Collections.Generic.Dictionary[%K, %V]"),
+            ("HashSet", "System.Collections.Generic.HashSet[%T]"),
+            ("Option", "%T"), ("Result", "%T"), ("Box", "%T"), ("unit", "void"),
+        ],
+        "r" => &[
+            ("String", "character"), ("char", "character"), ("bool", "logical"),
+            ("i32", "integer"), ("i64", "integer"), ("u32", "integer"), ("u64", "double"),
+            ("usize", "double"), ("isize", "double"), ("f32", "double"), ("f64", "double"),
+            ("Vec", "vector"), ("HashMap", "list"), ("HashSet", "vector"),
+            ("Option", "nullable"), ("Result", "nullable"), ("Box", "any"), ("unit", "NULL"),
+        ],
+        "julia" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Bool"),
+            ("i32", "Int32"), ("i64", "Int64"), ("u32", "UInt32"), ("u64", "UInt64"),
+            ("usize", "Int"), ("isize", "Int"), ("f32", "Float32"), ("f64", "Float64"),
+            ("Vec", "Vector{%T}"), ("HashMap", "Dict{%K, %V}"), ("HashSet", "Set{%T}"),
+            ("Option", "Union{%T, Nothing}"), ("Result", "Union{%T, %E}"), ("Box", "%T"), ("unit", "Nothing"),
+        ],
+        "elixir" => &[
+            ("String", "String.t()"), ("char", "String.t()"), ("bool", "boolean"),
+            ("i32", "integer"), ("i64", "integer"), ("u32", "non_neg_integer"), ("u64", "non_neg_integer"),
+            ("usize", "non_neg_integer"), ("isize", "integer"), ("f32", "float"), ("f64", "float"),
+            ("Vec", "list(%T)"), ("HashMap", "map()"), ("HashSet", "MapSet.t()"),
+            ("Option", "{:ok, %T} | :error"), ("Result", "{:ok, %T} | {:error, %E}"), ("Box", "any"), ("unit", ":ok"),
+        ],
+        "erlang" => &[
+            ("String", "binary()"), ("char", "char()"), ("bool", "boolean()"),
+            ("i32", "integer()"), ("i64", "integer()"), ("u32", "non_neg_integer()"), ("u64", "non_neg_integer()"),
+            ("usize", "non_neg_integer()"), ("isize", "integer()"), ("f32", "float()"), ("f64", "float()"),
+            ("Vec", "list(%T)"), ("HashMap", "map()"), ("HashSet", "sets:set()"),
+            ("Option", "{some, %T} | none"), ("Result", "{ok, %T} | {error, %E}"), ("Box", "any()"), ("unit", "ok"),
+        ],
+        "haskell" => &[
+            ("String", "String"), ("char", "Char"), ("bool", "Bool"),
+            ("i32", "Int"), ("i64", "Int64"), ("u32", "Word32"), ("u64", "Word64"),
+            ("usize", "Int"), ("isize", "Int"), ("f32", "Float"), ("f64", "Double"),
+            ("Vec", "[%T]"), ("HashMap", "Map %K %V"), ("HashSet", "Set %T"),
+            ("Option", "Maybe %T"), ("Result", "Either %E %T"), ("Box", "%T"), ("unit", "()"),
+        ],
+        "ocaml" => &[
+            ("String", "string"), ("char", "char"), ("bool", "bool"),
+            ("i32", "int32"), ("i64", "int64"), ("u32", "uint32"), ("u64", "uint64"),
+            ("usize", "int"), ("isize", "int"), ("f32", "float32"), ("f64", "float"),
+            ("Vec", "%T list"), ("HashMap", "(%K, %V) Hashtbl.t"), ("HashSet", "%T list"),
+            ("Option", "%T option"), ("Result", "(%T, %E) result"), ("Box", "%T"), ("unit", "unit"),
+        ],
+        _ => &[],
+    }
+}
+
 pub const COUNT: usize = LANGS.len();
 pub const CODE_COUNT: usize = 32;
 pub const STATIC_COUNT: usize = 6;
@@ -119,5 +382,27 @@ mod tests {
         assert_eq!(resolve("ts").unwrap().id, "typescript");
         assert_eq!(resolve("c++").unwrap().id, "cpp");
         assert!(resolve("cobol").is_none());
+    }
+
+    #[test]
+    fn type_map_coverage() {
+        // 每个编程语言都必须有类型映射（静态格式除外）
+        for lang in LANGS.iter().filter(|l| l.tier != 0) {
+            let map = type_map_for(lang.id);
+            assert!(!map.is_empty(), "{} 缺少类型映射", lang.id);
+            // 必须包含基础类型
+            assert!(map.iter().any(|(k, _)| *k == "String"), "{} 缺少 String 映射", lang.id);
+            assert!(map.iter().any(|(k, _)| *k == "i64"), "{} 缺少 i64 映射", lang.id);
+            assert!(map.iter().any(|(k, _)| *k == "bool"), "{} 缺少 bool 映射", lang.id);
+        }
+    }
+
+    #[test]
+    fn family_coverage() {
+        for lang in LANGS.iter().filter(|l| l.tier != 0) {
+            let f = family_for(lang.id);
+            assert!(matches!(f, LangFamily::OOClass | LangFamily::CFamily | LangFamily::Script | LangFamily::Functional),
+                "{} 缺少语法族", lang.id);
+        }
     }
 }
