@@ -13,6 +13,7 @@ pub mod kotlin_backend;
 pub mod swift_backend;
 pub mod python;
 pub mod rust_backend;
+pub mod scala_backend;
 pub mod static_res;
 pub mod typescript;
 
@@ -164,6 +165,7 @@ impl CodegenContext {
         backends.insert("java".into(), Box::new(java_backend::JavaBackend));
         backends.insert("kotlin".into(), Box::new(kotlin_backend::KotlinBackend));
         backends.insert("swift".into(), Box::new(swift_backend::SwiftBackend));
+        backends.insert("scala".into(), Box::new(scala_backend::ScalaBackend));
         backends.insert("cpp".into(), Box::new(cpp_backend::CppBackend));
         backends.insert("rust".into(), Box::new(rust_backend::RustBackend));
         backends.insert("go".into(), Box::new(go_backend::GoBackend));

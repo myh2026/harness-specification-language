@@ -1068,7 +1068,6 @@ pub fn emit_expr_ts(expr: &Expr) -> String {
                             _ => "...".into(),
                         }).collect::<Vec<_>>().join("")
                     }
-                    _ => "".into(),
                 }).collect::<Vec<_>>().join("");
                 return format!("console.log({})", inner);
             }
@@ -1205,7 +1204,6 @@ fn ts_format_macro(args: &MacroArgs) -> String {
                     }
                 }
             }
-            _ => {}
         }
     }
     // 将 {value} 和 {} 替换为 ${value} 模板语法

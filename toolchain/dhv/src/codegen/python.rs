@@ -255,7 +255,6 @@ pub fn py_type(ty: &Type) -> String {
         TypeKind::Infer => "Any".into(),
         TypeKind::Paren(inner) => format!("({})", py_type(inner)),
         TypeKind::Never => "NoReturn".into(),
-        _ => "Any".into(),
     }
 }
 
@@ -604,7 +603,6 @@ fn py_pattern(pat: &Pattern) -> String {
             LiteralKind::Int { value, .. } => value.to_string(),
             LiteralKind::Float { value, .. } => value.to_string(),
             LiteralKind::Char(c) => format!("{c:?}"),
-            _ => "0".into(),
         },
         PatternKind::Path(p) => {
             let segs: Vec<&str> = p.segments.iter().map(|s| s.name.as_str()).collect();
@@ -891,7 +889,6 @@ pub fn emit_expr_py(expr: &Expr) -> String {
                             _ => "...".into(),
                         }).collect::<Vec<_>>().join("")
                     }
-                    _ => "".into(),
                 }).collect::<Vec<_>>().join("");
                 return format!("print({})", inner);
             }
@@ -996,7 +993,6 @@ fn py_format_macro(args: &MacroArgs) -> String {
                     }
                 }
             }
-            _ => {}
         }
     }
     // 将 {value} 占位替换为 {} 格式化参数

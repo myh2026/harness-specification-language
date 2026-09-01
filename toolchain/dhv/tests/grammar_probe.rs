@@ -19,7 +19,7 @@ fn raw_string_probe() {
     // let_statement 完整
     let r = HslParser::parse(Rule::let_statement, "let s = r\"x\"; ");
     match r {
-        Ok(p) => println!("let_statement: OK"),
+        Ok(_p) => println!("let_statement: OK"),
         Err(e) => println!("let_statement: ERR {e}"),
     }
     // expression 完整
