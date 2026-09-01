@@ -2,6 +2,10 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## 0.2.42 (2026-09-01)
+
+- **C# 专属后端新增**（codegen/csharp_backend.rs，~540 行）：C# 是 Tier 1 Harness 核心语言，此前走通用 contract 后端（纯注释式契约），现生成真实 C# 9+ 代码。struct → record（named）/ class（tuple/unit）；enum → sealed abstract record + derived record（data）/ enum（unit）；trait → interface（C# 8+ 默认实现）；impl → class implementing interface；fn → static method；const → const；graph → static void Main()。表达式全覆盖（30+ 种 ExprKind）：binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/if-let/match(switch)/for/while/while-let/loop/closure/return/break/continue/array/struct/tuple/block/try/await/cast/native/macro。新增 80+ C# 关键字避让表、字段首字母大写（C# 惯例）。类型映射对齐 registry.ts TypeMap（string/char/bool/int/long/uint/ulong/nuint/nint/float/double/List<T>/Dictionary<K,V>/HashSet<T>/T?/Func<>）。专属后端数量 9 → 10（rust/go/python/typescript/cpp/java/csharp + 3 static），消除 dhv 与 dhv-ts 的 C# 能力声明不一致。
+
 ## 0.2.41 (2026-09-01)
 
 - **Java 专属后端新增**（codegen/java_backend.rs，~1300 行）：Java 是 Tier 1 Harness 核心语言，此前走通用 contract 后端（纯注释式契约），现生成真实 Java 17+ 代码。struct → record（Java 17+）/ class（tuple/unit）；enum → sealed interface + record（data）/ enum（unit）；trait → interface；impl → class implements interface；fn → static method；const → static final；graph → public static void main(String[] args)。表达式全覆盖（30+ 种 ExprKind）：binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/if-let/match(switch)/for/while/while-let/loop/closure/return/break/continue/array/struct/tuple/block/try/await/cast/native/macro。新增 70+ Java 关键字避让表、50+ Java std 方法映射表（Vec→List/Map/Set/Optional）、Java 类型映射（对齐 registry.ts TypeMap）。专属后端数量 8 → 9（rust/go/python/typescript/cpp/java + 3 static），消除 dhv 与 dhv-ts 的 Java 能力声明不一致。
