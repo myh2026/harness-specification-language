@@ -176,8 +176,7 @@ impl CodegenContext {
         backends.insert("yaml".into(), Box::new(static_res::YamlBackend));
         backends.insert("markdown".into(), Box::new(static_res::MarkdownBackend));
         backends.insert("json".into(), Box::new(static_res::JsonBackend));
-        // 38 后端注册表（BNF v1.4 §5.2）：其余语言经通用契约后端投射
-        // （类型/签名真实翻译 + @dhv:source-map 围栏内嵌 HSL 原文 + 未实现标记）
+        // 38 后端注册表（BNF v1.5 §5.2）：3 full + 9 logic + 20 contract + 6 raw
         for spec in crate::langs::LANGS {
             if backends.contains_key(spec.id) {
                 continue;

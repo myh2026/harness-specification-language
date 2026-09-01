@@ -1,12 +1,12 @@
 // ============================================================================
-// dhv/src/langs.rs — 后端语言注册表（BNF v1.4 §5.2，与 dhv-ts/src/backends/registry.ts 对齐）
+// dhv/src/langs.rs — 后端语言注册表（BNF v1.5 §5.2，与 dhv-ts/src/backends/registry.ts 对齐）
 // ----------------------------------------------------------------------------
 // 32 编程语言 + 6 静态格式 = 38 后端。
 // 能力分级（诚实边界）：
-//   full    —— 活体语句翻译（函数体真实转译）
-//   logic   —— 语句子集翻译，不可翻译时回退 contract
-//   contract—— 类型契约投射（类型/签名真实翻译，函数体围栏内嵌 HSL 原文）
-//   raw     —— 静态资源原文 + {{}} 插值渲染
+//   full    (3)  —— 活体语句翻译（函数体真实转译）：python / typescript / javascript
+//   logic   (9)  —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart
+//   contract(20) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
+//   raw     (6)  —— 静态资源原文 + {{}} 插值渲染：yaml / markdown / json / toml / ini / xml
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,10 +36,10 @@ pub const LANGS: &[LangSpec] = &[
     LangSpec { id: "rust", name: "Rust", tier: 1, ext: ".rs", line_comment: "//", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "go", name: "Go", tier: 1, ext: ".go", line_comment: "//", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "cpp", name: "C++", tier: 1, ext: ".cpp", line_comment: "//", comment_close: None, capability: Capability::Logic },
-    LangSpec { id: "java", name: "Java", tier: 1, ext: ".java", line_comment: "//", comment_close: None, capability: Capability::Contract },
-    LangSpec { id: "csharp", name: "C#", tier: 1, ext: ".cs", line_comment: "//", comment_close: None, capability: Capability::Contract },
-    LangSpec { id: "kotlin", name: "Kotlin", tier: 1, ext: ".kt", line_comment: "//", comment_close: None, capability: Capability::Contract },
-    LangSpec { id: "swift", name: "Swift", tier: 1, ext: ".swift", line_comment: "//", comment_close: None, capability: Capability::Contract },
+    LangSpec { id: "java", name: "Java", tier: 1, ext: ".java", line_comment: "//", comment_close: None, capability: Capability::Logic },
+    LangSpec { id: "csharp", name: "C#", tier: 1, ext: ".cs", line_comment: "//", comment_close: None, capability: Capability::Logic },
+    LangSpec { id: "kotlin", name: "Kotlin", tier: 1, ext: ".kt", line_comment: "//", comment_close: None, capability: Capability::Logic },
+    LangSpec { id: "swift", name: "Swift", tier: 1, ext: ".swift", line_comment: "//", comment_close: None, capability: Capability::Logic },
     // ===== Tier 2 · 脚本与动态（8）=====
     LangSpec { id: "ruby", name: "Ruby", tier: 2, ext: ".rb", line_comment: "#", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "php", name: "PHP", tier: 2, ext: ".php", line_comment: "//", comment_close: None, capability: Capability::Contract },
@@ -50,7 +50,7 @@ pub const LANGS: &[LangSpec] = &[
     LangSpec { id: "r", name: "R", tier: 2, ext: ".R", line_comment: "#", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "julia", name: "Julia", tier: 2, ext: ".jl", line_comment: "#", comment_close: None, capability: Capability::Contract },
     // ===== Tier 3 · 函数式（6）=====
-    LangSpec { id: "scala", name: "Scala", tier: 3, ext: ".scala", line_comment: "//", comment_close: None, capability: Capability::Contract },
+    LangSpec { id: "scala", name: "Scala", tier: 3, ext: ".scala", line_comment: "//", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "elixir", name: "Elixir", tier: 3, ext: ".ex", line_comment: "#", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "erlang", name: "Erlang", tier: 3, ext: ".erl", line_comment: "%", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "haskell", name: "Haskell", tier: 3, ext: ".hs", line_comment: "--", comment_close: None, capability: Capability::Contract },
@@ -60,7 +60,7 @@ pub const LANGS: &[LangSpec] = &[
     LangSpec { id: "zig", name: "Zig", tier: 4, ext: ".zig", line_comment: "//", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "nim", name: "Nim", tier: 4, ext: ".nim", line_comment: "#", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "crystal", name: "Crystal", tier: 4, ext: ".cr", line_comment: "#", comment_close: None, capability: Capability::Contract },
-    LangSpec { id: "dart", name: "Dart", tier: 4, ext: ".dart", line_comment: "//", comment_close: None, capability: Capability::Contract },
+    LangSpec { id: "dart", name: "Dart", tier: 4, ext: ".dart", line_comment: "//", comment_close: None, capability: Capability::Logic },
     LangSpec { id: "groovy", name: "Groovy", tier: 4, ext: ".groovy", line_comment: "//", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "objectivec", name: "Objective-C", tier: 4, ext: ".m", line_comment: "//", comment_close: None, capability: Capability::Contract },
     LangSpec { id: "d", name: "D", tier: 4, ext: ".d", line_comment: "//", comment_close: None, capability: Capability::Contract },

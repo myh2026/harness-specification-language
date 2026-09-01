@@ -2,6 +2,10 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## 0.2.47 (2026-09-01)
+
+- **langs.rs 能力标签同步**：java/csharp/kotlin/swift/scala/dart 六个语言自 v0.2.41–v0.2.46 已实现专属后端（Logic 级），但 `Capability` 枚举仍标记为 `Contract`，现已全部更正为 `Logic`。能力分级现为：3 Full（python/typescript/javascript）+ 9 Logic（rust/go/cpp/java/csharp/kotlin/swift/scala/dart）+ 20 Contract + 6 Raw = 38 后端。同步更新文件头注释（BNF v1.4 → v1.5）与 codegen/mod.rs 注册表注释。
+
 ## 0.2.46 (2026-09-01)
 
 - **Dart 专属后端新增**（codegen/dart_backend.rs，~1504 行）：Dart 是 Tier 4 系统与现代语言（registry.ts body: 'contract'），此前走通用 contract 后端（纯注释式契约），现生成真实 Dart 3 代码。struct → class（named, constructor）/ Record（tuple, Dart 3）/ class（unit）；enum（unit）→ sealed class + static const 实例；enum（data）→ sealed class + subclass + factory constructor（Dart 3 模式）；trait → abstract class（支持默认实现）；impl → class extends abstract class；fn → 顶层函数（支持 async）；const → const/final；graph → void main()。完整表达式转译（28 种 ExprKind）：binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/match(switch expression Dart 3)/for/while/while-let/loop/closure/return/break/continue/array/struct/tuple/try/catch/await/cast/if-let/async-block/native/macro。50+ Dart 关键字避让表（用 $ 后缀转义）。Dart 3 类型映射（对齐 registry.ts TypeMap）：String/bool/int/double/List/Map/Set/T?/void/Never/dynamic。50+ std 方法映射（Vec→List: push→add, pop→removeLast, len→length, is_empty→isEmpty, sort→sort, map, where/filter, fold→fold, any→any, all→every, flatMap→expand, contains, forEach; String: toString/trim/toLowerCase/toUpperCase/startsWith/endsWith/split/replaceAll; Option(?): is_some→!=null, is_none→==null, unwrap→!, unwrap_or→??, and_then→andThen; Map: insert→[]=, keys, values）。format! → 字符串插值 ${expr}，println! → print()。专属后端数量 13 → 14（rust/go/python/typescript/cpp/java/csharp/kotlin/swift/scala/dart + 3 static），首个 Dart 语言专属后端，消除 dhv 与 dhv-ts 的 Dart 能力声明不一致。
