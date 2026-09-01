@@ -2,6 +2,10 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## 0.2.38 (2026-09-01)
+
+- **Python 后端表达式全面覆盖**：python.rs 从 ~8 种表达式扩展到全部 33 种 ExprKind（literal/path/binary/unary/call/method/field/index/slice/range/assign/compound_assign/if/if-let/match/for/while/while-let/loop/closure/return/break/continue/array/array-repeat/struct/tuple/block/async-block/try/await/cast/native/macro），新增完整语句块转译、模式转译、Python 关键字避让、常用 std 方法映射表（50+ 方法）、format!/println! 宏转译；新增 Item::Enum/Trait/Impl/Const/TypeAlias/MacroRules/Graph 项支持；类型映射扩展 FnPtr/Never/Paren/char/HashMap 泛型参数。
+
 ## [0.2.37] — 2026-09-01 · 「Rust 后端表达式全面覆盖」版
 
 ### 改进
