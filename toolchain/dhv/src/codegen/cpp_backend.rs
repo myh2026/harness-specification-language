@@ -61,7 +61,7 @@ fn cpp_struct(s: &StructDef) -> String {
             }
         }
         StructKind::Tuple(fields) => {
-            for (i, f) in fields.iter().enumerate() {
+            for (i, _f) in fields.iter().enumerate() {
                 out.push_str(&format!("    std::tuple_element_t<{}, decltype(_tuple_)> _{};\n", i, i));
             }
         }
@@ -438,8 +438,8 @@ fn emit_expr_cpp(expr: &Expr) -> String {
             // C++ slice: just reference the vector (no built-in slicing)
             format!("{}", emit_expr_cpp(base))
         }
-        ExprKind::Range(re) => {
-            format!("/* range */")
+        ExprKind::Range(_re) => {
+            String::from("/* range */")
         }
         ExprKind::Assign { lhs, rhs } => {
             format!("{} = {}", emit_expr_cpp(lhs), emit_expr_cpp(rhs))
@@ -595,9 +595,8 @@ fn emit_expr_cpp(expr: &Expr) -> String {
                         let val = f.value.as_ref().map(emit_expr_cpp).unwrap_or_else(|| cpp_ident(&id.name).clone());
                         format!(".{} = {}", cpp_ident(&id.name), val)
                     }
-                    FieldIndex::Index(i, _) => {
-                        let val = f.value.as_ref().map(emit_expr_cpp).unwrap_or_else(|| "0".into());
-                        val
+                    FieldIndex::Index(_, _) => {
+                        f.value.as_ref().map(emit_expr_cpp).unwrap_or_else(|| String::from("0"))
                     }
                 }
             }).collect();
@@ -692,9 +691,7 @@ fn cpp_std_method(recv: &str, name: &str, args: &[String]) -> String {
         "last" => format!("_dhvLast({})", recv),
         "clone" => format!("{}", recv),
         "extend" => format!("_dhvExtend({}, {})", recv, a0()),
-        "insert" => format!("_dhvInsert({}, {}, {})", recv, a0(), a1()),
         "remove_at" => format!("_dhvRemoveAt({}, {})", recv, a0()),
-        "get" => format!("_dhvVecGet({}, {})", recv, a0()),
         // String methods
         "to_string" => format!("std::to_string({})", recv),
         "trim" => format!("_dhvTrim({})", recv),
@@ -712,7 +709,6 @@ fn cpp_std_method(recv: &str, name: &str, args: &[String]) -> String {
         "parse" => format!("_dhvParse<T>({})", recv),
         // Map methods
         "insert" => format!("{}[{}] = {}", recv, a0(), a1()),
-        "get" => format!("_dhvMapGet({}, {})", recv, a0()),
         "remove" => format!("_dhvMapRemove({}, {})", recv, a0()),
         "contains_key" => format!("({}.find({}) != {}.end())", recv, a0(), recv),
         "keys" => format!("_dhvKeys({})", recv),
@@ -741,8 +737,8 @@ fn cpp_match_condition(pat: &Pattern, scrut: &str) -> String {
         PatternKind::Literal(lit) => {
             format!("{} == {}", scrut, cpp_literal(lit))
         }
-        PatternKind::Ident { name, .. } => {
-            format!("true") // ident pattern always matches
+        PatternKind::Ident { .. } => {
+            String::from("true") // ident pattern always matches
         }
         PatternKind::Path(p) => {
             let path_name = p.segments.last().map(|s| s.name.clone()).unwrap_or_default();
@@ -765,7 +761,6 @@ fn cpp_match_condition(pat: &Pattern, scrut: &str) -> String {
             format!("({})", conds.join(" || "))
         }
         PatternKind::Range { .. } | PatternKind::Rest => "/* range/rest pattern */ true".into(),
-        _ => "true".into(),
     }
 }
 
@@ -774,7 +769,7 @@ fn cpp_pattern_binding(pat: &Pattern) -> (String, String) {
     match &pat.kind {
         PatternKind::Ident { name, .. } => ("const auto&".into(), cpp_ident(&name.name)),
         PatternKind::Wildcard { .. } => ("const auto&".into(), "_".into()),
-        PatternKind::TupleStruct { path, elems, .. } => {
+        PatternKind::TupleStruct { path, .. } => {
             let vname = path.segments.last().map(|s| cpp_ident(&s.name)).unwrap_or_default();
             (format!("const {}&", vname), "_v".into())
         }
@@ -791,7 +786,7 @@ fn cpp_let_condition(pat: &Pattern, scrut: &str) -> (String, Vec<String>) {
             "true".into()
         }
         PatternKind::Wildcard { .. } => "true".into(),
-        PatternKind::TupleStruct { path, elems, .. } => {
+        PatternKind::TupleStruct { path, .. } => {
             let vname = path.segments.last().map(|s| cpp_ident(&s.name)).unwrap_or_default();
             format!("std::holds_alternative<{}>({})", vname, scrut)
         }
@@ -818,6 +813,7 @@ fn cpp_let_condition(pat: &Pattern, scrut: &str) -> (String, Vec<String>) {
 }
 
 /// Translate pattern for use in variable declarations
+#[allow(dead_code)]
 fn cpp_pattern(pat: &Pattern) -> String {
     match &pat.kind {
         PatternKind::Ident { name, .. } => cpp_ident(&name.name),
@@ -853,6 +849,5 @@ fn cpp_pattern(pat: &Pattern) -> String {
             cpp_pattern(&pats[0])
         }
         PatternKind::Range { .. } | PatternKind::Rest => "/* range/rest pattern */ _".into(),
-        _ => "_".into(),
     }
 }
