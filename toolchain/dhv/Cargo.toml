@@ -1,6 +1,6 @@
 [package]
 name = "dhv"
-version = "0.2.51"
+version = "0.2.52"
 edition = "2021"
 description = "DHV — HSL (Harness Specification Language) 编译器：多后端源到源转译器"
 license = "MIT"

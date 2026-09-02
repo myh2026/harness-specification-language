@@ -16,6 +16,7 @@ import * as A from '../ast';
 import { LangSpec } from './registry';
 import { printType } from './typrint';
 import { transpileBody, TranspileError, languagePrelude } from './body';
+import { VERSION } from '../version';
 
 // ---------------------------------------------------------------------------
 // 上下文与工具
@@ -385,7 +386,7 @@ function fileHeader(p: P, items: ProjectedItem[], goSkipHelpers = false): string
   const c = (text: string): string => cline(lang, text);
   const head: string[] = [];
   head.push(c('='.repeat(70)));
-  head.push(c(`本文件由 DHV v0.2.10 从 HSL 源码投射生成（${lang.name} 后端 · ${ctx.scale} 尺度）`));
+  head.push(c(`本文件由 DHV v${VERSION} 从 HSL 源码投射生成（${lang.name} 后端 · ${ctx.scale} 尺度）`));
   head.push(c(`逻辑源：${items.map((i) => i.module).filter((v, i, a) => a.indexOf(v) === i).join(', ')}`));
   head.push(c('@dhv:generated — 本区块为内核标记，不可手改（下次编译覆盖）'));
   head.push(c('可编辑区：@dhv:source-map 围栏之间（修改后 dhv sync 回写 HSL 源码）'));

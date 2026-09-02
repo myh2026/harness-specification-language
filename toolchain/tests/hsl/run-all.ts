@@ -282,6 +282,41 @@ test('emit', 'backends-demo 全 38 后端 emit（语法全过）', () => {
   }
 });
 
+test('emit', '静态 json 真校验（非法红灯 / 合法绿灯）· v0.2.52', () => {
+  const dir = path.join(TMP, 'staticjson');
+  fs.mkdirSync(dir, { recursive: true });
+  // 负例：YAML 风格内容投 .json —— v0.2.51 前无条件标 pass（tool=embedded）的盲区
+  fs.writeFileSync(path.join(dir, 'bad.hsl'), `block cfg {
+    this is: not json
+}
+project {
+    cfg -> "config/bad.json" : json,
+}
+fn main() -> i64 { 0 }
+`, 'utf-8');
+  const bad = run(['emit', path.join(dir, 'bad.hsl'), '--out', path.join(dir, 'bad-out')]);
+  assertEq(bad.code, 1, '非法 JSON 投射 emit 应 exit 1');
+  assert(bad.stdout.includes('语法✗') && bad.stdout.includes('json.parse'), `应标注 json.parse 失败：${bad.stdout.slice(0, 300)}`);
+  const badManifest = JSON.parse(fs.readFileSync(path.join(dir, 'bad-out', 'manifest.json'), 'utf-8')) as { files: { lang: string; syntax_check: string; syntax_tool: string }[] };
+  const bf = badManifest.files.find((f) => f.lang === 'json')!;
+  assertEq(bf.syntax_check, 'fail', 'manifest 应记 fail');
+  assertEq(bf.syntax_tool, 'json.parse', 'manifest 应记 tool=json.parse');
+  // 正例：合法 JSON block（含 {{}} 插值）应绿灯且产物可真解析
+  fs.writeFileSync(path.join(dir, 'good.hsl'), `const MAX_TURNS: i64 = 24;
+block cfg {
+    { "agent": { "max_turns": {{MAX_TURNS}} } }
+}
+project {
+    cfg -> "config/agent.json" : json,
+}
+fn main() -> i64 { 0 }
+`, 'utf-8');
+  const good = run(['emit', path.join(dir, 'good.hsl'), '--out', path.join(dir, 'good-out')]);
+  assertEq(good.code, 0, `合法 JSON emit 应 exit 0：${good.stdout.slice(-400)}`);
+  const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'good-out', 'config/agent.json'), 'utf-8')) as { agent: { max_turns: number } };
+  assertEq(parsed.agent.max_turns, 24, '合法 JSON 应可解析且插值渲染正确');
+});
+
 test('emit', 'dsh emit（真实 harness 项目投射）', () => {
   const out = path.join(TMP, 'dsh');
   const r = run(['emit', 'examples/dsh/dsh.hsl', '--out', out]);

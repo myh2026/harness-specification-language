@@ -1,23 +1,32 @@
 # ============================================================================
-# 定时测试完善（Scheduled Tests）
+# Quarter Tests — 15 分钟巡检（快车道）
 # ----------------------------------------------------------------------------
-# 触发：每日 UTC 20:30（北京 04:30）+ 手动 workflow_dispatch
-# 覆盖：dhv-ts 全量套件 / 官方示例回归（nova·dsh·backends-demo）/
-#       IDE 扩展校验 / Rust 编译器回归 / 双编译器一致性
-# 完善：任一 job 失败 → 自动创建带 scheduled-test-failure 标签的 Issue 跟踪，
-#       恢复全绿后自动评论并关闭 —— 问题落地成 Issue 才叫「完善」
+# 触发：每 15 分钟（cron */15，GitHub Actions 支持的最短间隔为 5 分钟）
+#       + 手动 workflow_dispatch
+# 覆盖（用户指定的三件事）：
+#   1. 实装工具链 —— cargo build --release 真实构建 dhv（Rust 编译器），
+#      并用编译产物真实跑一次 check（二进制冒烟，非仅编译成功）
+#   2. 3 个项目 —— nova（15 模块静态检查）/ dsh（剧本端到端：真实改文件
+#      + 真跑测试）/ backends-demo（38 后端全测）
+#   3. 38 后端全测 —— tests/verify_backends.ts：全部文件语法校验通过 +
+#      零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级
+#      真解析（v0.2.52 起非法 JSON 红灯）
+# 完善：任一 job 失败 → 自动创建/更新 scheduled-test-failure 标签 Issue，
+#       恢复全绿自动评论并关闭
+# 节奏分层：本工作流 = 15 分钟快车道（分钟级发现）；scheduled-tests.yml =
+#       每日 UTC 20:30 全量深水区（110+ 用例 / fuzz / cargo test / 双编译器一致性）
 # ============================================================================
 
-name: Scheduled Tests
+name: Quarter Tests
 
 on:
   schedule:
-    - cron: '30 20 * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 concurrency:
-  group: scheduled-tests
-  cancel-in-progress: false
+  group: quarter-tests
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,25 +37,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── 1. dhv-ts 全量套件（回归 / 静态规则 / 38 后端 emit / sync / fuzz / CLI / 压力）──
-  dhv-ts-suite:
-    name: dhv-ts full suite
+  # ── 1. 实装工具链（cargo build --release + 二进制真实冒烟）────────────
+  toolchain-build:
+    name: 实装工具链（cargo build + dhv 冒烟）
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
         with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Run dhv-ts test suite
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+      - name: cargo build --release（实装 dhv）
+        working-directory: toolchain/dhv
+        run: cargo build --release
+      - name: dhv 冒烟（编译产物真实运行 check nova）
         working-directory: toolchain
-        run: bun tests/hsl/run-all.ts
+        run: ./dhv/target/release/dhv check examples/nova/nova.hsl
 
-  # ── 2. 官方示例回归 ───────────────────────────────────────────────────
-  examples-regression:
-    name: Examples regression (nova / dsh / backends-demo)
+  # ── 2. 3 个项目回归 + 38 后端全测 ────────────────────────────────────
+  three-projects:
+    name: 3 项目（nova / dsh / backends-demo·38 后端全测）
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -72,82 +90,17 @@ jobs:
           assert run['ok'] is True, run
           print('  ok: dsh 剧本端到端 run.ok=True')
           PYEOF
-      - name: backends-demo — 38 后端投射 + 全量覆盖校验
+      - name: backends-demo — 38 后端全测（投射 + 全量覆盖校验）
         working-directory: toolchain
         run: |
           rm -rf /tmp/bd
           bun dhv-ts/src/main.ts emit examples/backends-demo/agent.hsl --out /tmp/bd
           bun tests/verify_backends.ts /tmp/bd
-          python3 - <<'PYEOF'
-          import json
-          m = json.load(open('/tmp/bd/manifest.json'))
-          assert len(m['files']) == 214, f"投射文件数应为 214，实得 {len(m['files'])}"
-          print('  ok: 214 文件（数量守恒断言）')
-          PYEOF
 
-  # ── 3. IDE 扩展（VSCode）发布级校验 ──────────────────────────────────
-  ide-validate:
-    name: IDE extension validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Validate IDE extension
-        run: node ide/tests/validate.js
-
-  # ── 4. Rust 编译器回归（dhv）─────────────────────────────────────────
-  rust-test:
-    name: Rust test (cargo test --release)
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            toolchain/dhv/target
-          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
-          restore-keys: rust-${{ runner.os }}-
-      - name: Build & test
-        working-directory: toolchain/dhv
-        run: cargo test --release
-
-  # ── 5. 双编译器一致性（dhv ↔ dhv-ts）────────────────────────────────
-  conformance:
-    name: Dual-compiler conformance
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            toolchain/dhv/target
-          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
-          restore-keys: rust-${{ runner.os }}-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Build dhv release binary
-        working-directory: toolchain/dhv
-        run: cargo build --release
-      - name: Run conformance suite
-        working-directory: toolchain
-        run: bash tests/run_conformance.sh
-
-  # ── 6. 失败自动开 Issue（测试→跟踪→完善闭环）────────────────────────
+  # ── 3. 失败自动开 Issue（测试→跟踪→完善闭环）────────────────────────
   report:
     name: Auto-issue on failure
-    needs: [dhv-ts-suite, examples-regression, ide-validate, rust-test, conformance]
+    needs: [toolchain-build, three-projects]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -185,7 +138,7 @@ jobs:
               return;
             }
             const body = [
-              `**${stamp} 定时测试失败**`,
+              `**${stamp} 定时测试失败（15 分钟巡检）**`,
               '',
               `失败矩阵：${failed.map(f => '`' + f + '`').join(' · ')}`,
               '',
@@ -201,7 +154,7 @@ jobs:
             } else {
               const created = await github.rest.issues.create({
                 owner, repo,
-                title: '⏰ 定时测试失败（Scheduled Tests）',
+                title: '⏰ 定时测试失败（Quarter / Scheduled Tests）',
                 body, labels: [LABEL]
               });
               core.info(`已创建跟踪 Issue #${created.data.number}`);

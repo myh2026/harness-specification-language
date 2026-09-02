@@ -12,7 +12,8 @@ import { LoadedProgram } from '../linker';
 import { Interp } from '../interp';
 import { getLang, isStaticLangId, codegenTier } from './registry';
 import { emitFile, emitTypeDeclOnly, ProjectedItem, EmitCtx, javaWrapperOf } from './decls';
-import { validateGeneratedFile } from './validate';
+import { validateGeneratedFile, validateStaticGeneratedFile } from './validate';
+import { VERSION } from '../version';
 
 // ---------------------------------------------------------------------------
 // 跨文件类型依赖解析（总纲 §4 物理层：投射产物之间的类型可见性）
@@ -926,10 +927,12 @@ export async function emitProgram(
   }
 
   // 交叉语法校验（Lint 第 2 层：目标语言真实工具链）
+  // 静态格式：json 用 JSON.parse 真解析（v0.2.52 起，修复「YAML 内容投 .json 也标 pass」的校验盲区）；
+  // 其余静态格式（yaml/toml/ini/xml/markdown）无宿主校验器可用，保持 embedded（原样搬运，如实标注）。
   if (opts.validate !== false) {
     for (const file of files) {
       if (file.tier === 'static') {
-        file.validation = { ok: true, tool: 'embedded' };
+        file.validation = validateStaticGeneratedFile(path.resolve(outDir, file.path), file.lang);
         continue;
       }
       const abs = path.resolve(outDir, file.path);
@@ -939,7 +942,7 @@ export async function emitProgram(
 
   // manifest
   const manifest = {
-    dhv: 'dhv-ts 0.2.10',
+    dhv: `dhv-ts ${VERSION}`,
     entry: path.basename(program.entry),
     scale,
     backends: 38,

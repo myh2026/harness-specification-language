@@ -68,6 +68,25 @@ function toolName(langId: string): string {
   }
 }
 
+/** 静态资源校验（emit Lint 第 2 层的静态分支）。
+ *  json：JSON.parse 真解析（bun 内建，零依赖）—— 修复 v0.2.51 前「任意内容投 .json
+ *  也无条件标 pass（tool=embedded）」的校验盲区（实例：backends-demo 曾把 YAML 内容
+ *  投到 config/agent.json，生成物格式非法却绿灯）。
+ *  其余静态格式（yaml/toml/ini/xml/markdown）：宿主无零依赖校验器，保持 embedded
+ *  （原样搬运、如实标注「未校验」）。 */
+export function validateStaticGeneratedFile(absPath: string, langId: string): ValidationResult {
+  if (langId === 'json') {
+    try {
+      JSON.parse(fs.readFileSync(absPath, 'utf-8'));
+      return { ok: true, tool: 'json.parse' };
+    } catch (err) {
+      const detail = (err as Error).message || '';
+      return { ok: false, tool: 'json.parse', detail: detail.slice(0, 400) };
+    }
+  }
+  return { ok: true, tool: 'embedded' };
+}
+
 /** 括号/引号平衡启发式（注释与字符串内忽略；识别 (* *)、' 注释等方言） */
 export function balanceCheck(code: string, langId = ''): { ok: boolean; detail?: string } {
   let depth = 0;

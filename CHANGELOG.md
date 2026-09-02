@@ -2,6 +2,15 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.52] (2026-09-02)
+
+**静态产物真校验批次**（来源：为「38 后端全测」巡检建立产物级断言时触发，先最小化复现再修复，111 用例回归全绿）：
+
+- **静态 json 后端真校验**（backends/validate.ts `validateStaticGeneratedFile` + emit.ts 接线，校验盲区级）：此前静态格式后端的 `syntax_check` 无条件标 `pass`（tool=`embedded`）——任意内容投 `.json` 都绿灯。实测：官方示例 backends-demo 把 **YAML 内容**的同一 block 投到 `config/agent.json/.toml/.ini/.xml`，5 个生成物**格式全部非法**却全部通过校验（manifest 证据：`syntax_check: "pass", syntax_tool: "embedded"`，`JSON.parse` 报 `Unexpected identifier "agent"`）。现 json 静态产物用 `JSON.parse` 真解析（bun 内建，零依赖）：失败 → 输出 `语法✗ json.parse`、manifest 记 `fail`、emit 退出码 1（与编程语言后端校验失败的既有行为一致）；yaml/toml/ini/xml/markdown 宿主无零依赖校验器，如实保持 `embedded`。锁定用例：`run-all.ts`「静态 json 真校验（非法红灯 / 合法绿灯）」——负例断言 exit 1 + manifest fail，正例断言合法 JSON（含 `{{}}` 插值渲染为 24）可真解析。
+- **backends-demo 静态块重写**（examples/backends-demo/agent.hsl，示例正确性）：`agent_config` 拆为六个格式各自的合法内容（yaml / json / toml / ini / xml + markdown 独立），同一 agent 配置语义、`{{MAX_TURNS}}` 插值在六种格式中一致渲染为 24。原写法「一个 YAML block 投五种后缀」在上条修复后必然红灯，本条让示例重新成为「六静态后端各自合法」的正例示范。
+- **工具链版本串三处硬编码漂移**（新增 `dhv-ts/src/version.ts` 单一来源）：横幅（main.ts）、manifest `dhv` 字段（emit.ts）、生成文件头注释（decls.ts）三处各自硬编码，全部停留在 `0.2.10`（package.json 实为 0.2.5x）——manifest 声称的工具链版本与真实二进制不符。现统一从 package.json 读取（`version.ts`），删一处忘一处不再可能。
+- **新增 `toolchain/tests/verify_backends.ts`**：38 后端全量覆盖校验脚本（manifest 全 pass / 零告警 / 注册表 `ALL_LANGS(38)` ↔ 产物语言集合**双向相等** / 静态 json 内容级真解析），供 15 分钟巡检与每日定时任务共用。
+
 ## [0.2.51] (2026-09-02)
 
 **外部实测驱动的修复批次**（来源：以独立项目实测 HSL 撰写数学/物理验证 harness 与红蓝对抗 harness 过程中触发的问题，全部先最小化复现再修复，110 用例回归全绿）：

@@ -22,8 +22,7 @@ import * as A from './ast';
 import { listLangs, LANGS, STATIC_LANGS } from './backends/registry';
 import { emitProgram } from './backends/emit';
 import { syncFile } from './backends/sync';
-
-const VERSION = '0.2.10';
+import { VERSION } from './version';
 
 interface CliArgs {
   cmd: string;

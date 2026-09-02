@@ -44,12 +44,52 @@ graph DemoAgent {
     }
 }
 
+// 六个静态资源块：同一份 agent 配置语义，各自写成目标格式的合法内容。
+// （v0.2.52 修复：此前把 YAML 内容的同一个 block 投成 .json/.toml/.ini/.xml，
+//   生成物格式全部非法但被「embedded」绿灯掩盖 —— 静态格式内容必须格式正确。）
+
 block agent_config {
     agent:
       name: BackendsDemo
       version: 2
       max_turns: {{MAX_TURNS}}
       languages: 38
+}
+
+block agent_config_json {
+    {
+      "agent": {
+        "name": "BackendsDemo",
+        "version": 2,
+        "max_turns": {{MAX_TURNS}},
+        "languages": 38
+      }
+    }
+}
+
+block agent_config_toml {
+    [agent]
+    name = "BackendsDemo"
+    version = 2
+    max_turns = {{MAX_TURNS}}
+    languages = 38
+}
+
+block agent_config_ini {
+    [agent]
+    name = BackendsDemo
+    version = 2
+    max_turns = {{MAX_TURNS}}
+    languages = 38
+}
+
+block agent_config_xml {
+    <agent>
+      <name>BackendsDemo</name>
+      <version>2</version>
+      <max_turns>{{MAX_TURNS}}</max_turns>
+      <languages>38</languages>
+    </agent>
 }
 
 block agent_instructions {
@@ -129,13 +169,13 @@ project {
     ToolResult          -> "gen/objectivec/ToolResult.m"      : objectivec,
     ToolResult          -> "gen/d/toolresult.d"                : d,
     ToolResult          -> "gen/vb/ToolResult.vb"              : vb,
-    // ---- 静态格式（6）----
-    agent_config    -> "config/agent.yml"              : yaml,
-    agent_instructions -> "docs/AGENTS.md"             : markdown,
-    agent_config    -> "config/agent.json"             : json,
-    agent_config    -> "config/agent.toml"             : toml,
-    agent_config    -> "config/agent.ini"              : ini,
-    agent_config    -> "config/agent.xml"              : xml,
+    // ---- 静态格式（6）—— 同一语义，六种格式各自合法 ----
+    agent_config        -> "config/agent.yml"      : yaml,
+    agent_instructions  -> "docs/AGENTS.md"        : markdown,
+    agent_config_json   -> "config/agent.json"     : json,
+    agent_config_toml   -> "config/agent.toml"     : toml,
+    agent_config_ini    -> "config/agent.ini"      : ini,
+    agent_config_xml    -> "config/agent.xml"      : xml,
     // ---- 其他构件抽样（跨 tier 验证 enum/trait/fn/graph/impl）----
     Action          -> "gen/python/action.py"          : python,
     Action          -> "gen/typescript/action.ts"      : typescript,
