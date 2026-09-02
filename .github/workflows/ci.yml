@@ -112,7 +112,8 @@ jobs:
       - name: Extract dhv-ts version
         id: dhv-ts
         working-directory: toolchain/dhv-ts
-        run: echo "version=$(grep -oP '(?<="version": ")\d+\.\d+\.\d+' package.json)" >> $GITHUB_OUTPUT
+        run: |
+          echo "version=$(grep -oP '(?<="version": ")\d+\.\d+\.\d+' package.json)" >> $GITHUB_OUTPUT
 
       - name: Verify versions match
         run: |
