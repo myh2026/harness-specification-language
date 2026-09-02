@@ -256,6 +256,7 @@ export function cloneValue(v: unknown): unknown {
 
 // ---- Rust 风格 format! 引擎 ----
 // 支持：{} 位置参数 / {0} 索引 / {:?} 调试 / {{ }} 转义
+// v0.2.51 新增：{:.N} 浮点十进制精度（此前精度说明符被静默丢弃）
 export function hslFormat(fmt: string, args: unknown[]): string {
   let out = '';
   let ai = 0;
@@ -269,25 +270,45 @@ export function hslFormat(fmt: string, args: unknown[]): string {
       if (end < 0) throw new HRuntimeError(`format! 模板缺少 "}"：${fmt}`);
       const spec = fmt.slice(i + 1, end);
       i = end + 1;
-      if (spec === '' || spec === ':?' || spec === ':e' || /^:.*$/.test(spec) === false && /^\d+$/.test(spec)) {
-        // {} / {:?} / {0}
-        let idx = ai;
-        if (/^\d+$/.test(spec)) idx = parseInt(spec, 10);
-        else ai++;
-        const v = args[idx];
-        out += spec.includes(':?') ? debug(v) : display(v);
-        continue;
-      }
-      // {name:...} 不支持；按位置处理
+      // 形态解析：<idx|空>[:<flags>]；本引擎实现 .N 精度子集
+      const colon = spec.indexOf(':');
+      const namePart = colon >= 0 ? spec.slice(0, colon) : spec;
+      const flags = colon >= 0 ? spec.slice(colon + 1) : '';
       let idx = ai;
-      if (/^\d+$/.test(spec.split(':')[0] ?? '')) idx = parseInt(spec.split(':')[0]!, 10);
+      if (/^\d+$/.test(namePart)) idx = parseInt(namePart, 10);
       else ai++;
       const v = args[idx];
-      out += spec.includes(':?') ? debug(v) : display(v);
+      if (flags === '?') {
+        out += debug(v);
+        continue;
+      }
+      const precMatch = /^\.(\d+)$/.exec(flags);
+      if (precMatch) {
+        // {:.N} —— 数值按十进制 N 位定点输出；非数值保持 display
+        // （Rust 对字符串的精度语义是截断，静默采用截断会改变语义，故不动）
+        if (typeof v === 'number') {
+          out += formatFloatPrec(v, parseInt(precMatch[1]!, 10));
+        } else {
+          out += display(v);
+        }
+        continue;
+      }
+      out += display(v);
       continue;
     }
     out += c;
     i++;
   }
   return out;
+}
+
+/**
+ * 浮点十进制定点格式化（{:.N}）。
+ * 注意：JS toFixed 的平局舍入与 Rust 的 round-half-to-even 在精确平局值上
+ * 可能相差一位（如 2.5 的 {:.0}）；工程数值域内不可观察。
+ */
+function formatFloatPrec(v: number, n: number): string {
+  if (Number.isNaN(v)) return 'NaN';
+  if (!Number.isFinite(v)) return v > 0 ? 'inf' : '-inf';
+  return v.toFixed(n);
 }

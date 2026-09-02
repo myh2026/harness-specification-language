@@ -283,7 +283,15 @@ export function emitFile(
     ctx.goHelpersState.done = true;
   }
   out.push(...fileHeader(p, items, goSkipHelpers));
-  if (extraHeader) out.push(...extraHeader);
+  if (extraHeader) {
+    // v0.2.51：接线 import 置于「运行期助手」def 之前 —— 此前附加在助手之后，
+    // 在「exec 裸函数体」消费形态（tests/hsl 语义级验证）下 `from color import Red`
+    // 会遮蔽消费方在 exec 命名空间提供的同名桩类（isinstance 判定失效）。
+    // 置于助手前既符合 import 靠近文件头的惯例，也消除遮蔽。
+    const helperIdx = out.findIndex((l) => l.includes('运行期助手'));
+    if (helperIdx >= 0) out.splice(helperIdx, 0, ...extraHeader, '');
+    else out.push(...extraHeader);
+  }
 
   // ---- 项按 类别排序：类型 → trait → impl → fn → graph ----
   const order: Record<string, number> = { struct: 0, enum: 1, typealias: 2, const: 3, trait: 4, impl: 5, fn: 6, graph: 7, blockres: 8 };
@@ -419,6 +427,8 @@ function fileHeader(p: P, items: ProjectedItem[], goSkipHelpers = false): string
     }
     case 'python': {
       head.push('from __future__ import annotations', 'from dataclasses import dataclass, field', 'from typing import Any, Optional, Dict, List, Callable');
+      // v0.2.51：std/math 函数与常量映射为 math.*（body.ts 路径映射；未使用无害）
+      head.push('import math');
       head.push(...languagePrelude('python'));
       break;
     }

@@ -37,15 +37,15 @@ export class ContinueSignal extends Error {
 
 // ---- 环境 ----
 export class Env {
-  vars = new Map<string, { value: unknown; mut: boolean }>();
+  vars = new Map<string, { value: unknown; mut: boolean; floatTy?: boolean }>();
   constructor(public parent?: Env) {}
-  lookup(name: string): { value: unknown; mut: boolean } | undefined {
+  lookup(name: string): { value: unknown; mut: boolean; floatTy?: boolean } | undefined {
     const hit = this.vars.get(name);
     if (hit) return hit;
     return this.parent?.lookup(name);
   }
-  declare(name: string, value: unknown, mut: boolean): void {
-    this.vars.set(name, { value, mut });
+  declare(name: string, value: unknown, mut: boolean, floatTy?: boolean): void {
+    this.vars.set(name, { value, mut, floatTy });
   }
   set(name: string, value: unknown): boolean {
     const hit = this.vars.get(name);
@@ -299,7 +299,7 @@ export class Interp {
       if (!this.matchPattern(p.pat, arg, binds, env)) {
         throw new HRuntimeError(`函数 ${fnDef.name} 第 ${ai} 个参数模式不匹配：${debug(arg)}`);
       }
-      for (const [n, b] of binds) env.declare(n, b.value, b.mut || p.mut === true);
+      for (const [n, b] of binds) env.declare(n, b.value, b.mut || p.mut === true, isFloatTy(p.ty) && p.pat.kind === 'binding');
     }
     this.frames.push({ ret: fnDef.ret, module, name: fnDef.name });
     try {
@@ -345,7 +345,7 @@ export class Interp {
     }
     for (let i = 0; i < graphDef.params.length; i++) {
       const p = graphDef.params[i]!;
-      env.declare(p.name, args[i], p.mut);
+      env.declare(p.name, args[i], p.mut, isFloatTy(p.ty));
     }
     const edges: A.EdgeDecl[] = [];
     for (const gs of graphDef.body) if (gs.t === 'edge') edges.push(gs.decl);
@@ -451,7 +451,7 @@ export class Interp {
           }
           throw new HRuntimeError(`let 模式不匹配：${debug(value)}（${st.pat.kind}）`);
         }
-        for (const [n, b] of binds) env.declare(n, b.value, st.mut || b.mut);
+        for (const [n, b] of binds) env.declare(n, b.value, st.mut || b.mut, isFloatTy(st.ty) && st.pat.kind === 'binding');
         return undefined;
       }
       case 'expr':
@@ -761,6 +761,12 @@ export class Interp {
       case '/':
         if (typeof l === 'number' && typeof r === 'number') {
           if (r === 0) throw new HRuntimeError('除以零');
+          // v0.2.51 修复：静态浮点性优先于动态截断启发 —— `1.0/7.0`、
+          // `x as f64 / y as f64` 此前因 JS 里 1.0===1 被当作整数除法截断为 0。
+          // 探测与 backends/body.ts exprKind 的 float 传播同构（字面量/cast/
+          // 算术二元递归）；仅当双操作数均无静态浮点信号且运行时值均为整数时
+          // 才按 i64 截断（整数值浮点变量是已知近似，完整类型推导归 dhv）。
+          if (exprFloaty(e.lhs, env) || exprFloaty(e.rhs, env)) return l / r;
           return Number.isInteger(l) && Number.isInteger(r) ? Math.trunc(l / r) : l / r;
         }
         if (typeof l === 'bigint' || typeof r === 'bigint') {
@@ -815,6 +821,8 @@ export class Interp {
       case '/':
         if (typeof cur === 'number' && typeof rhs === 'number') {
           if (rhs === 0) throw new HRuntimeError('除以零');
+          // v0.2.51：与 evalBinary '/' 同款静态浮点性探测（`x /= 7.0` 类）
+          if (exprFloaty(valueExpr, env) || exprFloaty(target, env)) return cur / rhs;
           return Number.isInteger(cur) && Number.isInteger(rhs) ? Math.trunc(cur / rhs) : cur / rhs;
         }
         throw new HRuntimeError(`"${op}" 不能用于 ${typeNameOf(cur)} 与 ${typeNameOf(rhs)}`);
@@ -1543,6 +1551,46 @@ function isPlaceExpr(e: A.Expr): boolean {
   if (e.kind === 'field') return isPlaceExpr(e.recv);
   if (e.kind === 'index') return isPlaceExpr(e.recv);
   return false;
+}
+
+/**
+ * 除法的静态浮点性探测（v0.2.51）—— 与 backends/body.ts exprKind 的 float
+ * 传播同构：float 字面量 / as f32|f64 转换 / 算术二元递归 / 显式 f64·f32
+ * 类型注解的绑定任一命中即浮点除法。
+ * 背景：JS 中 1.0 === 1，整数值的浮点字面量在运行期丢失浮点性，此前的
+ * 「双整数值 → 截断」启发把 `1.0/7.0` 静默算成 0。变量承载整数值且无
+ * 注解时仍是已知近似（完整类型推导归 dhv Rust 编译器，BNF 已知限制 #1）。
+ */
+function exprFloaty(e: A.Expr, env?: Env): boolean {
+  switch (e.kind) {
+    case 'lit':
+      return e.lit.t === 'float';
+    case 'path': {
+      // 显式 f64/f32 注解的绑定（类型在 Rust 语义下不可变更，可靠）
+      if (!env) return false;
+      return env.lookup(e.segs[0]!)?.floatTy === true;
+    }
+    case 'cast': {
+      const ty = e.ty;
+      if (ty.kind === 'path') {
+        const last = ty.segs[ty.segs.length - 1]!;
+        return last === 'f32' || last === 'f64';
+      }
+      return false;
+    }
+    case 'binary':
+      if (['/', '*', '-', '+'].includes(e.op)) return exprFloaty(e.lhs, env) || exprFloaty(e.rhs, env);
+      return false;
+    default:
+      return false;
+  }
+}
+
+/** 类型注解是否为 f32/f64（浮点性追踪的静态信号） */
+function isFloatTy(ty: A.HType | undefined): boolean {
+  if (!ty || ty.kind !== 'path') return false;
+  const last = ty.segs[ty.segs.length - 1]!;
+  return last === 'f32' || last === 'f64';
 }
 
 function typeNameOf(v: unknown): string {

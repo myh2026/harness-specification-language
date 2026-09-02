@@ -795,6 +795,15 @@ export class Body {
             if (L === 'cpp') return 'std::nullopt';
             if (L === 'go') return 'nil';
           }
+          // v0.2.51：std/math 常量（PI/E）—— 此前裸名直出，生成物 NameError
+          if (e.segs[0] === 'PI' || e.segs[0] === 'E') {
+            const n = e.segs[0]!;
+            if (L === 'python') return `math.${n === 'PI' ? 'pi' : 'e'}`;
+            if (L === 'typescript' || L === 'javascript') return `Math.${n}`;
+            if (L === 'rust') return `std::f64::consts::${n}`;
+            if (L === 'go') return `math.${n}`;
+            if (L === 'cpp') return n === 'PI' ? '3.141592653589793' : '2.718281828459045';
+          }
           return ident(e.segs[0]!, L);
         }
         return this.pathValue(e.segs);
@@ -970,6 +979,11 @@ export class Body {
     const head = segs[0]!;
     const tail = segs[segs.length - 1]!;
     if (segs.length === 1) {
+      // v0.2.51：std/math 自由函数映射 —— 此前裸名直出（sin(x) → sin(x)），
+      // python/ts 生成物 NameError / 编译错误。rust/go/cpp 的自由函数是方法
+      // 形态（(x).sin()），不可廉价映射 —— 抛错触发诚实 contract 回退。
+      const mathed = stdMathFreeCall(head, args, L);
+      if (mathed !== null) return mathed;
       if (head === 'Some') {
         if (L === 'python' || L === 'typescript' || L === 'javascript') return args[0] ?? 'None';
         if (L === 'rust') return `Some(${args.join(', ')})`;
@@ -1419,7 +1433,23 @@ export class Body {
 
   private tokensToExpr(toks: FlatTok[]): string {
     if (toks.length === 0) throw new TranspileError('空宏参数');
-    const src = toks.map((t) => t.text).join(' ');
+    // v0.2.51 修复：string/char/rawstr token 的 text 是**不带引号的裸内容** ——
+    // 此前直接 join 再重词法化，宏实参里的字符串字面量丢失引号：含 `'` 的
+    // （如 SQL 注入签名 "' or 1=1"）触发 LexError；不含特殊字符的静默变成
+    // 标识符（错误但不报错）。现按 token 类型重建可词法化源码。
+    const requote = (t: FlatTok): string => {
+      switch (t.kind) {
+        case 'string':
+          return JSON.stringify(t.text);
+        case 'char':
+          return `'${t.text.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+        case 'rawstr':
+          return t.text.includes('"') ? `r#"${t.text}"#` : `r"${t.text}"`;
+        default:
+          return t.text;
+      }
+    };
+    const src = toks.map(requote).join(' ');
     const lexToks = new Lexer(src, '<macro-emit>').tokenize();
     const exprs = parseExprsFromTokens(lexToks, '<macro-emit>');
     if (exprs.length !== 1) throw new TranspileError('宏参数非单一表达式');
@@ -1433,7 +1463,7 @@ export class Body {
 
   private formatString(fmt: string, args: string[]): string {
     const L = this.lang.id;
-    const parts: { lit?: string; arg?: string }[] = [];
+    const parts: { lit?: string; arg?: string; prec?: number }[] = [];
     let ai = 0;
     let i = 0;
     let literal = '';
@@ -1447,11 +1477,19 @@ export class Body {
         const spec = fmt.slice(i + 1, end);
         i = end + 1;
         if (literal) { parts.push({ lit: literal }); literal = ''; }
+        // 形态解析（与 values.ts hslFormat 同步）：<idx|空>[:<flags>]
+        // v0.2.51：实现 .N 精度子集 —— 此前精度说明符被静默丢弃，
+        // 生成端输出无精度的插值（错误但不报错），违反宁缺毋滥纪律
+        const colon = spec.indexOf(':');
+        const namePart = colon >= 0 ? spec.slice(0, colon) : spec;
+        const flags = colon >= 0 ? spec.slice(colon + 1) : '';
         let idx = ai;
-        if (/^\d+$/.test(spec)) idx = parseInt(spec, 10);
-        else if (spec === '' || spec.startsWith(':')) ai++;
-        const isDebug = spec.includes(':?');
-        parts.push({ arg: isDebug ? this.debugWrap(args[idx] ?? 'null') : args[idx] ?? 'null' });
+        if (/^\d+$/.test(namePart)) idx = parseInt(namePart, 10);
+        else ai++;
+        const isDebug = flags === '?';
+        const precMatch = /^\.(\d+)$/.exec(flags);
+        const prec = !isDebug && precMatch ? parseInt(precMatch[1]!, 10) : undefined;
+        parts.push({ arg: isDebug ? this.debugWrap(args[idx] ?? 'null') : args[idx] ?? 'null', prec });
         continue;
       }
       literal += c;
@@ -1470,12 +1508,18 @@ export class Body {
 
     if (L === 'python') {
       let out = '';
-      for (const p of parts) out += p.lit !== undefined ? escLit(p.lit) : `{${p.arg}}`;
+      for (const p of parts) {
+        if (p.lit !== undefined) { out += escLit(p.lit); continue; }
+        out += p.prec !== undefined ? `{(${p.arg}):.${p.prec}f}` : `{${p.arg}}`;
+      }
       return `f"${out}"`;
     }
     if (L === 'typescript' || L === 'javascript') {
       let out = '';
-      for (const p of parts) out += p.lit !== undefined ? escLit(p.lit) : `\${${p.arg}}`;
+      for (const p of parts) {
+        if (p.lit !== undefined) { out += escLit(p.lit); continue; }
+        out += p.prec !== undefined ? `\${(${p.arg}).toFixed(${p.prec})}` : `\${${p.arg}}`;
+      }
       return `\`${out}\``;
     }
     if (L === 'rust') {
@@ -1491,11 +1535,12 @@ export class Body {
         let a = p.arg!;
         let dbg = false;
         if (a.endsWith(':?')) { dbg = true; a = a.slice(0, -2); }
+        const precSuffix = p.prec !== undefined && !dbg ? `:.${p.prec}` : '';
         const plain = /^[A-Za-z_][A-Za-z0-9_]*$/.test(a) && !RS_KW.has(a);
         if (plain) {
-          out += `{${a}${dbg ? ':?' : ''}}`;
+          out += `{${a}${dbg ? ':?' : precSuffix}}`;
         } else {
-          out += dbg ? `{:?}` : `{}`;
+          out += dbg ? `{:?}` : (p.prec !== undefined ? `{:.${p.prec}}` : `{}`);
           posArgs.push(a);
         }
       }
@@ -1503,12 +1548,18 @@ export class Body {
     }
     if (L === 'go') {
       let out = '';
-      for (const p of parts) out += p.lit !== undefined ? escLit(p.lit) : '%v';
+      for (const p of parts) {
+        if (p.lit !== undefined) { out += escLit(p.lit); continue; }
+        out += p.prec !== undefined ? `%.${p.prec}f` : '%v';
+      }
       return `fmt.Sprintf("${out}"${argList.length ? ', ' + argList.join(', ') : ''})`;
     }
     // cpp
     let out = '';
-    for (const p of parts) out += p.lit !== undefined ? escLit(p.lit) : '{}';
+    for (const p of parts) {
+      if (p.lit !== undefined) { out += escLit(p.lit); continue; }
+      out += p.prec !== undefined ? `{:.${p.prec}}` : '{}';
+    }
     return `std::format("${out}"${argList.length ? ', ' + argList.join(', ') : ''})`;
   }
 
@@ -2980,6 +3031,51 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
     default:
       return [];
   }
+}
+
+/**
+ * v0.2.51：std/math 自由函数跨语言映射（pathCall 入口）。
+ * 此前 std 函数调用在活体翻译中裸名直出 —— sin(x) 生成 sin(x)，python
+ * NameError / ts 编译错误。映射覆盖可廉价直译的子集；不可廉价直译的
+ * （rust/go/cpp 方法形态、python 的整数数论族）返回 null 由调用方决定，
+ * 在 pathCall 语境下抛 TranspileError → 触发该函数诚实回退 contract。
+ */
+function stdMathFreeCall(name: string, args: string[], L: string): string | null {
+  const a = args.join(', ');
+  const one = args[0] ?? '';
+  if (L === 'python') {
+    const PY: Record<string, string> = {
+      sin: `math.sin(${a})`, cos: `math.cos(${a})`, tan: `math.tan(${a})`,
+      asin: `math.asin(${a})`, acos: `math.acos(${a})`, atan: `math.atan(${a})`,
+      atan2: `math.atan2(${a})`, exp: `math.exp(${a})`, ln: `math.log(${a})`,
+      log2: `math.log2(${a})`, log10: `math.log10(${a})`, pow: `math.pow(${a})`,
+      sqrt: `math.sqrt(${a})`, hypot: `math.hypot(${a})`,
+      is_nan: `math.isnan(${a})`, is_infinite: `math.isinf(${a})`,
+      gcd: `math.gcd(${a})`, lcm: `math.lcm(${a})`, isqrt: `math.isqrt(${a})`,
+      signum: `(0.0 if ${one} == 0 else (1.0 if ${one} > 0 else -1.0))`,
+    };
+    if (name === 'inf') return 'math.inf';
+    const hit = PY[name];
+    if (hit) return hit;
+    return null;
+  }
+  if (L === 'typescript' || L === 'javascript') {
+    const TS: Record<string, string> = {
+      sin: `Math.sin(${a})`, cos: `Math.cos(${a})`, tan: `Math.tan(${a})`,
+      asin: `Math.asin(${a})`, acos: `Math.acos(${a})`, atan: `Math.atan(${a})`,
+      atan2: `Math.atan2(${a})`, exp: `Math.exp(${a})`, ln: `Math.log(${a})`,
+      log2: `Math.log2(${a})`, log10: `Math.log10(${a})`, pow: `Math.pow(${a})`,
+      sqrt: `Math.sqrt(${a})`, hypot: `Math.hypot(${a})`,
+      signum: `Math.sign(${a})`,
+      is_nan: `Number.isNaN(${a})`, is_infinite: `(!Number.isFinite(${a}))`,
+    };
+    if (name === 'inf') return 'Infinity';
+    const hit = TS[name];
+    if (hit) return hit;
+    return null;
+  }
+  // rust / go / cpp：自由函数是方法形态（(x).sin()），不可廉价直译 → null
+  return null;
 }
 
 function snakeUpper(s: string): string {

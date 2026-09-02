@@ -25,7 +25,7 @@ import { LoadedProgram } from './linker';
 import { getLang, isStaticLangId, resolveLangId, listLangs } from './backends/registry';
 import { treeToTokens } from './interp';
 import { parseExprsFromTokens } from './parser';
-import { isStdPath } from './std';
+import { isStdPath, STD_MODULES } from './std';
 
 export interface Diag {
   severity: 'error' | 'warning';
@@ -38,6 +38,14 @@ export interface Diag {
 
 // 后端语言集合来自 backends/registry（BNF v1.4 §5.2，38 后端）
 const NATIVE_LANGS = new Set(listLangs().map((l) => l.id));
+
+// v0.2.51 E-2：当前文件可见的可调用名（顶层 fn/graph/macrodef/import 名）。
+// 检查器按文件串行运行，模块级游标是单线程安全的；
+// 修复盲区：此前调用未定义/未 import 的函数（如 sort_desc 漏 import）
+// check 全绿、run 才炸 —— 符号解析是纯静态可判定的，不应留到运行期。
+let visibleCallables: Set<string> = new Set();
+// 单段调用白名单：预导入构造器（两段路径形式不在本检查范围）
+const CALL_WHITELIST = new Set(['Ok', 'Err', 'Some', 'None']);
 
 export function checkProgram(program: LoadedProgram): Diag[] {
   const diags: Diag[] = [];
@@ -78,6 +86,28 @@ export function checkProgram(program: LoadedProgram): Diag[] {
 
   for (const [file, ast] of program.files) {
     const topLevel = new Set<string>();
+    // v0.2.51 E-2：收集本文件可见可调用名（含 import 别名）
+    visibleCallables = new Set<string>();
+    for (const item of ast.items) {
+      const nm = itemCallableName(item);
+      if (nm) visibleCallables.add(nm);
+    }
+    for (const item of ast.items) {
+      if (item.kind === 'import') {
+        if (item.spec.t === 'items') for (const x of item.spec.items) visibleCallables.add(x.alias ?? x.name);
+        if (item.spec.t === 'single') visibleCallables.add(item.spec.alias ?? item.spec.name);
+      }
+    }
+    // 嵌套 fn（graph body / 块语句内的 fn 项）同样可调用（nova 实录：
+    // graph 体内的 fn evidence_mass 等嵌套定义）。与 S-7 同款源码行扫描，
+    // 方向是过宽（字符串/注释里的 fn 名进白名单）而非误报 —— 误报会阻断合法工程。
+    {
+      const lines = astSource(file);
+      for (const line of lines) {
+        const m = /\b(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(line);
+        if (m) visibleCallables.add(m[1]!);
+      }
+    }
     // P-3/P-4：project 投射
     if (ast.project) {
       for (const p of ast.project.items) {
@@ -162,6 +192,21 @@ export function checkProgram(program: LoadedProgram): Diag[] {
         });
         if (!used) diags.push(err('S-7', `import "${n}" 未使用`, item.span, file));
       }
+      // v0.2.51 E-2：std 导入名必须在对应虚拟模块中真实存在
+      // （此前 import { sort_dsc } 拼写错误要到 run 才报“不是可调用项”）
+      if (isStdPath(item.path) && item.path !== 'std') {
+        const mod = STD_MODULES[item.path];
+        if (!mod) {
+          diags.push(err('E-2', `std 模块 "${item.path}" 不存在（可用：${Object.keys(STD_MODULES).join('/')}）`, item.span, file));
+        } else {
+          for (const n of names) {
+            if (n.startsWith('_')) continue;
+            if (!(n in mod)) {
+              diags.push(err('E-2', `std 模块 "${item.path}" 无导出名 "${n}"（候选：${Object.keys(mod).slice(0, 12).join(', ')}…）`, item.span, file));
+            }
+          }
+        }
+      }
     }
 
     // 逐项检查
@@ -201,25 +246,44 @@ function itemName(item: A.Item): string | undefined {
     default: return undefined;
   }
 }
+
+// E-2 辅助：项的「可调用名」—— fn / graph（Graph::run）/ macrodef；
+// 类型/常量不是调用目标（枚举变体经两段路径，不在本检查范围）
+function itemCallableName(item: A.Item): string | undefined {
+  switch (item.kind) {
+    case 'fn': return item.fn.name;
+    case 'graph': return item.graph.name;
+    case 'macrodef': return (item as { name?: string }).name;
+    default: return undefined;
+  }
+}
 function spanOf(item: A.Item): A.Span {
   return (item as { span: A.Span }).span;
 }
 
 function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], file: string): void {
   if (item.kind === 'fn' && item.fn.body) {
-    checkBody(item.fn.body, enums, diags, file, undefined);
+    // v0.2.51：函数参数进入作用域（E-2 调用检查需要；param 标记豁免 S-7）
+    const params = item.fn.params.flatMap((p) => patternNames(p.pat));
+    checkBody(item.fn.body, enums, diags, file, undefined, params);
   }
   if (item.kind === 'graph') {
     checkGraph(item.graph, enums, diags, file);
   }
   if (item.kind === 'impl') {
     for (const m of item.methods) {
-      if (m.body) checkBody(m.body, enums, diags, file, undefined);
+      if (m.body) {
+        const params = m.params.flatMap((p) => patternNames(p.pat));
+        checkBody(m.body, enums, diags, file, undefined, params);
+      }
     }
   }
   if (item.kind === 'trait') {
     for (const ti of item.items) {
-      if (ti.fn?.body) checkBody(ti.fn.body, enums, diags, file, undefined);
+      if (ti.fn?.body) {
+        const params = ti.fn.params.flatMap((p) => patternNames(p.pat));
+        checkBody(ti.fn.body, enums, diags, file, undefined, params);
+      }
     }
   }
 }
@@ -299,7 +363,9 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
     if (!touched.has(n)) diags.push(warn('G-4', `节点 "${n}" 没有任何 edge（孤岛节点；若为插件注入位请加注释说明）`, g.span, file));
   }
   // graph 体内的 match/赋值等检查（含 AgentLoop 内 _ 检查）
+  // v0.2.51：graph 参数进入作用域（param 标记豁免 S-7，E-2 可见）
   const gscope: Scope = { vars: new Map(), used: new Set() };
+  for (const p of g.params) declareParam(gscope, p.name);
   for (const gs of g.body) {
     if (gs.t === 'stmt') {
       // let 声明由 checkStmt 内部完成（此处不再重复 declare —— 否则 S-8 误报）
@@ -309,25 +375,34 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   }
 }
 
-// ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1）----
+// ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2）----
 interface Scope {
-  vars: Map<string, { mut: boolean; span: A.Span }>;
+  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean }>;
   parent?: Scope;
   used: Set<string>;
 }
 
-function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean): void {
+function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramNames?: string[]): void {
   
   const scope: Scope = { vars: new Map(), used: new Set() };
+  if (paramNames) for (const n of paramNames) declareParam(scope, n);
   checkStmts(stmts, scope, enums, diags, file, inAgentLoop ?? false);
+}
+
+/** 声明参数绑定：参与 S-4/E-2 作用域解析，但豁免 S-7（未使用参数是合法风格） */
+function declareParam(scope: Scope, name: string): void {
+  if (name === '_' || name.startsWith('_')) return;
+  if (scope.vars.has(name)) return;
+  scope.vars.set(name, { mut: true, span: { line: 0, col: 0, file: '' }, param: true });
 }
 
 function checkStmts(stmts: A.Stmt[], scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
   for (const st of stmts) checkStmt(st, scope, enums, diags, file, inAgentLoop);
-  // S-7：未使用绑定（本层声明且本层及子层未用）
+  // S-7：未使用绑定（本层声明且本层及子层未用；参数豁免 —— 未使用参数是合法风格）
   if (process.env.HSL_CHECK_DEBUG) console.error('[S7-loop] vars:', [...scope.vars.keys()], 'used:', [...scope.used]);
   for (const [name, info] of scope.vars) {
     if (name.startsWith('_')) continue;
+    if (info.param) continue;
     if (!isUsed(name, scope)) {
       diags.push(err('S-7', `绑定 "${name}" 声明后未使用（_ 前缀可豁免）`, info.span, file));
     }
@@ -416,10 +491,21 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
       checkExpr(e.value, scope, enums, diags, file, inAgentLoop);
       break;
     }
-    case 'call':
+    case 'call': {
+      // v0.2.51 E-2：单段路径调用的符号解析 —— 未定义/未 import 的函数名
+      // 此前 check 静默通过、run 才报“不是可调用项”。保守边界：
+      //  · 两段路径（Type::variant / Enum::ctor）不查 —— 命名空间成员形状复杂
+      //  · 局部作用域有同名绑定（闭包值/参数/match 绑定）不查
+      if (e.callee.kind === 'path' && e.callee.segs.length === 1) {
+        const name = e.callee.segs[0]!;
+        if (!CALL_WHITELIST.has(name) && !visibleCallables.has(name) && !lookupLocal(scope, name)) {
+          diags.push(err('E-2', `调用了未定义的函数 "${name}"（未定义、未 import，或拼写错误）`, e.span, file));
+        }
+      }
       checkExpr(e.callee, scope, enums, diags, file, inAgentLoop);
       for (const a of e.args) checkExpr(a, scope, enums, diags, file, inAgentLoop);
       break;
+    }
     case 'method': {
       checkExpr(e.recv, scope, enums, diags, file, inAgentLoop);
       for (const a of e.args) checkExpr(a, scope, enums, diags, file, inAgentLoop);
@@ -558,6 +644,12 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
 function lookupMut(scope: Scope, name: string): boolean | undefined {
   if (scope.vars.has(name)) return scope.vars.get(name)!.mut;
   return scope.parent ? lookupMut(scope.parent, name) : undefined;
+}
+
+/** E-2 辅助：名字是否是当前（或祖先）作用域的局部绑定 */
+function lookupLocal(scope: Scope, name: string): boolean {
+  if (scope.vars.has(name)) return true;
+  return scope.parent ? lookupLocal(scope.parent, name) : false;
 }
 
 function checkExhaustiveness(e: A.Expr & { kind: 'match' }, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {

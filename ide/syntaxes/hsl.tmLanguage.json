@@ -3,21 +3,51 @@
   "name": "HSL",
   "scopeName": "source.hsl",
   "patterns": [
-    { "include": "#comment" },
-    { "include": "#attribute" },
-    { "include": "#interpolation" },
-    { "include": "#hsl-topology" },
-    { "include": "#hsl-projection" },
-    { "include": "#native-block" },
-    { "include": "#macro-rule" },
-    { "include": "#labels" },
-    { "include": "#keywords" },
-    { "include": "#types" },
-    { "include": "#strings" },
-    { "include": "#numbers" },
-    { "include": "#char" },
-    { "include": "#constants" },
-    { "include": "#punctuation" }
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#attribute"
+    },
+    {
+      "include": "#interpolation"
+    },
+    {
+      "include": "#hsl-topology"
+    },
+    {
+      "include": "#hsl-projection"
+    },
+    {
+      "include": "#native-block"
+    },
+    {
+      "include": "#macro-rule"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#char"
+    },
+    {
+      "include": "#labels"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#punctuation"
+    }
   ],
   "repository": {
     "comment": {
@@ -31,7 +61,9 @@
           "begin": "/\\*",
           "end": "\\*/",
           "patterns": [
-            { "include": "#comment" }
+            {
+              "include": "#comment"
+            }
           ]
         }
       ]
@@ -40,8 +72,12 @@
       "name": "meta.attribute.hsl",
       "begin": "(#)(\\[)",
       "beginCaptures": {
-        "1": { "name": "punctuation.definition.attribute.hsl" },
-        "2": { "name": "punctuation.definition.attribute.hsl" }
+        "1": {
+          "name": "punctuation.definition.attribute.hsl"
+        },
+        "2": {
+          "name": "punctuation.definition.attribute.hsl"
+        }
       },
       "end": "\\]",
       "patterns": [
@@ -49,22 +85,47 @@
           "name": "entity.other.attribute-name.hsl",
           "match": "\\b(capability|cfg|cfg_attr|derive|doc|allow|deny|tool)\\b"
         },
-        { "name": "string.quoted.double.hsl", "match": "\"[^\"]*\"" },
-        { "name": "punctuation.separator.hsl", "match": "[:,=]" }
+        {
+          "name": "string.quoted.double.hsl",
+          "match": "\"[^\"]*\""
+        },
+        {
+          "name": "punctuation.separator.hsl",
+          "match": "[:,=]"
+        }
       ]
     },
     "interpolation": {
       "name": "meta.interpolation.hsl",
       "begin": "\\{\\{",
       "end": "\\}\\}",
-      "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.hsl" } },
-      "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.hsl" } },
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.interpolation.begin.hsl"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.interpolation.end.hsl"
+        }
+      },
       "patterns": [
-        { "include": "#keywords" },
-        { "include": "#types" },
-        { "include": "#numbers" },
-        { "include": "#strings" },
-        { "name": "variable.other.hsl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "name": "variable.other.hsl",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        }
       ]
     },
     "hsl-topology": {
@@ -73,15 +134,21 @@
           "name": "meta.graph.declaration.hsl",
           "match": "\\b(graph)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.control.graph.hsl" },
-            "2": { "name": "entity.name.type.graph.hsl" }
+            "1": {
+              "name": "keyword.control.graph.hsl"
+            },
+            "2": {
+              "name": "entity.name.type.graph.hsl"
+            }
           }
         },
         {
           "name": "meta.edge.declaration.hsl",
           "match": "\\b(edge|node|on|with)\\b",
           "captures": {
-            "0": { "name": "keyword.control.edge.hsl" }
+            "0": {
+              "name": "keyword.control.edge.hsl"
+            }
           }
         }
       ]
@@ -90,12 +157,20 @@
       "patterns": [
         {
           "name": "meta.projection.item.hsl",
-          "match": "(->)\\s*(\"[^\"]*\")\\s*(:)\\s*(rust|python|typescript|yaml|markdown|json|toml)\\b",
+          "match": "(->)\\s*(\"[^\"]*\")\\s*(:)\\s*(objective\\-c|typescript|powershell|javascript|objectivec|markdown|haskell|crystal|python|fsharp|groovy|kotlin|csharp|elixir|erlang|shell|swift|scala|julia|ocaml|java|dart|perl|yaml|toml|rust|json|ruby|bash|c\\+\\+|nim|lua|zig|yml|php|xml|cpp|ini|js|ts|md|vb|py|sh|go|d|r)(?![A-Za-z0-9_])",
           "captures": {
-            "1": { "name": "keyword.operator.arrow.hsl" },
-            "2": { "name": "string.quoted.double.path.hsl" },
-            "3": { "name": "punctuation.separator.hsl" },
-            "4": { "name": "constant.language.target-lang.hsl" }
+            "1": {
+              "name": "keyword.operator.arrow.hsl"
+            },
+            "2": {
+              "name": "string.quoted.double.path.hsl"
+            },
+            "3": {
+              "name": "punctuation.separator.hsl"
+            },
+            "4": {
+              "name": "constant.language.target-lang.hsl"
+            }
           }
         },
         {
@@ -112,10 +187,14 @@
       "patterns": [
         {
           "name": "meta.native.declaration.hsl",
-          "match": "\\b(native)\\s+(rust|python|typescript)\\b",
+          "match": "\\b(native)\\s+(objective\\-c|typescript|powershell|javascript|objectivec|haskell|crystal|python|fsharp|groovy|kotlin|csharp|elixir|erlang|shell|swift|scala|julia|ocaml|java|dart|perl|rust|ruby|bash|c\\+\\+|nim|lua|zig|php|cpp|js|ts|vb|py|sh|go|d|r)(?![A-Za-z0-9_])",
           "captures": {
-            "1": { "name": "keyword.control.native.hsl" },
-            "2": { "name": "constant.language.native-lang.hsl" }
+            "1": {
+              "name": "keyword.control.native.hsl"
+            },
+            "2": {
+              "name": "constant.language.native-lang.hsl"
+            }
           }
         }
       ]
@@ -126,16 +205,24 @@
           "name": "meta.macro.rules.hsl",
           "match": "\\b(macro_rules)\\s*(!)",
           "captures": {
-            "1": { "name": "entity.name.macro.hsl" },
-            "2": { "name": "punctuation.definition.macro.hsl" }
+            "1": {
+              "name": "entity.name.macro.hsl"
+            },
+            "2": {
+              "name": "punctuation.definition.macro.hsl"
+            }
           }
         },
         {
           "name": "meta.macro.call.hsl",
           "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(!)(?=\\s*[\\(\\[\\{])",
           "captures": {
-            "1": { "name": "entity.name.function.macro.hsl" },
-            "2": { "name": "punctuation.definition.macro.hsl" }
+            "1": {
+              "name": "entity.name.function.macro.hsl"
+            },
+            "2": {
+              "name": "punctuation.definition.macro.hsl"
+            }
           }
         },
         {
@@ -146,7 +233,7 @@
     },
     "labels": {
       "name": "entity.name.label.hsl",
-      "match": "'[a-zA-Z_][A-Za-z0-9_]*"
+      "match": "'[a-zA-Z_][A-Za-z0-9_]*(?!')"
     },
     "keywords": {
       "patterns": [
@@ -156,7 +243,7 @@
         },
         {
           "name": "keyword.control.definition.hsl",
-          "match": "\\b(let|fn|async|mut|const|struct|enum|trait|impl|type|where)\\b"
+          "match": "\\b(let|fn|async|mut|const|struct|enum|trait|impl|type|where|block|static)\\b"
         },
         {
           "name": "keyword.operator.misc.hsl",
@@ -164,7 +251,7 @@
         },
         {
           "name": "storage.modifier.visibility.hsl",
-          "match": "\\b(export|mod|use)\\b"
+          "match": "\\b(export|import)\\b"
         }
       ]
     },
@@ -188,14 +275,17 @@
       "patterns": [
         {
           "name": "string.quoted.double.raw.hsl",
-          "match": "r#+\"[^\"]*\"#+"
+          "match": "r#*\"[^\"]*\"#*"
         },
         {
           "name": "string.quoted.double.hsl",
           "begin": "\"",
           "end": "\"",
           "patterns": [
-            { "name": "constant.character.escape.hsl", "match": "\\\\(n|r|t|0|\\\\|'\"|x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F_]+\\})" }
+            {
+              "name": "constant.character.escape.hsl",
+              "match": "\\\\(n|r|t|0|\\\\|'\"|x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F_]+\\})"
+            }
           ]
         }
       ]
@@ -204,7 +294,15 @@
       "patterns": [
         {
           "name": "constant.numeric.float.hsl",
-          "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?(f32|f64)\\b"
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?(f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.hsl",
+          "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9_]+(f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.hsl",
+          "match": "\\b[0-9][0-9_]*(f32|f64)\\b"
         },
         {
           "name": "constant.numeric.hex.hsl",

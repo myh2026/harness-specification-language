@@ -420,7 +420,7 @@ export class Lexer {
       while (this.pos < this.src.length && isIdentCont(this.peek())) name += this.advance();
       return { kind: 'label', text: name, value: name, line, col };
     }
-    throw new LexError("无法解析的 ' 开头 token", line, col);
+    throw new LexError(`无法解析的 ' 开头 token（其后内容："${this.src.slice(this.pos, this.pos + 12).replace(/\n/g, '\\n')}…"）`, line, col);
   }
 
   // ==========================================================================

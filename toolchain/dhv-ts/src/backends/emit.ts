@@ -117,7 +117,17 @@ function collectTypeRefs(item: A.Item, out: Set<string>): void {
         if (sep.t === 'tok' && sep.tok.text === '::' && nxt.t === 'tok' && nxt.tok.kind === 'ident') {
           acc.add(cur.tok.text);
         }
-      } else if (cur.t === 'delim') {
+      }
+      // v0.2.51：宏实参内的结构体字面量（`Quantity {`）—— 此前宏树只收集
+      // 两段路径，vec![...] / format! 实参里的结构体构造完全不接线。
+      // 注意：`{...}` 在宏树中是 delim 节点（open='{'），不是 punct token
+      if (cur.t === 'tok' && cur.tok.kind === 'ident') {
+        const nxt = toks[i + 1];
+        if (nxt && nxt.t === 'delim' && nxt.open === '{') {
+          acc.add(cur.tok.text);
+        }
+      }
+      if (cur.t === 'delim') {
         walkTokenTree(cur, acc);
       }
     }
@@ -192,10 +202,155 @@ function collectTypeRefs(item: A.Item, out: Set<string>): void {
   walkItem(item);
 }
 
+/**
+ * v0.2.51 新增：收集项内对**程序级函数/常量**的单段引用，以及**用户枚举变体**
+ * 的两段引用（构造/模式匹配位置）。与 collectTypeRefs（多段路径=类型命名
+ * 空间）互补：函数调用 `normalize(...)`、常量引用 `G`、变体构造
+ * `Verdict::Blocked {...}` 与变体模式在 python/ts 后端都展平为跨文件裸名
+ * （Blocked / FormulaOk），此前的类型接线只导入了枚举容器类本身 ——
+ * 生成物运行时 NameError。rust 后端保持 Enum::Variant 限定路径，无需接线。
+ */
+function collectCallableRefs(
+  item: A.Item,
+  programCallables: Set<string>,
+  knownEnums: Map<string, Array<{ name: string; unit: boolean }>>,
+  fnRefs: Set<string>,
+  variantRefs: Set<string>,
+): void {
+  const variantOf = (segs: string[] | undefined): void => {
+    if (!segs || segs.length !== 2) return;
+    const variants = knownEnums.get(segs[0]!);
+    const hit = variants?.find((v) => v.name === segs[1]!);
+    if (!hit) return;
+    variantRefs.add(hit.name);
+    // 无负载变体的值引用是 snakeUpper 单例（如 Verdict::Passed → PASSED）
+    if (hit.unit) variantRefs.add(snakeUpperLocal(hit.name));
+  };
+  // 宏树内的可调用引用：ident 后跟 ( delim → 函数调用；Enum::Variant → 变体
+  // 注意：`(...)` 在宏树中是 delim 节点（open='('），不是 punct token
+  const walkCallableTokenTree = (t: A.TokenTree): void => {
+    if (t.t === 'tok') return;
+    const toks = t.items;
+    for (let i = 0; i < toks.length; i++) {
+      const cur = toks[i]!;
+      if (cur.t === 'tok' && cur.tok.kind === 'ident') {
+        const nxt = toks[i + 1];
+        if (nxt && nxt.t === 'delim' && nxt.open === '(' && programCallables.has(cur.tok.text)) {
+          fnRefs.add(cur.tok.text);
+        }
+        const sep = toks[i + 1];
+        const varr = toks[i + 2];
+        if (sep && sep.t === 'tok' && sep.tok.text === '::' && varr && varr.t === 'tok' && varr.tok.kind === 'ident') {
+          variantOf([cur.tok.text, varr.tok.text]);
+        }
+      }
+      if (cur.t === 'delim') walkCallableTokenTree(cur);
+    }
+  };
+  const walkExpr = (e?: A.Expr): void => {
+    if (!e) return;
+    switch (e.kind) {
+      case 'path':
+        if (e.segs.length === 1 && programCallables.has(e.segs[0]!)) fnRefs.add(e.segs[0]!);
+        if (e.segs.length === 2) variantOf(e.segs);
+        break;
+      case 'binary': walkExpr(e.lhs); walkExpr(e.rhs); break;
+      case 'unary': walkExpr(e.operand); break;
+      case 'assign': walkExpr(e.target); walkExpr(e.value); break;
+      case 'call': walkExpr(e.callee); for (const a of e.args) walkExpr(a); break;
+      case 'method': walkExpr(e.recv); for (const a of e.args) walkExpr(a); break;
+      case 'field': walkExpr(e.recv); break;
+      case 'index': walkExpr(e.recv); walkExpr(e.index); break;
+      case 'slice': walkExpr(e.recv); walkExpr(e.lo); walkExpr(e.hi); break;
+      case 'range': walkExpr(e.lo); walkExpr(e.hi); break;
+      case 'try': case 'await': walkExpr(e.expr); break;
+      case 'cast': walkExpr(e.expr); break;
+      case 'tuple': for (const i of e.items) walkExpr(i); break;
+      case 'array': for (const i of e.items) walkExpr(i); break;
+      case 'arrayrep': walkExpr(e.value); walkExpr(e.count); break;
+      case 'struct':
+        variantOf(e.segs);
+        for (const f of e.fields) walkExpr(f.value ?? f.base);
+        break;
+      case 'closure':
+        for (const p of e.params) walkPat(p.pat);
+        walkExpr(e.body);
+        break;
+      case 'if': walkExpr(e.cond); walkExpr(e.then); walkExpr(e.els); break;
+      case 'iflet': walkPat(e.pat); walkExpr(e.expr); walkExpr(e.then); walkExpr(e.els); break;
+      case 'match':
+        walkExpr(e.expr);
+        for (const arm of e.arms) { walkPat(arm.pattern); walkExpr(arm.guard); walkExpr(arm.body); }
+        break;
+      case 'block': case 'asyncblock':
+        for (const s of e.stmts) walkStmt(s);
+        break;
+      case 'loop': walkExpr(e.body); break;
+      case 'while': walkExpr(e.cond); walkExpr(e.body); break;
+      case 'whilelet': walkPat(e.pat); walkExpr(e.expr); walkExpr(e.body); break;
+      case 'for': walkPat(e.pat); walkExpr(e.iter); walkExpr(e.body); break;
+      case 'break': walkExpr(e.value); break;
+      case 'return': walkExpr(e.value); break;
+      case 'macro':
+        // v0.2.51：宏树内的函数调用（ident 后跟 `(`）与 Enum::Variant 对 ——
+        // vec![...] / format! 实参里的构造与调用此前完全不接线
+        walkCallableTokenTree(e.tree);
+        break;
+      case 'native': case 'unit': break;
+      default: break;
+    }
+  };
+  const walkPat = (p?: A.Pattern): void => {
+    if (!p) return;
+    switch (p.kind) {
+      case 'path': variantOf(p.segs); break;
+      case 'binding': walkPat(p.sub); break;
+      case 'tuple': for (const i of p.items) walkPat(i); break;
+      case 'struct':
+        variantOf(p.segs);
+        for (const f of p.fields) walkPat(f.pat);
+        break;
+      case 'or': for (const a of p.alts) walkPat(a); break;
+      case 'range': walkPat(p.lo); walkPat(p.hi); break;
+      default: break;
+    }
+  };
+  const walkFn = (f: A.FnDef): void => {
+    for (const s of f.body ?? []) walkStmt(s);
+  };
+  const walkStmt = (s: A.Stmt): void => {
+    switch (s.kind) {
+      case 'let': walkPat(s.pat); walkExpr(s.init); break;
+      case 'expr': walkExpr(s.expr); break;
+      case 'item': walkItem(s.item); break;
+      default: break;
+    }
+  };
+  const walkItem = (it: A.Item): void => {
+    switch (it.kind) {
+      case 'trait':
+        for (const ti of it.items) { if (ti.fn) walkFn(ti.fn); walkExpr(ti.value); }
+        break;
+      case 'impl':
+        for (const m of it.methods) walkFn(m);
+        break;
+      case 'fn': walkFn(it.fn); break;
+      case 'const': walkExpr(it.value); break;
+      default: break;   // 类型项不含可执行体；graph 脚手架不活体引用
+    }
+  };
+  walkItem(item);
+}
+
 /** posix 相对路径（去扩展名），保证以 ./ 开头 —— ts/js import 专用 */
 function tsImportPath(fromFile: string, toFile: string): string {
   const rel = path.posix.normalize(path.posix.relative(path.posix.dirname(fromFile), toFile)).replace(/\.[tj]s$/, '');
   return rel.startsWith('.') ? rel : `./${rel}`;
+}
+
+/** 与 backends/body.ts snakeUpper 同义（无负载变体的单例常量名） */
+function snakeUpperLocal(s: string): string {
+  return s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
 }
 
 /** rust 模块路径约定：crate::<目录链>::<stem>（要求各段为合法 rust 标识符） */
@@ -204,6 +359,105 @@ function rustModulePath(targetFile: string): string | null {
   if (parts.length === 0) return null;
   for (const p of parts) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p)) return null;
   return parts.join('::');
+}
+
+/**
+ * v0.2.51 新增：计算一个物理文件的跨文件**函数/常量/枚举变体**依赖接线行。
+ * 与 importHeaderForTypeDeps 同构（同目录接线 / 跨目录诚实告警），覆盖
+ * 活体函数调用其他投射函数（如 inspect_payload 调 normalize）、常量引用
+ * （如 recompute 用 G）、枚举变体构造与模式（如 judge 里裸名 Blocked）
+ * —— 此前此类引用生成后即 NameError。
+ * 变体接线仅限 python/ts/js（展平为裸名）；rust 保持 Enum::Variant
+ * 限定路径、go 同包可见，均无需（也不应）接线。
+ * 保守边界：不产出新的「未投射函数/变体」告警（contract 围栏体内的
+ * 引用会造成误报；未投射名的告警留给运行期与 dhv Rust 编译器）。
+ */
+function importHeaderForFnDeps(
+  agg: { lang: string; items: ProjectedItem[] },
+  relPath: string,
+  fnLoc: Map<string, Map<string, { path: string }>>,
+  variantLoc: Map<string, Map<string, { path: string }>>,
+  programCallables: Set<string>,
+  knownEnums: Map<string, Array<{ name: string; unit: boolean }>>,
+  ctx: EmitCtx,
+  warnings: string[],
+): { lines: string[]; unusedVariants: Set<string> } {
+  const langId = agg.lang;
+  const tier = codegenTier(ctx.lang);
+  if (tier === 'contract' || tier === 'static') return { lines: [], unusedVariants: new Set() };
+
+  const fnRefs = new Set<string>();
+  const variantRefs = new Set<string>();
+  for (const pi of agg.items) collectCallableRefs(pi.item, programCallables, knownEnums, fnRefs, variantRefs);
+
+  const localNames = new Set(agg.items.map((i) => i.name));
+  // 本文件枚举项的变体是本地可见的（变体类/工厂生成在同一文件）
+  const localVariants = new Set<string>();
+  for (const pi of agg.items) {
+    if (pi.kind === 'enum') for (const v of pi.item.variants) localVariants.add(v.name);
+  }
+  // 变体接线仅展平裸名的语言；fn/常量接线全活体语言适用
+  const flattensVariants = langId === 'python' || langId === 'typescript' || langId === 'javascript';
+
+  const bySrc = new Map<string, string[]>();
+  const addWired = (name: string, loc: { path: string } | undefined): void => {
+    if (!loc) return;
+    if (loc.path === relPath) return; // 同文件本地可见
+    if (!bySrc.has(loc.path)) bySrc.set(loc.path, []);
+    if (!bySrc.get(loc.path)!.includes(name)) bySrc.get(loc.path)!.push(name);
+  };
+  for (const name of [...fnRefs].sort()) {
+    if (localNames.has(name)) continue;
+    addWired(name, fnLoc.get(langId)?.get(name));
+  }
+  if (flattensVariants) {
+    for (const name of [...variantRefs].sort()) {
+      if (localVariants.has(name)) continue;
+      addWired(name, variantLoc.get(langId)?.get(name));
+    }
+  }
+  if (bySrc.size === 0) return { lines: [], unusedVariants: new Set() };
+
+  const srcEntries = [...bySrc.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const out: string[] = [];
+  switch (langId) {
+    case 'python': {
+      for (const [src, names] of srcEntries) {
+        const stem = path.posix.basename(src).replace(/\.py$/, '');
+        if (path.posix.dirname(src) === path.posix.dirname(relPath)) {
+          out.push(`from ${stem} import ${names.join(', ')}`);
+        } else {
+          warnings.push(`X-2：${relPath} 引用函数/常量/变体 ${names.join(', ')}（位于 ${src}，跨目录 python 导入需手动接线）`);
+        }
+      }
+      break;
+    }
+    case 'typescript': case 'javascript': {
+      for (const [src, names] of srcEntries) {
+        out.push(`import { ${names.join(', ')} } from '${tsImportPath(relPath, src)}';`);
+      }
+      break;
+    }
+    case 'rust': {
+      for (const [src, names] of srcEntries) {
+        const mod = rustModulePath(src);
+        if (mod) out.push(`use crate::${mod}::{${names.join(', ')}};`);
+        else warnings.push(`X-3：${relPath} 引用函数/常量 ${names.join(', ')}（${src} 不是合法 rust 模块路径，需手动 use 接线）`);
+      }
+      break;
+    }
+    case 'go': {
+      // 同包（hsl）免导入；跨目录 = 跨包，诚实告警
+      for (const [src, names] of srcEntries) {
+        if (path.posix.dirname(src) !== path.posix.dirname(relPath)) {
+          warnings.push(`X-4：${relPath} 引用函数/常量 ${names.join(', ')}（位于 ${src}，跨目录 go 包需手动接线）`);
+        }
+      }
+      break;
+    }
+    default: break;   // cpp 内联兜底路径同类型接线（fn 依赖罕见，留空）
+  }
+  return { lines: out, unusedVariants: new Set() };
 }
 
 /**
@@ -549,6 +803,50 @@ export async function emitProgram(
     }
   }
 
+  // ---- v0.2.51：跨文件函数/常量依赖：位置索引（lang → 名 → 物理文件）----
+  // 类型接线自 v0.2.4 存在；函数/常量此前未接线 —— 活体翻译的函数体调用其他
+  // 投射函数（inspect_payload 调 normalize）或引用投射常量（recompute 用 G）
+  // 时，生成物直接 NameError。同 honest 协议：同目录接线，跨目录告警。
+  const fnLoc = new Map<string, Map<string, { path: string }>>();
+  for (const [relPath, agg] of byPath) {
+    if (isStaticLangId(agg.lang)) continue;
+    for (const pi of agg.items) {
+      if (pi.kind === 'fn' || pi.kind === 'const') {
+        if (!fnLoc.has(agg.lang)) fnLoc.set(agg.lang, new Map());
+        fnLoc.get(agg.lang)!.set(pi.name, { path: relPath });
+      }
+    }
+  }
+  const programCallables = new Set<string>();
+  const knownEnums = new Map<string, Array<{ name: string; unit: boolean }>>();
+  for (const [, ast] of program.files) {
+    for (const item of ast.items) {
+      if (item.kind === 'fn') programCallables.add(item.fn.name);
+      if (item.kind === 'const') programCallables.add(item.name);
+      if (item.kind === 'enum') {
+        knownEnums.set(item.name, item.variants.map((v) => ({
+          name: v.name,
+          unit: !v.fields || ('named' in v.fields ? v.fields.named.length === 0 : v.fields.tuple.length === 0),
+        })));
+      }
+    }
+  }
+  // 变体位置索引（lang → 变体名/单例名 → 枚举文件）—— python/ts 展平裸名需要
+  const variantLoc = new Map<string, Map<string, { path: string }>>();
+  for (const [relPath, agg] of byPath) {
+    if (isStaticLangId(agg.lang)) continue;
+    for (const pi of agg.items) {
+      if (pi.kind === 'enum') {
+        if (!variantLoc.has(agg.lang)) variantLoc.set(agg.lang, new Map());
+        for (const v of pi.item.variants) {
+          variantLoc.get(agg.lang)!.set(v.name, { path: relPath });
+          const unit = !v.fields || ('named' in v.fields ? v.fields.named.length === 0 : v.fields.tuple.length === 0);
+          if (unit) variantLoc.get(agg.lang)!.set(snakeUpperLocal(v.name), { path: relPath });
+        }
+      }
+    }
+  }
+
   for (const [relPath, agg] of byPath) {
     const abs = path.resolve(outDir, relPath);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -595,10 +893,16 @@ export async function emitProgram(
         // v1.4.10：go 同 package 多文件顶级助手去重（真机 go build 实测修复）
         goHelpersState,
       };
-      // ---- 跨文件类型依赖接线 ----
-      const extraHeader = importHeaderForTypeDeps(
-        agg, relPath, typeLoc, allTypes, ctx, warnings,
+      // ---- 跨文件依赖接线：类型（v0.2.4）+ 函数/常量/枚举变体（v0.2.51）----
+      const fnDepHeader = importHeaderForFnDeps(
+        agg, relPath, fnLoc, variantLoc, programCallables, knownEnums, ctx, warnings,
       );
+      const extraHeader = [
+        ...importHeaderForTypeDeps(
+          agg, relPath, typeLoc, allTypes, ctx, warnings,
+        ),
+        ...fnDepHeader.lines,
+      ];
       text = emitFile(lang, agg.items, ctx, extraHeader.length > 0 ? extraHeader : undefined, path.posix.basename(relPath, path.posix.extname(relPath)));
       // Java / C# 跨文件类型告警：类型已顶层（同包/命名空间裸名互见），未投射类型诚实 X-1
       if (agg.lang === 'java' || agg.lang === 'csharp') {

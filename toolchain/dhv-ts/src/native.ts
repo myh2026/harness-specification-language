@@ -16,6 +16,29 @@ const execFileP = promisify(execFile);
 
 const PY_STMT_KEYWORDS = /^(if|else|elif|for|while|def|class|return|import|from|try|except|finally|with|pass|break|continue|print|raise|assert|del|global|nonlocal|lambda|yield|and|or|not|in|is)\b/;
 
+/**
+ * 去除 native 块体的公共前导缩进（textwrap.dedent 语义）。
+ *
+ * 背景（v0.2.51 修复）：scanRawBody 按源码原样搬运块体，native python 路径
+ * 此前不做 dedent 直接拼进 wrapper —— 块体缩进恰好对齐 wrapper 的 for 循环体
+ * （4 空格）时"碰巧能跑"（且表达式会被执行 N 次捕获变量个数次）；嵌套更深
+ * （8 空格）则 IndentationError。任何缩进层级都必须正确工作的语义不应依赖
+ * 源码书写缩进 —— 故统一 dedent 后再嵌入。
+ */
+function dedentBlock(body: string): string {
+  const lines = body.split('\n');
+  let min = Infinity;
+  for (const l of lines) {
+    if (l.trim().length === 0) continue;
+    const ws = l.match(/^[ \t]*/)![0].length;
+    if (ws < min) min = ws;
+  }
+  if (!Number.isFinite(min) || min === 0) return body;
+  return lines
+    .map((l) => (l.trim().length === 0 ? '' : l.slice(min)))
+    .join('\n');
+}
+
 /** 扫描 native 体中引用的、存在于 HSL 词法作用域的变量名（N1：按名捕获） */
 export function scanCaptured(body: string, env: Env): string[] {
   const names = new Set<string>();
@@ -64,6 +87,11 @@ function unmarshalFromPython(v: unknown): unknown {
   return v;
 }
 
+/** 剥离行内字符串字面量（保留引号占位）—— 供语句判定免受字面量内容干扰 */
+function stripPyStrings(line: string): string {
+  return line.replace(/(["'])(?:\\.|(?!\1)[^\\])*\1/g, '$1$1');
+}
+
 /** 末表达式变换：`EXPR` → `__hsl_result__ = (EXPR)`（带语句关键字防护） */
 function transformPythonBody(body: string): string {
   const lines = body.split('\n');
@@ -74,11 +102,14 @@ function transformPythonBody(body: string): string {
   }
   if (lastIdx < 0) return body + '\n__hsl_result__ = None';
   const line = lines[lastIdx]!.trim();
+  // v0.2.51 修复：语句判定在剥离字符串字面量后进行 —— 此前 `"a=b" % x`
+  // 这类末表达式因字面量内的 `=` 被赋值正则误判为语句，导致返回值静默丢失。
+  const code = stripPyStrings(line);
   const isStatement =
-    PY_STMT_KEYWORDS.test(line) ||
-    line.endsWith(':') ||
-    /[^=!<>+\-*/%]=[^=]/.test(line) ||
-    line.startsWith('#');
+    PY_STMT_KEYWORDS.test(code) ||
+    code.endsWith(':') ||
+    /[^=!<>+\-*/%]=[^=]/.test(code) ||
+    code.startsWith('#');
   if (isStatement || line.startsWith('__hsl_result__')) {
     return body + '\n__hsl_result__ = __hsl_result__ if "__hsl_result__" in dir() else None';
   }
@@ -116,7 +147,7 @@ export async function evalNativeBlock(
     const ctx: Record<string, unknown> = {};
     for (const n of captured) ctx[n] = marshalForPython(env.lookup(n)!.value);
     const ctxJson = JSON.stringify(ctx);
-    const userCode = transformPythonBody(body);
+    const userCode = transformPythonBody(dedentBlock(body));
     const wrapper = [
       'import json, os, sys',
       '__ctx = json.loads(os.environ.get("HSL_NATIVE_CTX", "{}"))',

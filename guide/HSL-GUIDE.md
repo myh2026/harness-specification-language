@@ -6,7 +6,7 @@
 
 | | |
 |:---|:---|
-| 文档版本 | v0.2.27（与工具链同步） |
+| 文档版本 | v0.2.51（与工具链同步） |
 | 语言规范 | BNF v1.5.0（`toolchain/hsl-spec/BNF.md`；新增 §3.4 投射规则组 rules） |
 | 参考实现 | dhv-ts v0.2.27（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.27 |
 | 许可证 | MIT |
@@ -2752,7 +2752,7 @@ max_of = 9
 | 数值 | `to_string` `abs` `pow` `sqrt` `floor` `ceil` `round` `min` `max` `clamp` |
 | char | `to_string` `is_alphabetic` `is_numeric` |
 
-预导入宏：`format!`（`{}` / `{0}` / `{:?}` / `{{` 转义）、`vec!`、
+预导入宏：`format!`（`{}` / `{0}` / `{:?}` / `{:.N}` 浮点十进制精度（v0.2.51） / `{{` 转义）、`vec!`、
 `println!`、`print!`、`eprintln!`、`panic!`、`assert!`、`assert_eq!`、`dbg!`。
 
 ---
@@ -3135,6 +3135,7 @@ error[P-4]: 静态资源 cfg 只能投射到 yaml/markdown/json/toml/ini/xml（�
 |:---|:---|:---|:---|:---|
 | E-0 / L-0 | check/run | 链接失败：import 路径不存在 | `import { X } from "./no-such.hsl";` | 修路径 |
 | E-1 | check | 重复定义顶层项 | 两个 `fn dup()` | 改名 |
+| E-2 | check | 调用未定义的函数 / std 导入名不存在（v0.2.51） | `sort_desc(...)`（漏 import） | 补 import 或修拼写；单段路径调用才检查，局部绑定与两段路径豁免 |
 | R-1 | run | 入口文件没有 fn main | 只有 `fn not_main()` | 补 `fn main()` |
 
 真实报错：
@@ -3785,6 +3786,12 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 | 55 | ~~dhv-ts 不支持值语境 range~~ **v0.2.14 已修复**：`let r = a..b;` / `let r = a..=b;` / `let r = 0..n;` 等值语境 range 现已支持解析与校验（BNF v1.5 已知限制 #10 同步关闭） | 已无此限制 |
 | 56 | **dhv Go 后端函数体为骨架转译**（v0.2.17 新增，v0.2.20 大幅扩展）：struct/enum/fn/trait/impl/graph 生成合法 Go 代码；表达式覆盖 binary/unary/call/method/field/await/cast/if/else-if/match→switch/for→range/while→for/assign/compound-assign/index/slice/array/struct literal/closure→func literal/return/break/continue/block/range/try/loop/if-let/while-let。**仍不支持**：match arm 模式解构赋值（仅类型匹配）、泛型方法调用（turbofish 忽略）、async/await 语义完整转译 | 多数控制流场景可直接使用；match 模式解构与 async 逻辑待人工接手 |
 | 57 | **Go 后端类型映射为近似**（v0.2.17）：Option→`*T`（Go 指针，nil 代表 None）、Result→`(any, error)`（非变体通道，Err 详情不可模式匹配）、HashMap→`map[string]any`（丢失键值类型）、Vec→`[]any`（丢失元素类型） | 简单数据结构可直接使用；类型安全场景需人工调整 |
+| 58 | ~~未知函数调用 check 不报错~~ **v0.2.51 已修复**：E-2 静态检查（含 std 导入名校验）；单段路径调用、局部绑定豁免、两段路径保守不查 | 已无此盲区 |
+| 59 | ~~`format!` 精度说明符 `{:.N}` 被静默丢弃~~ **v0.2.51 已修复**：interp + python/ts/js/rust/go/cpp 六端一致实现浮点十进制精度 | 已无此限制（宽度/对齐等其余 flags 仍为未定义域） |
+| 60 | ~~native python 块缩进敏感~~ **v0.2.51 已修复**：块体统一 dedent；末表达式语句判定剥离字符串字面量（`"a=b" % x` 不再误判） | 已无此限制 |
+| 61 | ~~跨文件函数/常量/枚举变体依赖未接线~~ **v0.2.51 已修复**：emit 新增 `collectCallableRefs` + `importHeaderForFnDeps`（python 同目录 from-import / ts 相对 import / rust use / go 同包），宏实参内的结构体字面量与函数调用同步收集；实测生成物全链（mathphys `recompute`/armorlab `inspect_payload`）与解释器语义一致 | 已无此盲区（contract 围栏体内的引用仍不接线——诚实边界） |
+| 62 | ~~std/math 自由函数在活体翻译中裸名直出~~ **v0.2.51 已修复**：python `math.sin`/`math.pi`、ts/js `Math.sin`/`Math.PI`；rust/go/cpp 方法形态触发诚实 contract 回退 | 已无此盲区 |
+| 63 | **无类型注解的整数值浮点变量除法仍是近似**（v0.2.51 部分修复）：`1.0/7.0`、`a as f64 / b`、显式 `let x: f64` 均已正确；无注解变量承载整数值浮点时按动态整数截断（完整类型推导归 dhv Rust 编译器，限制 #1） | 给绑定额外资一层 `as f64` 或类型注解 |
 
 
 ---

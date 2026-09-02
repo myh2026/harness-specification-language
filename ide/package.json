@@ -2,7 +2,7 @@
   "name": "hsl-ide",
   "displayName": "HSL IDE — Harness Specification Language",
   "description": "HSL 语言支持：语法高亮（graph/edge/project/scale/native/block 全量构件）、语言配置、代码片段、暗色主题。基于 VSCode，砍掉冗余，专注 HSL/DHV 工程。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "dhv-project",
   "license": "MIT",
   "engines": {
@@ -14,7 +14,12 @@
     "Snippets"
   ],
   "keywords": [
-    "hsl", "dhv", "agent", "harness", "compiler", "ai"
+    "hsl",
+    "dhv",
+    "agent",
+    "harness",
+    "compiler",
+    "ai"
   ],
   "activationEvents": [],
   "main": "./extension.js",
@@ -22,8 +27,14 @@
     "languages": [
       {
         "id": "hsl",
-        "aliases": ["HSL", "hsl", "Harness Specification Language"],
-        "extensions": [".hsl"],
+        "aliases": [
+          "HSL",
+          "hsl",
+          "Harness Specification Language"
+        ],
+        "extensions": [
+          ".hsl"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./icons/hsl-light.svg",
@@ -73,9 +84,17 @@
         },
         "hsl.scale": {
           "type": "string",
-          "enum": ["monolith", "microkernel"],
+          "enum": [
+            "monolith",
+            "microkernel"
+          ],
           "default": "monolith",
           "description": "默认编译尺度（对应 scale 声明的回退值）"
+        },
+        "hsl.outDir": {
+          "type": "string",
+          "default": ".hsl-gen",
+          "description": "hsl.compile（dhv emit）的产物目录，相对工作区根"
         }
       }
     }
