@@ -35,7 +35,7 @@ HSL/
 
 ```bash
 # 0) 依赖：Rust 工具链 + Bun
-git clone https://github.com/myh2026/HSL.git && cd HSL/toolchain
+git clone https://github.com/myh2026/harness-specification-language.git && cd harness-specification-language/toolchain
 
 # 1) 构建 Rust 编译器
 cd dhv && cargo build --release && cd ..
@@ -82,9 +82,11 @@ project {
 
 回归原则：**修复一个 bug，就锁定一个用例。**
 
+每日 UTC 20:30（北京 04:30）由 [Scheduled Tests](.github/workflows/scheduled-tests.yml) 定时全量回归（dhv-ts 套件 / 示例回归 / IDE 校验 / cargo test / 双编译器一致性），失败自动开 Issue 跟踪、恢复全绿自动关闭；手动触发：Actions → Scheduled Tests → Run workflow。
+
 ## 📦 版本化发布
 
-预编译二进制随 [GitHub Releases](https://github.com/myh2026/HSL/releases) 分发：
+预编译二进制随 [GitHub Releases](https://github.com/myh2026/harness-specification-language/releases) 分发：
 
 | 平台 | 架构 | 产物 |
 |:---|:---|:---|

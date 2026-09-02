@@ -1,0 +1,209 @@
+# ============================================================================
+# 定时测试完善（Scheduled Tests）
+# ----------------------------------------------------------------------------
+# 触发：每日 UTC 20:30（北京 04:30）+ 手动 workflow_dispatch
+# 覆盖：dhv-ts 全量套件 / 官方示例回归（nova·dsh·backends-demo）/
+#       IDE 扩展校验 / Rust 编译器回归 / 双编译器一致性
+# 完善：任一 job 失败 → 自动创建带 scheduled-test-failure 标签的 Issue 跟踪，
+#       恢复全绿后自动评论并关闭 —— 问题落地成 Issue 才叫「完善」
+# ============================================================================
+
+name: Scheduled Tests
+
+on:
+  schedule:
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  BUN_VERSION: '1'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 1. dhv-ts 全量套件（回归 / 静态规则 / 38 后端 emit / sync / fuzz / CLI / 压力）──
+  dhv-ts-suite:
+    name: dhv-ts full suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Run dhv-ts test suite
+        working-directory: toolchain
+        run: bun tests/hsl/run-all.ts
+
+  # ── 2. 官方示例回归 ───────────────────────────────────────────────────
+  examples-regression:
+    name: Examples regression (nova / dsh / backends-demo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: nova — 15 模块静态检查
+        working-directory: toolchain
+        run: bun dhv-ts/src/main.ts check examples/nova/nova.hsl
+      - name: dsh — 剧本端到端（真实改文件 + 真跑测试）
+        working-directory: toolchain
+        run: |
+          rm -rf /tmp/dsh-ws /tmp/dsh-run
+          cp -r examples/dsh/workspace /tmp/dsh-ws
+          bun dhv-ts/src/main.ts run examples/dsh/dsh.hsl \
+            --workspace /tmp/dsh-ws \
+            --task "stats.ts 中 variance() 的分母用错了（应为样本方差 n-1），且 median() 尚未实现。请修复并让 stats.test.ts 全部通过。" \
+            --model scripted \
+            --fixture examples/dsh/fixtures/fix-variance.json \
+            --out /tmp/dsh-run
+          python3 - <<'PYEOF'
+          import json
+          run = json.load(open('/tmp/dsh-run/run.json'))
+          assert run['ok'] is True, run
+          print('  ok: dsh 剧本端到端 run.ok=True')
+          PYEOF
+      - name: backends-demo — 38 后端投射零告警
+        working-directory: toolchain
+        run: |
+          rm -rf /tmp/bd
+          bun dhv-ts/src/main.ts emit examples/backends-demo/agent.hsl --out /tmp/bd
+          python3 - <<'PYEOF'
+          import json
+          m = json.load(open('/tmp/bd/manifest.json'))
+          assert len(m['files']) == 214, f"投射文件数应为 214，实得 {len(m['files'])}"
+          assert all(f['syntax_check'] == 'pass' for f in m['files']), "语法校验应全过"
+          assert not m['warnings'], f"emit 应零告警：{m['warnings']}"
+          print('  ok: 214 文件全部通过语法校验，零告警')
+          PYEOF
+
+  # ── 3. IDE 扩展（VSCode）发布级校验 ──────────────────────────────────
+  ide-validate:
+    name: IDE extension validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate IDE extension
+        run: node ide/tests/validate.js
+
+  # ── 4. Rust 编译器回归（dhv）─────────────────────────────────────────
+  rust-test:
+    name: Rust test (cargo test --release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+      - name: Build & test
+        working-directory: toolchain/dhv
+        run: cargo test --release
+
+  # ── 5. 双编译器一致性（dhv ↔ dhv-ts）────────────────────────────────
+  conformance:
+    name: Dual-compiler conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Build dhv release binary
+        working-directory: toolchain/dhv
+        run: cargo build --release
+      - name: Run conformance suite
+        working-directory: toolchain
+        run: bash tests/run_conformance.sh
+
+  # ── 6. 失败自动开 Issue（测试→跟踪→完善闭环）────────────────────────
+  report:
+    name: Auto-issue on failure
+    needs: [dhv-ts-suite, examples-regression, ide-validate, rust-test, conformance]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS_JSON);
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+            const failed = Object.entries(needs)
+              .filter(([, v]) => v.result === 'failure')
+              .map(([k]) => k);
+            const LABEL = 'scheduled-test-failure';
+            try {
+              await github.rest.issues.createLabel({ owner, repo, name: LABEL, color: 'd73a4a' });
+            } catch (e) { /* 标签已存在 */ }
+            const open = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: LABEL
+            });
+            if (failed.length === 0) {
+              for (const it of open.data) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: it.number,
+                  body: `✅ ${stamp} 定时测试恢复全绿。\n运行记录：${runUrl}`
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: it.number, state: 'closed'
+                });
+              }
+              core.info('全绿：无失败需要报告');
+              return;
+            }
+            const body = [
+              `**${stamp} 定时测试失败**`,
+              '',
+              `失败矩阵：${failed.map(f => '`' + f + '`').join(' · ')}`,
+              '',
+              `运行记录：${runUrl}`,
+              '',
+              '> 此 Issue 由定时任务自动创建与维护；恢复全绿后自动评论并关闭。'
+            ].join('\n');
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: open.data[0].number, body
+              });
+              core.info(`已更新既有跟踪 Issue #${open.data[0].number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo,
+                title: '⏰ 定时测试失败（Scheduled Tests）',
+                body, labels: [LABEL]
+              });
+              core.info(`已创建跟踪 Issue #${created.data.number}`);
+            }
