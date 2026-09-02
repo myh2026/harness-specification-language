@@ -94,9 +94,19 @@ jobs:
       - name: Generate release notes from CHANGELOG
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          awk "/^## \\[${TAG}\\]/,/^## \\[" CHANGELOG.md \
-            | head -n -1 \
-            > /tmp/release-notes.md
+          # 注意：此处不可用 awk range 模式（/beg/,/end/）——起始行「## [TAG]」本身
+          # 同时匹配结束模式 /^## \[/，范围在同一行即闭合，输出仅标题 1 行，
+          # head -n -1 删掉后恒为空 → release notes 永远走 fallback（历史 bug）。
+          # 改用显式状态机：跳过目标标题行，打印正文直到下一个 section。
+          {
+            echo "## ${TAG}"
+            echo ''
+            awk -v t="${TAG}" '
+              $0 ~ "^## \\[" t "\\]" { insec = 1; next }
+              insec && /^## \[/ { exit }
+              insec { print }
+            ' CHANGELOG.md
+          } > /tmp/release-notes.md
           if [ ! -s /tmp/release-notes.md ]; then
             echo "## ${TAG}" > /tmp/release-notes.md
             echo '' >> /tmp/release-notes.md
