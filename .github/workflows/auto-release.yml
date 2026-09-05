@@ -1,0 +1,96 @@
+# HSL/DHV CD — 持续交付：main 上版本号变更且 CI 全绿后自动打 tag 发布
+#
+# 触发链（无人值守发布）：
+#   push main（Cargo.toml/package.json 版本变更）
+#     → CI（四 job 全绿，含 version-sync 守卫）
+#     → 本工作流（workflow_run 监听 CI 成功）
+#     → 比对 toolchain/dhv/Cargo.toml 版本 vs 已有 release tag
+#     → 若 v{VER} 不存在：自动打 annotated tag 并 push
+#     → tag push 触发 release.yml（四平台构建 + sha256sums + Post-release CI）
+#
+# 幂等性：tag 已存在 → skip（success，无副作用）。
+# 手动触发：workflow_dispatch（用于补发漏发的版本）。
+
+name: Auto Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Auto-tag on version change (after CI green)
+    # 仅在 CI 成功（或手动触发）时运行
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CI'd commit
+        uses: actions/checkout@v4
+        with:
+          # workflow_run：取被监听 CI run 的确切 commit；
+          # workflow_dispatch：取 main 最新。
+          ref: ${{ github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 0
+
+      - name: Compare toolchain version with existing release tags
+        id: ver
+        run: |
+          set -euo pipefail
+
+          # 版本号以 Rust 编译器为源（version-sync 守卫已保证 dhv-ts 同版本）
+          VER="$(grep -oP '(?<=^version = ")\d+\.\d+\.\d+' toolchain/dhv/Cargo.toml)"
+          if [ -z "$VER" ]; then
+            echo "ERROR: cannot read version from toolchain/dhv/Cargo.toml" >&2
+            exit 1
+          fi
+
+          TAG="v${VER}"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # 精确匹配 refs/tags/v{VER}（存在即视为已发布，跳过）
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "SKIP: ${TAG} already released — nothing to do"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "RELEASE: ${TAG} will be tagged and published"
+          fi
+
+      - name: Auto-tag and push (triggers Release workflow)
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          VER="${{ steps.ver.outputs.version }}"
+
+          git config user.name "cd-bot"
+          git config user.email "actions@github.com"
+
+          # annotated tag；release notes 由 release.yml 从 CHANGELOG 提取
+          git tag -a "${TAG}" -m "DHV ${TAG} (auto-tagged by CD after CI green)"
+          git push origin "${TAG}"
+          echo "Pushed ${TAG} — Release workflow will build 4-platform binaries"
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.ver.outputs.skip }}" == "true" ]; then
+            echo "### CD: no-op ✅" >> $GITHUB_STEP_SUMMARY
+            echo "v${{ steps.ver.outputs.version }} already released." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### CD: released 🚀" >> $GITHUB_STEP_SUMMARY
+            echo "Tagged v${{ steps.ver.outputs.version }} → Release workflow running (4 platforms + sha256sums)." >> $GITHUB_STEP_SUMMARY
+          fi

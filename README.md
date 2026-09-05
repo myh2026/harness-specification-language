@@ -257,9 +257,9 @@ project {
 - **[Quarter Tests](.github/workflows/quarter-tests.yml)（每 15 分钟快车道）**：实装工具链（cargo build --release + dhv 二进制冒烟）→ 3 个项目（nova 静态检查 / dsh 剧本端到端 / backends-demo 投射）→ 38 后端全测（[tests/verify_backends.ts](toolchain/tests/verify_backends.ts)：全文件语法校验 + 零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级真解析）；
 - **[Scheduled Tests](.github/workflows/scheduled-tests.yml)（每日 UTC 20:30 / 北京 04:30 全量深水区）**：dhv-ts 全量套件（111 用例）+ 示例回归 + IDE 校验 + cargo test + 双编译器一致性。
 
-## 📦 版本化发布
+## 📦 版本化发布（含 CD 自动发布链）
 
-预编译二进制随 [GitHub Releases](https://github.com/myh2026/harness-specification-language/releases) 分发（打 `v*` tag 自动构建，见 [release.yml](.github/workflows/release.yml)）：
+预编译二进制随 [GitHub Releases](https://github.com/myh2026/harness-specification-language/releases) 分发：
 
 | 平台 | 架构 | 产物（`{VER}` 为版本号） |
 |:---|:---|:---|
@@ -268,9 +268,32 @@ project {
 | macOS | x86_64 (Intel) | `dhv-v{VER}-x86_64-apple-darwin.tar.gz` |
 | Windows | x86_64 (MSVC) | `dhv-v{VER}-windows-x86_64.zip` |
 
-- 最新版入口：[releases/latest](https://github.com/myh2026/harness-specification-language/releases/latest)；
-- 解压后单文件 `dhv`（Windows 为 `dhv.exe`），加入 `PATH` 即用，无运行时依赖；
-- 当前已发布：[v0.2.56](https://github.com/myh2026/harness-specification-language/releases/tag/v0.2.56)。
+**一键安装**（自动识别平台、下载对应产物、sha256 校验、安装并自检）：
+
+```bash
+# macOS / Linux（默认装到 ~/.local/bin）
+curl -fsSL https://raw.githubusercontent.com/myh2026/harness-specification-language/main/scripts/install.sh | bash
+```
+
+```powershell
+# Windows x86_64（默认装到 %USERPROFILE%\bin）
+irm https://raw.githubusercontent.com/myh2026/harness-specification-language/main/scripts/install.ps1 | iex
+```
+
+安装脚本支持 `HSL_VERSION` / `BIN_DIR`（或 Windows 的 `$env:HSL_VERSION` / `$env:HSL_BIN_DIR`）覆盖默认值，见 [scripts/install.sh](scripts/install.sh) 与 [scripts/install.ps1](scripts/install.ps1)。
+
+**CD 自动发布链**（[auto-release.yml](.github/workflows/auto-release.yml)，无人值守）：
+
+```
+main 合并（版本号变更）→ CI 四 job 全绿（含 version-sync 守卫）
+  → Auto Release 比对 Cargo.toml 版本 vs 已有 tag
+  → v{VER} 不存在 → 自动打 annotated tag 并 push
+  → Release 工作流：四平台构建 + sha256sums + Post-release CI
+```
+
+- tag 已存在时幂等跳过（no-op 绿灯），可手动 `workflow_dispatch` 补发；
+- 发布物料一律机械生成：release notes 取自 CHANGELOG（状态机提取）、校验和工作流产出——发布本身没有任何手写步骤；
+- 当前已发布：[v0.2.56](https://github.com/myh2026/harness-specification-language/releases/tag/v0.2.56)，最新版入口 [releases/latest](https://github.com/myh2026/harness-specification-language/releases/latest)。
 
 ## 🛡️ 当前版本
 
