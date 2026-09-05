@@ -74,6 +74,19 @@ for d in "$FIX"/modules/*/; do
   record "modules/$name" "$expect" "$(conclusion_dhv "${d}root.hsl")" "$(conclusion_ts "${d}root.hsl")"
 done
 
+# ---- v0.2.54 值级一致性（L-11 教训）：逐字面量比对解析值 ----
+# 结论对拍看不见 parse 层静默损坏（dhv 曾把 250u8 解析为 0 且 check 双端全绿）。
+echo "== 4/4 值级一致性（fixtures/values 逐字面量比对）=="
+if VALUE_OUT=$(bun tests/run_value_conformance.ts 2>&1); then
+  VALUE_PASS=$(printf '%s' "$VALUE_OUT" | grep -oE '值级一致性: [0-9]+ 通过' | grep -oE '[0-9]+')
+  echo "  ✓ values/ 语料 $VALUE_PASS 个文件值级全一致"
+  PASS_COUNT=$((PASS_COUNT + 1))
+else
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  DISAGREEMENTS+=("值级一致性失败：见上方明细（value conformance 报不一致）")
+  printf '%s\n' "$VALUE_OUT" | sed 's/^/    /'
+fi
+
 echo
 echo "== 结果 =="
 echo "通过: $PASS_COUNT  失败: $FAIL_COUNT"
@@ -81,4 +94,4 @@ if (( FAIL_COUNT > 0 )); then
   printf '%s\n' "${DISAGREEMENTS[@]}"
   exit 1
 fi
-echo "双编译器一致性: 全部一致 ✓"
+echo "双编译器一致性: 全部一致 ✓（含值级）"

@@ -1,0 +1,9 @@
+// 值域语料 8：浮点 vs 整数判别（浮点不应出现在 int dump 中）
+fn main() {
+  let a = 1;
+  let b = 1.0;
+  let c = 2.5;
+  let d = 100;
+  let e = 0.5;
+  println!("{} {} {} {} {}", a, b, c, d, e);
+}

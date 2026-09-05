@@ -1,0 +1,12 @@
+// 值域语料 4：表达式嵌套次序（二元/一元/索引/数组/元组/结构体/调用实参）
+fn main() {
+  let arr = [10, 20, 30];
+  let t = (1, 2, 3);
+  let x = 1 + 2 * 3 - 4;
+  let y = -7;
+  let z = arr[1];
+  let w = (x + y) * 2;
+  let s = Point { x: 3, y: 4 };
+  println!("{} {} {} {} {} {} {} {}", x, y, z, w, t.0, s.x, arr[0], t.2);
+}
+struct Point { x: i64, y: i64 }

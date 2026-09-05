@@ -3794,6 +3794,7 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 | 63 | **无类型注解的整数值浮点变量除法仍是近似**（v0.2.51 部分修复）：`1.0/7.0`、`a as f64 / b`、显式 `let x: f64` 均已正确；无注解变量承载整数值浮点时按动态整数截断（完整类型推导归 dhv Rust 编译器，限制 #1） | 给绑定额外资一层 `as f64` 或类型注解 |
 | 64 | **i64/u8 等注解域算术溢出：interp 参考语义 = BigInt 任意精度不环绕**（v0.2.54 spec 化 + S-15 静态守门）：`let a: i64 = i64::MAX; let b = a + 1;` 在 interp 打印 9223372036854775808（静默越域不环绕，rust 后端环绕/panic、python 与 interp 一致、js/ts 字面量读入即舍入）。**静态口径**：S-15 在「静态可折叠 + 域已知」时编译期拒绝（dhv/dhv-ts 双端一致）；无注解的动态算术留运行期 BigInt 参考语义。**emit 侧**：rust 大字面量自动补 i64/i128 后缀（L-9b），js/ts 超安全域字面量 emit 显式告警（L-9c）。超 i128 容量源字面量由 S-16 静态拒绝（dhv parser 此前归零——L-10 已修） | 注解域内确定性算术靠 S-15 静态保证；跨后端值级一致性以 interp 为基准语义（python 同构；rust i64 环绕与 js Number 精度为已声明投射差异） |
 | 65 | **dhv(Rust) 带后缀整数字面量曾一直解析为 0**（v0.2.54 L-11 已修）：pest 的 `integer_literal` 规则把后缀并入捕获文本，`from_str_radix("300u8")` 必失败 → `unwrap_or(0)` 静默归零（`250u8` 的值是 0！）—— dhv-ts lexer 剥离后缀无此问题。修复后后缀先剥离再解析；S-13（v2）新增后缀域字面量校验（`300u8` 报错） | 已无此损坏（锁定用例 S13_suffix_domain + run-all 后缀族） |
+| 66 | **结论对拍对 parse 层静默损坏失明 → 已建值级对拍**（v0.2.54 第五轮）：`dhv parse <file> --dump-values` 按文件序 dump 全部整数字面量（raw/值/后缀）；`bun tests/run_value_conformance.ts` 与 dhv-ts AST 遍历逐条比对（fixtures/values 语料 8 类：十进制/进制/后缀/表达式序/模式位/图拓扑/判别式/浮点判别）。L-11 类 bug（归零、舍入、后缀吞字）从此被机器护栏锁定 —— RED 注入实验实证：恢复旧 bug 后 suffix_family 7 字面量立即报不一致。已并入 run_conformance.sh 第 4 段 | 新增字面量形态（新进制/新后缀）时在 fixtures/values 加语料即可 |
 
 
 ---

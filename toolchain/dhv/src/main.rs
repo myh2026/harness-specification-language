@@ -21,8 +21,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 解析 .hsl 文件并输出 AST 摘要
-    Parse { file: PathBuf },
+    /// 解析 .hsl 文件并输出 AST 摘要（--dump-values 值级对拍模式）
+    Parse {
+        file: PathBuf,
+        /// v0.2.54 值级对拍：dump 全部整数字面量（raw/值/后缀）—— 供双编译器逐值比对
+        #[arg(long)]
+        dump_values: bool,
+    },
     /// 解析 + 严格性/拓扑/投射校验
     Check { file: PathBuf },
     /// 生成工程仓库（按 project {} 投射写物理文件）
@@ -43,7 +48,7 @@ fn main() {
     let worker = std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
         .spawn(move || match &cli.command {
-            Commands::Parse { file } => cmd_parse(file),
+            Commands::Parse { file, dump_values } => cmd_parse(file, *dump_values),
             Commands::Check { file } => cmd_check(file),
             Commands::Emit { file, out } => cmd_emit(file, out),
             Commands::Watch { dir } => cmd_watch(dir),
@@ -67,13 +72,21 @@ fn read_source(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| format!("无法读取 {}: {e}", path.display()))
 }
 
-fn cmd_parse(path: &Path) -> Result<(), String> {
+fn cmd_parse(path: &Path, dump_values: bool) -> Result<(), String> {
     let src = read_source(path)?;
     let name = path.display().to_string();
     match dhv::parser::parse(0, &src) {
         Ok(ast) => {
             println!("✓ 解析成功: {name}");
             println!("{}", summarize(&ast));
+            // v0.2.54 值级对拍（L-11 教训）：按文件内出现顺序 dump 所有整数字面量
+            // —— 双编译器逐字面量比对值与域，parse 层静默损坏（归零/舍入）
+            // 无处遁形。格式：`int\t<raw>\t<value>[u 后缀]\t<line>:<col>`
+            if dump_values {
+                for v in collect_int_literals(&ast) {
+                    println!("int\t{}\t{}{}", v.raw, v.value, v.suffix.unwrap_or_default());
+                }
+            }
             Ok(())
         }
         Err(diags) => {
@@ -145,6 +158,280 @@ fn cmd_watch(dir: &Path) -> Result<(), String> {
     println!("dhv watch: 监视 {}（P6 双向工程骨架 — File Watcher 将在 P6 完整版落地）", dir.display());
     println!("流程: 物理文件变化 → 提取 @dhv:source-map 围栏 → 逆向解析 → 回写 HSL → 重新编译+Lint");
     Ok(())
+}
+
+/// v0.2.54 值级对拍：按文件顺序收集所有整数字面量（含模式位/枚举判别式）。
+/// source map 保序依赖 walk 顺序与 pest 解析顺序一致（语句序列）。每条：
+/// raw 原文 / value 十进制值 / suffix（空 = 无后缀）。
+struct IntLitDump {
+    raw: String,
+    value: String,
+    suffix: Option<&'static str>,
+}
+
+fn collect_int_literals(file: &dhv::ast::SourceFile) -> Vec<IntLitDump> {
+    use dhv::ast::*;
+    let mut out = Vec::new();
+    let push = |l: &Literal, out: &mut Vec<IntLitDump>| {
+        if let LiteralKind::Int { value, suffix, overflow } = &l.kind {
+            let suffix_str = suffix.map(|s| match s {
+                IntSuffix::I8 => "u i8", IntSuffix::I16 => "u i16", IntSuffix::I32 => "u i32",
+                IntSuffix::I64 => "u i64", IntSuffix::I128 => "u i128", IntSuffix::Isize => "u isize",
+                IntSuffix::U8 => "u u8", IntSuffix::U16 => "u u16", IntSuffix::U32 => "u u32",
+                IntSuffix::U64 => "u u64", IntSuffix::U128 => "u u128", IntSuffix::Usize => "u usize",
+            });
+            let value_str = if *overflow {
+                format!("OVERFLOW({})", l.raw)
+            } else {
+                value.to_string()
+            };
+            out.push(IntLitDump { raw: l.raw.clone(), value: value_str, suffix: suffix_str });
+        }
+    };
+    for top in &file.items {
+        if let TopLevel::Item(item) = top {
+            walk_item_lits(item, &push, &mut out);
+        }
+    }
+    out
+}
+
+fn walk_item_lits(
+    item: &dhv::ast::Item,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    use dhv::ast::*;
+    match item {
+        Item::Fn(f) => {
+            if let Some(body) = &f.body {
+                walk_block_lits(body, push, out);
+            }
+        }
+        Item::Const(c) => walk_expr_lits(&c.value, push, out),
+        Item::Enum(e) => {
+            for v in &e.variants {
+                if let Some(d) = &v.discriminant {
+                    push(d, out);
+                }
+            }
+        }
+        Item::Graph(g) => {
+            for gs in &g.body {
+                match gs {
+                    GraphStmt::Node(n) => {
+                        if let Some(init) = &n.init {
+                            walk_expr_lits(init, push, out);
+                        }
+                    }
+                    GraphStmt::Edge(e) => {
+                        if let Some(guard) = &e.on {
+                            match guard {
+                                EdgeGuard::Pattern(p) => walk_pattern_lits(p, push, out),
+                                EdgeGuard::Expr(ex) => walk_expr_lits(ex, push, out),
+                            }
+                        }
+                        for attr in &e.attrs {
+                            if let Some(v) = &attr.value {
+                                push(v, out);
+                            }
+                        }
+                    }
+                    GraphStmt::Let(l) => walk_stmt_lits(&dhv::ast::Stmt::Let(l.clone()), push, out),
+                    GraphStmt::Stmt(st) => walk_stmt_lits(st, push, out),
+                    GraphStmt::Item(i) => walk_item_lits(i, push, out),
+                }
+            }
+        }
+        Item::Export(inner) => walk_item_lits(&inner.item, push, out),
+        _ => {}
+    }
+}
+
+fn walk_block_lits(
+    b: &dhv::ast::BlockExpr,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    for s in &b.stmts {
+        walk_stmt_lits(s, push, out);
+    }
+    if let Some(t) = &b.tail {
+        walk_expr_lits(t, push, out);
+    }
+}
+
+fn walk_stmt_lits(
+    s: &dhv::ast::Stmt,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    match s {
+        dhv::ast::Stmt::Let(l) => {
+            walk_pattern_lits(&l.pattern, push, out);
+            if let Some(init) = &l.init {
+                walk_expr_lits(init, push, out);
+            }
+            if let Some(els) = &l.else_block {
+                walk_block_lits(els, push, out);
+            }
+        }
+        dhv::ast::Stmt::Item(i) => walk_item_lits(i, push, out),
+        dhv::ast::Stmt::Expr { expr, .. } => walk_expr_lits(expr, push, out),
+        dhv::ast::Stmt::Empty(_) => {}
+    }
+}
+
+fn walk_pattern_lits(
+    p: &dhv::ast::Pattern,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    use dhv::ast::PatternKind::*;
+    match &p.kind {
+        Literal(l) => push(l, out),
+        Tuple { elems, .. } | TupleStruct { elems, .. } => {
+            for ip in elems {
+                walk_pattern_lits(ip, push, out);
+            }
+        }
+        Struct { fields, .. } => {
+            for fp in fields {
+                if let Some(pat) = &fp.pattern {
+                    walk_pattern_lits(pat, push, out);
+                }
+            }
+        }
+        Or(alts) => {
+            for ap in alts {
+                walk_pattern_lits(ap, push, out);
+            }
+        }
+        Range { lo, hi, .. } => {
+            walk_pattern_lits(lo, push, out);
+            walk_pattern_lits(hi, push, out);
+        }
+        Ident { sub: Some(sub), .. } => walk_pattern_lits(sub, push, out),
+        _ => {}
+    }
+}
+
+fn walk_expr_lits(
+    e: &dhv::ast::Expr,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    use dhv::ast::ExprKind::*;
+    match &e.kind {
+        Literal(l) => push(l, out),
+        Binary { lhs, rhs, .. } => {
+            walk_expr_lits(lhs, push, out);
+            walk_expr_lits(rhs, push, out);
+        }
+        Unary { operand, .. } | Try(operand) | Await(operand) => walk_expr_lits(operand, push, out),
+        Call { callee, args } => {
+            walk_expr_lits(callee, push, out);
+            for a in args {
+                walk_expr_lits(a, push, out);
+            }
+        }
+        MethodCall { receiver, args, .. } => {
+            walk_expr_lits(receiver, push, out);
+            for a in args {
+                walk_expr_lits(a, push, out);
+            }
+        }
+        Field { base, .. } => walk_expr_lits(base, push, out),
+        Index { base, index, .. } => {
+            walk_expr_lits(base, push, out);
+            walk_expr_lits(index, push, out);
+        }
+        Slice { base, range, .. } => {
+            walk_expr_lits(base, push, out);
+            if let Some(lo) = &range.lo { walk_expr_lits(lo, push, out); }
+            if let Some(hi) = &range.hi { walk_expr_lits(hi, push, out); }
+        }
+        Range(r) => {
+            if let Some(lo) = &r.lo { walk_expr_lits(lo, push, out); }
+            if let Some(hi) = &r.hi { walk_expr_lits(hi, push, out); }
+        }
+        Cast { expr, .. } => walk_expr_lits(expr, push, out),
+        Assign { lhs, rhs } | CompoundAssign { lhs, rhs, .. } => {
+            walk_expr_lits(lhs, push, out);
+            walk_expr_lits(rhs, push, out);
+        }
+        Closure { body, .. } => walk_expr_lits(body, push, out),
+        If { cond, then, else_, .. } => {
+            walk_expr_lits(cond, push, out);
+            walk_block_lits(then, push, out);
+            if let Some(el) = else_ { walk_expr_lits(el, push, out); }
+        }
+        IfLet { pattern, expr, then, else_, .. } => {
+            walk_pattern_lits(pattern, push, out);
+            walk_expr_lits(expr, push, out);
+            walk_block_lits(then, push, out);
+            if let Some(el) = else_ { walk_expr_lits(el, push, out); }
+        }
+        Match { scrutinee, arms, .. } => {
+            walk_expr_lits(scrutinee, push, out);
+            for arm in arms {
+                walk_pattern_lits(&arm.pattern, push, out);
+                if let Some(g) = &arm.guard { walk_expr_lits(g, push, out); }
+                walk_expr_lits(&arm.body, push, out);
+            }
+        }
+        Block(b) | AsyncBlock { body: b, .. } => walk_block_lits(b, push, out),
+        Loop { body, .. } | While { body, .. } | For { body, .. } => {
+            walk_block_lits(body, push, out);
+        }
+        WhileLet { pattern, expr, body, .. } => {
+            walk_pattern_lits(pattern, push, out);
+            walk_expr_lits(expr, push, out);
+            walk_block_lits(body, push, out);
+        }
+        For { pattern, iter, body, .. } => {
+            walk_pattern_lits(pattern, push, out);
+            walk_expr_lits(iter, push, out);
+            walk_block_lits(body, push, out);
+        }
+        Break { value: Some(v), .. } | Return(Some(v)) => walk_expr_lits(v, push, out),
+        Array(items) | Tuple(items) => {
+            for i in items {
+                walk_expr_lits(i, push, out);
+            }
+        }
+        Struct { fields, .. } => {
+            for f in fields {
+                if let Some(v) = &f.value {
+                    walk_expr_lits(v, push, out);
+                } else if let dhv::ast::FieldIndex::Named(n) = &f.name {
+                    let _ = n; // 简写字段无字面量
+                }
+            }
+        }
+        Macro { args, .. } => {
+            walk_token_tree(&args.tokens, push, out);
+        }
+        _ => {}
+    }
+}
+
+fn walk_token_tree(
+    tts: &[dhv::ast::TokenTree],
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
+    out: &mut Vec<IntLitDump>,
+) {
+    for tt in tts {
+        match tt {
+            dhv::ast::TokenTree::Delimited { tokens, .. } => walk_token_tree(tokens, push, out),
+            // Token 枚举里的 Literal 变体直接收集
+            dhv::ast::TokenTree::Token(tok, _) => {
+                if let dhv::ast::Token::Literal(l) = tok {
+                    push(l, out);
+                }
+            }
+        }
+    }
 }
 
 fn summarize(file: &dhv::ast::SourceFile) -> String {

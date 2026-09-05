@@ -1,0 +1,12 @@
+// 值域语料 6：graph 拓扑位（node init / edge 守卫 / graph 体 let）
+enum Action { Tick, Tock }
+graph G {
+  node a: i64 = 7;
+  node b: i64 = 8;
+  edge a -> b on Action::Tick;
+  loop {
+    let counter = 99;
+    match Action::Tick { Action::Tick => continue, Action::Tock => break, }
+  }
+}
+fn main() {}

@@ -1,0 +1,6 @@
+// 值域语料 7：枚举判别式
+enum Level { Low = 1, Mid = 5, High = 10 }
+fn main() {
+  let l = Level::Mid;
+  match l { Level::Low => println!("1"), Level::Mid => println!("5"), Level::High => println!("10"), }
+}

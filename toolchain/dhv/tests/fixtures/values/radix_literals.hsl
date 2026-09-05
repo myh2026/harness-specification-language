@@ -1,0 +1,11 @@
+// 值域语料 2：进制族（hex/oct/bin；含大写与下划线变体）
+fn main() {
+  let a = 0xFF;
+  let b = 0xff;
+  let c = 0xFE_ED;
+  let d = 0o17;
+  let e = 0o777;
+  let f = 0b1010;
+  let g = 0b1111_0000;
+  println!("{} {} {} {} {} {} {}", a, b, c, d, e, f, g);
+}
