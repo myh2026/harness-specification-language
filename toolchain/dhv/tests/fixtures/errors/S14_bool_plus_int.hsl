@@ -1,0 +1,5 @@
+// 期望 S14：bool + int 混算（js 静默真值化是漂移源）。
+export fn f() -> i64 {
+    let x = true + 1;
+    x as i64
+}

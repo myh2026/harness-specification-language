@@ -1,0 +1,15 @@
+// 合法运算族零误报（S14）：数值四则 / str+str 拼接 / 同型比较 / bool 逻辑 /
+// 动态值（变量调用、方法链）保守放行。
+export fn f() -> i64 {
+    let _a = 1 + 2;
+    let _b = 1.5 * 2.5;
+    let _c = "ab" + "cd";
+    let _d = 3 > 2;
+    let _e = "x" == "y";
+    let _f = true && _d;
+    let n = 3;
+    let s = "abc";
+    let x = n + 1;
+    let y = s.len();
+    (x + y)
+}

@@ -292,6 +292,35 @@ test('检查规则', 'G-8 合法：同向不同守卫（Vigil 惯用法）不误
   const out = checkSrc(`enum Ev { Tick, Tock }\ngraph G { node a: i64 = 1; node b: i64 = 2; edge a -> b on Ev::Tick; edge a -> b on Ev::Tock; loop { break; } }`);
   assert(out.includes('0 error'), `同向多守卫不应误报：${out.slice(0, 250)}`);
 });
+// ---- v0.2.53 S-14（hsl-fuzz 第三轮锁定：L-8 三后端真机对拍） ----
+test('检查规则', 'S-14 二元类型：纯字面量 str*int 报错', () => {
+  const out = checkSrc(`fn main() { let x = "abc" * 3; println!("{}", x); }`);
+  assert(out.includes('S-14'), `str*int 应触发 S-14：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：变量中转 str*int 报错（v2 作用域追踪）', () => {
+  const out = checkSrc(`fn main() { let s = "abc"; let x = s * 3; println!("{}", x); }`);
+  assert(out.includes('S-14'), `变量中转应触发 S-14：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：bool+int 报错', () => {
+  const out = checkSrc(`fn main() { let x = true + 1; println!("{}", x); }`);
+  assert(out.includes('S-14'), `bool+int 应触发 S-14：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：跨类比较 str>int 报错', () => {
+  const out = checkSrc(`fn main() { if "abc" > 1 { println!("gt"); } }`);
+  assert(out.includes('S-14'), `跨类比较应触发 S-14：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：合法运算族零误报（数值/str+str/同型比较/bool 逻辑）', () => {
+  const out = checkSrc(`fn main() { let _a = 1 + 2; let _b = 1.5 * 2.5; let _c = "ab" + "cd"; let _d = 3 > 2; let _e = "x" == "y"; let _f = true && _d; let h = 10 / 2; println!("{}", h); }`);
+  assert(out.includes('0 error'), `合法运算不应误报：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：动态值（调用/方法链/重赋值变量）保守放行', () => {
+  const out = checkSrc(`fn main() { let n = 3; let s = "abc"; let x = n + 1; let y = s.len(); println!("{} {}", x, y); }`);
+  assert(out.includes('0 error'), `动态值不应误报：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 二元类型：int+float 混算报错（S1 零隐式转换下沉）', () => {
+  const out = checkSrc(`fn main() { let x = 1 + 0.5; println!("{}", x); }`);
+  assert(out.includes('S-14'), `int+float 混算应触发 S-14：${out.slice(0, 200)}`);
+});
 
 // ---------------------------------------------------------------------------
 // 3. 38 后端 emit + sync 闭环

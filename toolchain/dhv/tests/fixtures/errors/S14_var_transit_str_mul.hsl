@@ -1,0 +1,7 @@
+// 期望 S14：变量中转的 str*int（v2 作用域 lit_ty 追踪 —— 声明先于记录，
+// 首版记录在 declare 前静默失效，conformance 对拍实录）。
+export fn f() -> i64 {
+    let s = "abc";
+    let x = s * 3;
+    x as i64
+}

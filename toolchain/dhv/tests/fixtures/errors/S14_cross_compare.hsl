@@ -1,0 +1,4 @@
+// 期望 S14：str > int 跨类比较（python/typescript 静默给出错误结果）。
+export fn f() -> i64 {
+    if "abc" > 1 { 1 } else { 0 }
+}

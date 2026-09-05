@@ -1,0 +1,5 @@
+// 期望 S14：str * int 二元运算类型不匹配（跨后端漂移：rustc 拒绝 / python abcabcabc / ts NaN）。
+export fn f() -> i64 {
+    let x = "abc" * 3;
+    x as i64
+}

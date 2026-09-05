@@ -433,7 +433,7 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
 
 // ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2）----
 interface Scope {
-  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean }>;
+  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy }>;
   parent?: Scope;
   used: Set<string>;
 }
@@ -495,6 +495,16 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
       
       for (const n of patternNames(st.pat)) declareVar(scope, n, st.mut, diags, st.span, file);
       if (st.init) checkExpr(st.init, scope, enums, diags, file, inAgentLoop);
+      // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入作用域 ——
+      // 后续 path 引用可判（`let s = "abc"; s * 3` 的 lhs 是 path 不是 lit，
+      // 纯 lit 口径拦不住变量中转 —— h01 样本实录）。
+      if (st.init && st.pat.kind === 'binding') {
+        const t = litTypeOf(st.init, scope);
+        if (t !== null) {
+          const cur = scope.vars.get(st.pat.name);
+          if (cur) cur.litTy = t;
+        }
+      }
       // v0.2.53 S-13：整型注解的字面量域校验。
       // rustc 真机对拍实证：`let x: i8 = 300` 在 check 双端放行、interp 打印 300、
       // emit rust 后 rustc 报 literal out of range —— 跨后端语义漂移（python/js
@@ -576,6 +586,82 @@ function patternDisplay(p: A.Pattern): string {
   return p.kind;
 }
 
+// ---- v0.2.53 S-14：二元运算符保守静态类型检查 ----
+// 表达式的静态可判类型（字面量域；未知 → null 不判）
+type LitTy = 'int' | 'float' | 'bool' | 'str' | 'char' | null;
+
+function litTypeOf(e: A.Expr, scope?: Scope): LitTy {
+  if (e.kind === 'lit') {
+    if (e.lit.t === 'int') return 'int';
+    if (e.lit.t === 'float') return 'float';
+    if (e.lit.t === 'bool') return 'bool';
+    if (e.lit.t === 'str') return 'str';
+    if (e.lit.t === 'char') return 'char';
+    return null;
+  }
+  if (e.kind === 'unary' && (e.op === '-' || e.op === '+')) return litTypeOf(e.operand, scope);
+  // v0.2.53 S-14（v2）：path 引用沿作用域查声明处记入的 litTy
+  // （let s = "abc" 后，s 的静态类型事实 = str）
+  if (e.kind === 'path' && e.segs.length === 1 && scope) {
+    let s: Scope | undefined = scope;
+    while (s) {
+      const hit = s.vars.get(e.segs[0]!);
+      if (hit) return hit.litTy ?? null;
+      s = s.parent;
+    }
+    return null;
+  }
+  if (e.kind === 'cast' && e.ty.kind === 'path' && e.ty.segs.length === 1) {
+    // 显式 cast 的目标类型可作为静态事实（as i64 / as f64 / as bool / as String）
+    const t = e.ty.segs[0]!;
+    if (t === 'i8' || t === 'i16' || t === 'i32' || t === 'i64' || t === 'i128' || t === 'isize' || t === 'u8' || t === 'u16' || t === 'u32' || t === 'u64' || t === 'u128' || t === 'usize') return 'int';
+    if (t === 'f32' || t === 'f64') return 'float';
+    if (t === 'bool') return 'bool';
+    if (t === 'String' || t === 'str') return 'str';
+    if (t === 'char') return 'char';
+  }
+  return null; // path / call / 方法链等动态值 → 不判
+}
+
+const NUMERIC_TYS = new Set<LitTy>(['int', 'float']);
+
+function checkBinaryOpTypes(e: A.Expr & { kind: 'binary' }, scope: Scope, diags: Diag[], file: string): void {
+  const lhs = litTypeOf(e.lhs, scope);
+  const rhs = litTypeOf(e.rhs, scope);
+  if (lhs === null || rhs === null) return; // 静态不可判 → 保守放行
+  const op = e.op;
+  const at = `${lhs} ${op} ${rhs}`;
+  const fail = (note: string): void => {
+    diags.push(err('S-14', `二元运算类型不匹配：${at}（${note}；rustc 后端编译期拒绝，python/typescript 后端静默放行或产生垃圾值 —— 跨后端漂移）`, e.span, file));
+  };
+  // 字符串拼接：+ 且两侧同为 str 合法（Rust/JS/Python 一致）；str 与数值 + 非法
+  if (op === '+') {
+    if (lhs === 'str' && rhs === 'str') return;
+    if ((lhs === 'str') !== (rhs === 'str')) { fail('str 与数值相加：仅 str+str 拼接与数值加法合法'); return; }
+  }
+  if (op === '*' || op === '-' || op === '/' || op === '%') {
+    // 算术：仅数值域（str*int 是 python 的字符串重复但非 HSL 语义 —— interp 运行期拒绝，静态提前拦）
+    if (!NUMERIC_TYS.has(lhs) || !NUMERIC_TYS.has(rhs)) { fail('算术运算符要求两侧数值（str 重复/拼接请用显式转换或 str 方法）'); return; }
+    if ((lhs === 'float') !== (rhs === 'float')) { fail('int 与 float 混算需显式 as 转换（S1 零隐式转换）'); return; }
+    return;
+  }
+  if (op === '+' ) {
+    if (!NUMERIC_TYS.has(lhs) || !NUMERIC_TYS.has(rhs)) { fail('加法仅数值加法或 str+str 拼接'); return; }
+    if ((lhs === 'float') !== (rhs === 'float')) { fail('int 与 float 混算需显式 as 转换（S1 零隐式转换）'); return; }
+    return;
+  }
+  // 比较运算：==/!=/</>/<=/>= —— 数值×数值 / str×str / bool×bool / char×char 合法；跨类非法
+  if (op === '==' || op === '!=' || op === '<' || op === '>' || op === '<=' || op === '>=') {
+    if (lhs !== rhs) { fail('比较运算两侧类型不同（数值×字符串等跨类比较在 rustc 拒绝，python/typescript 静默给出错误结果）'); return; }
+    return;
+  }
+  // 逻辑运算：&&/|| 仅 bool（int&&bool 等在 rustc 非法，js 静默真值化）
+  if (op === '&&' || op === '||') {
+    if (lhs !== 'bool' || rhs !== 'bool') { fail('逻辑运算符要求两侧 bool（js 后端静默真值化是语义漂移源）'); return; }
+    return;
+  }
+}
+
 function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
   switch (e.kind) {
     case 'path':
@@ -587,6 +673,14 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
     case 'binary':
       checkExpr(e.lhs, scope, enums, diags, file, inAgentLoop);
       checkExpr(e.rhs, scope, enums, diags, file, inAgentLoop);
+      // v0.2.53 S-14：二元运算符的保守静态类型检查（字面量域）。
+      // 三后端真机对拍实证（L-8）：`"abc" * 3` check 双端放行后 ——
+      // interp 运行期报错 / rustc 编译期拒绝 / python 打印 abcabcabc /
+      // bun 打印 NaN（静默垃圾值）。NaN 是最坏结局（静默污染数据流）。
+      // 保守口径：只判「两侧都能静态判为字面量类型」的表达式（lit /
+      // 一元负号包裹的 lit / 显式 cast 的目标类型）——未知类型不判，
+      // 零误报优先；动态值留给运行期（S1 零隐式转换的运行期镜像）。
+      checkBinaryOpTypes(e, scope, diags, file);
       break;
     case 'unary':
       checkExpr(e.operand, scope, enums, diags, file, inAgentLoop);

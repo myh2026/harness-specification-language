@@ -44,6 +44,19 @@ pub struct Symbol {
     pub used: bool,
     pub kind: SymbolKind,
     pub span: Span,
+    /// v0.2.53 S-14：静态字面量类型事实（let 声明处记录，二元运算检查用；
+    /// None = 动态值/不可判，保守放行 —— 与 dhv-ts 的 LitTy 口径一致）
+    pub lit_ty: Option<SymbolLitTy>,
+}
+
+/// S-14 字面量类型域（与 dhv-ts LitTy 同构）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolLitTy {
+    Int,
+    Float,
+    Bool,
+    Str,
+    Char,
 }
 
 /// import 符号（S7 追踪；glob `import * as m` 豁免）
@@ -79,6 +92,7 @@ impl SymbolTable {
                     used: false,
                     kind,
                     span,
+                    lit_ty: None,
                 },
             );
         }
@@ -96,6 +110,19 @@ impl SymbolTable {
     /// 只查不改（不标记 used）
     pub fn peek(&self, name: &str) -> Option<&Symbol> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+    /// v0.2.53 S-14：只查 lit_ty 不标记 used（类型检查非使用语义）
+    pub fn peek_lit_ty(&self, name: &str) -> Option<SymbolLitTy> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).and_then(|sym| sym.lit_ty)
+    }
+    /// v0.2.53 S-14：更新当前作用域符号的 lit_ty（let 声明处调用）
+    pub fn set_lit_ty(&mut self, name: &str, lit_ty: SymbolLitTy) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                sym.lit_ty = Some(lit_ty);
+                return;
+            }
+        }
     }
     pub fn current_scope_has(&self, name: &str) -> bool {
         self.scopes.last().map(|s| s.contains_key(name)).unwrap_or(false)
@@ -1009,6 +1036,82 @@ impl TypeChecker {
         }
     }
 
+    /// v0.2.53 S-14：表达式的静态字面量类型（lit / 一元负号包裹 / 显式 cast 目标 /
+    /// 单段 path 查符号表 lit_ty）—— 与 dhv-ts litTypeOf 同构。不可判 → None。
+    fn expr_lit_ty(&self, e: &Expr) -> Option<SymbolLitTy> {
+        match &e.kind {
+            ExprKind::Literal(l) => match &l.kind {
+                LiteralKind::Int { .. } => Some(SymbolLitTy::Int),
+                LiteralKind::Float { .. } => Some(SymbolLitTy::Float),
+                LiteralKind::Bool(_) => Some(SymbolLitTy::Bool),
+                LiteralKind::Str { .. } => Some(SymbolLitTy::Str),
+                LiteralKind::Char(_) => Some(SymbolLitTy::Char),
+            },
+            ExprKind::Unary { op: UnaryOp::Neg | UnaryOp::Not, operand, .. } => self.expr_lit_ty(operand),
+            ExprKind::Cast { ty, .. } => {
+                // 显式 cast 目标类型可作为静态事实
+                let TypeKind::Path(pt) = &ty.kind else { return None };
+                if pt.path.leading_colon || pt.path.segments.len() != 1 {
+                    return None;
+                }
+                match pt.path.segments[0].name.as_str() {
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => Some(SymbolLitTy::Int),
+                    "f32" | "f64" => Some(SymbolLitTy::Float),
+                    "bool" => Some(SymbolLitTy::Bool),
+                    "String" | "str" => Some(SymbolLitTy::Str),
+                    "char" => Some(SymbolLitTy::Char),
+                    _ => None,
+                }
+            }
+            ExprKind::Path(p) if p.segments.len() == 1 && !p.leading_colon => {
+                self.symbols.peek_lit_ty(&p.segments[0].name)
+            }
+            _ => None,
+        }
+    }
+
+    /// v0.2.53 S-14：二元运算类型检查（与 dhv-ts checkBinaryOpTypes 同口径）
+    fn check_binary_op_types(&mut self, op: BinaryOp, lt: SymbolLitTy, rt: SymbolLitTy, span: Span) {
+        use BinaryOp::*;
+        use SymbolLitTy::*;
+        let fail = |diags: &mut Diagnostics, note: &str| {
+            diags.push(
+                Diagnostic::error(
+                    DiagCode::Strictness("S14"),
+                    format!(
+                        "二元运算类型不匹配：{} {} {}（{}；rustc 后端编译期拒绝，python/typescript 后端静默放行或产生垃圾值 —— 跨后端漂移）",
+                        lit_ty_name(lt), op.as_str(), lit_ty_name(rt), note
+                    ),
+                    span,
+                ),
+            );
+        };
+        let numeric = |t: SymbolLitTy| matches!(t, Int | Float);
+        match op {
+            Add => {
+                // str+str 拼接合法；其余要求同域数值
+                if lt == Str && rt == Str { return; }
+                if (lt == Str) != (rt == Str) { fail(&mut self.diags, "str 与数值相加：仅 str+str 拼接与数值加法合法"); return; }
+                if !numeric(lt) || !numeric(rt) { fail(&mut self.diags, "加法仅数值加法或 str+str 拼接"); return; }
+                if (lt == Float) != (rt == Float) { fail(&mut self.diags, "int 与 float 混算需显式 as 转换（S1 零隐式转换）"); return; }
+            }
+            Sub | Mul | Div | Rem => {
+                if !numeric(lt) || !numeric(rt) { fail(&mut self.diags, "算术运算符要求两侧数值（str 重复/拼接请用显式转换或 str 方法）"); return; }
+                if (lt == Float) != (rt == Float) { fail(&mut self.diags, "int 与 float 混算需显式 as 转换（S1 零隐式转换）"); return; }
+            }
+            Eq | Ne | Lt | Gt | Le | Ge => {
+                if lt != rt { fail(&mut self.diags, "比较运算两侧类型不同（数值×字符串等跨类比较在 rustc 拒绝，python/typescript 静默给出错误结果）"); return; }
+            }
+            And | Or => {
+                if lt != Bool || rt != Bool { fail(&mut self.diags, "逻辑运算符要求两侧 bool（js 后端静默真值化是语义漂移源）"); return; }
+            }
+            BitAnd | BitOr | BitXor | Shl | Shr => {
+                // 位运算：仅整型域（与 rustc 一致；python 宽松但静态拦截漂移）
+                if lt != Int || rt != Int { fail(&mut self.diags, "位运算符要求两侧整型"); return; }
+            }
+        }
+    }
+
     fn check_let(&mut self, l: &LetStmt) {
         if let Some(ty) = &l.ty {
             self.walk_type(ty);
@@ -1023,8 +1126,17 @@ impl TypeChecker {
         if let Some(els) = &l.else_block {
             self.walk_block_inner(els);
         }
+        // 声明先于 lit_ty 记录（set_lit_ty 按名查符号表 —— 符号必须已注册；
+        // 首版把 S-14 记录放在 declare_binding 之前 → 查无此名静默失效，
+        // dhv-ts 报而 dhv 不报的双端不一致 —— conformance 对拍实录）
+        let init_lit_ty = l.init.as_ref().and_then(|init| self.expr_lit_ty(init));
         if let PatternKind::Ident { name, .. } = &l.pattern.kind {
             self.declare_binding(name, l.mutable, SymbolKind::Let);
+            // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入符号表 ——
+            // 后续 path 引用可判（变量中转场景）。赋值更新不追踪（保守边界）。
+            if let Some(t) = init_lit_ty {
+                self.symbols.set_lit_ty(&name.name, t);
+            }
         } else {
             self.walk_pattern(&l.pattern, SymbolKind::Let);
         }
@@ -1087,9 +1199,17 @@ impl TypeChecker {
                 }
             }
             ExprKind::Path(p) => self.mark_path_used(p),
-            ExprKind::Binary { lhs, rhs, .. } => {
+            ExprKind::Binary { op, lhs, rhs, .. } => {
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);
+                // v0.2.53 S-14：二元运算保守静态类型检查（与 dhv-ts 同口径；
+                // 三后端真机对拍实证 L-8：str*int 在 rustc 拒绝 / python abcabcabc /
+                // ts NaN 静默垃圾值 —— interp 运行期拒绝，静态提前拦）
+                let lt = self.expr_lit_ty(lhs);
+                let rt = self.expr_lit_ty(rhs);
+                if let (Some(lt), Some(rt)) = (lt, rt) {
+                    self.check_binary_op_types(*op, lt, rt, e.span);
+                }
             }
             ExprKind::Unary { operand, .. } => self.walk_expr(operand),
             ExprKind::Call { callee, args } => {
@@ -1697,5 +1817,17 @@ fn pattern_fingerprint(p: &PatternKind) -> String {
             "or({})",
             alts.iter().map(|a| pattern_fingerprint(&a.kind)).collect::<Vec<_>>().join("|")
         ),
+    }
+}
+
+/// v0.2.53 S-14：字面量类型名（诊断文案用）
+fn lit_ty_name(t: crate::typecheck::SymbolLitTy) -> &'static str {
+    use crate::typecheck::SymbolLitTy::*;
+    match t {
+        Int => "int",
+        Float => "float",
+        Bool => "bool",
+        Str => "str",
+        Char => "char",
     }
 }
