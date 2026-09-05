@@ -43,17 +43,62 @@ export interface HarnessEvent {
   data: unknown;
 }
 
+// ----------------------------------------------------------------------------
+// Fixture v2（Gauntlet 扩展）：多轨道剧本 + 故障注入计划
+// ----------------------------------------------------------------------------
+// 兼容 dsh 时代的 { acts, reviews }；新增：
+//   tracks: { <name>: string[] }   —— 任意命名轨道（$host.fixture.next("<name>")）
+//   faults: FaultSpec[]            —— 在宿主 API 边界注入的确定性故障
+// ----------------------------------------------------------------------------
+export interface FaultSpec {
+  /** 宿主 API 目标：fs.read / fs.write / fs.edit / fs.list / shell.run /
+   *  json.parse / json.fields / llm.complete / fixture.next:<track> */
+  target: string;
+  /** 1 起算的第 N 次调用（默认 1） */
+  nth?: number;
+  /** error（抛错）/ deny（权限拒绝+事件）/ empty（空返回）/ corrupt（返回值截断）/ slow（延迟） */
+  kind: 'error' | 'deny' | 'empty' | 'corrupt' | 'slow';
+  message?: string;
+  /** slow 延迟毫秒（仅异步目标可用） */
+  delayMs?: number;
+}
+
+interface FixtureState {
+  acts: string[];
+  reviews: string[];
+  tracks: Map<string, string[]>;
+  faults: FaultSpec[];
+  actIdx: number;
+  reviewIdx: number;
+  trackIdx: Map<string, number>;
+}
+
 export class Host {
   events: HarnessEvent[] = [];
   private seq = 0;
   private zai: unknown = null;
-  private fixture: { acts: string[]; reviews: string[]; actIdx: number; reviewIdx: number } | null = null;
+  private fixture: FixtureState | null = null;
+  private faultCounts = new Map<string, number>();
   public api: Record<string, unknown>;
 
   constructor(public opts: HostOptions) {
     if (opts.fixturePath && fs.existsSync(opts.fixturePath)) {
-      const raw = JSON.parse(fs.readFileSync(opts.fixturePath, 'utf-8')) as { acts?: string[]; reviews?: string[] };
-      this.fixture = { acts: raw.acts ?? [], reviews: raw.reviews ?? [], actIdx: 0, reviewIdx: 0 };
+      const raw = JSON.parse(fs.readFileSync(opts.fixturePath, 'utf-8')) as {
+        acts?: string[];
+        reviews?: string[];
+        tracks?: Record<string, string[]>;
+        faults?: FaultSpec[];
+      };
+      this.fixture = {
+        acts: raw.acts ?? [],
+        reviews: raw.reviews ?? [],
+        tracks: new Map(Object.entries(raw.tracks ?? {})),
+        faults: raw.faults ?? [],
+        actIdx: 0,
+        reviewIdx: 0,
+        trackIdx: new Map(),
+      };
+      this.validateFaults();
     }
     this.api = {
       config: {
@@ -73,21 +118,23 @@ export class Host {
           messages: { role: string; content: string }[];
           temperature?: number;
           maxTokens?: number;
-        }): Promise<string> => this.llmComplete(req),
+        }): Promise<string> => this.withFaultsAsync('llm.complete', () => this.llmComplete(req)),
       },
       fs: {
-        read: (p: string): string => this.fsRead(p),
-        write: (p: string, content: string): number => this.fsWrite(p, content),
-        edit: (p: string, oldText: string, newText: string): { ok: boolean; error?: string } => this.fsEdit(p, oldText, newText),
-        list: (dir?: string): string => this.fsList(dir ?? '.'),
+        read: (p: string): string => this.withFaultsSync('fs.read', () => this.fsRead(p)),
+        write: (p: string, content: string): number => this.withFaultsSync('fs.write', () => this.fsWrite(p, content)),
+        edit: (p: string, oldText: string, newText: string): { ok: boolean; error?: string } =>
+          this.withFaultsSync('fs.edit', () => this.fsEdit(p, oldText, newText)),
+        list: (dir?: string): string => this.withFaultsSync('fs.list', () => this.fsList(dir ?? '.')),
       },
       shell: {
-        run: async (cmd: string, o?: { cwd?: string; timeoutMs?: number }) => this.shellRun(cmd, o),
+        run: async (cmd: string, o?: { cwd?: string; timeoutMs?: number }) =>
+          this.withFaultsAsync('shell.run', () => this.shellRun(cmd, o)),
       },
       json: {
-        parse: (s: string): unknown => JSON.parse(s),
+        parse: (s: string): unknown => this.withFaultsSync('json.parse', () => JSON.parse(s)),
         stringify: (v: unknown): string => JSON.stringify(v, null, 2),
-        fields: (s: string): Map<string, string> => this.jsonFields(s),
+        fields: (s: string): Map<string, string> => this.withFaultsSync('json.fields', () => this.jsonFields(s)),
       },
       artifacts: {
         write: (name: string, content: string): string => this.artifactWrite(name, content),
@@ -96,6 +143,8 @@ export class Host {
         emit: (name: string, data: unknown): void => this.emit(name, data),
       },
       fixture: {
+        next: async (track: string): Promise<string> => this.fixtureNext(track),
+        left: (track: string): number => this.fixtureLeft(track),
         nextAct: async (): Promise<string> => {
           if (!this.fixture) throw new Error('fixture 未配置（--fixture）');
           const i = this.fixture.actIdx++;
@@ -123,6 +172,140 @@ export class Host {
 
   emit(name: string, data: unknown): void {
     this.events.push({ seq: this.seq++, ts: new Date().toISOString(), name, data });
+  }
+
+  // --------------------------------------------------------------------------
+  // 故障注入（Gauntlet v2）：宿主 API 边界的确定性故障闸门。
+  // 每个 (target, nth) 只触发一次；触发即发 fault_injected 事件（可观测）。
+  // 同步 API 走 withFaultsSync（slow 不可用于同步目标——构造期校验剔除）。
+  // --------------------------------------------------------------------------
+  private faultPlan(): FaultSpec[] {
+    return this.fixture?.faults ?? [];
+  }
+
+  /** 构造期校验：剔除不合法的故障规格（同步目标上的 slow / 未知 kind）。 */
+  private validateFaults(): void {
+    const SYNC_TARGETS = new Set(['fs.read', 'fs.write', 'fs.edit', 'fs.list', 'json.parse', 'json.fields']);
+    this.fixture!.faults = this.fixture!.faults.filter((f) => {
+      if (f.kind === 'slow' && SYNC_TARGETS.has(f.target)) {
+        this.emit('fault_rejected', { target: f.target, reason: 'slow 只适用于异步目标（shell.run / llm.complete / fixture.next）' });
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private matchFault(target: string): FaultSpec | null {
+    const n = (this.faultCounts.get(target) ?? 0) + 1;
+    this.faultCounts.set(target, n);
+    const spec = this.faultPlan().find((f) => f.target === target && (f.nth ?? 1) === n);
+    return spec ?? null;
+  }
+
+  private withFaultsSync<T>(target: string, real: () => T): T {
+    const spec = this.matchFault(target);
+    if (!spec) return real();
+    this.emit('fault_injected', { target, nth: spec.nth ?? 1, kind: spec.kind, message: spec.message ?? '' });
+    if (spec.kind === 'error' || spec.kind === 'deny') {
+      if (spec.kind === 'deny') {
+        this.emit('capability_denied', { target, reason: spec.message ?? `fault(deny): ${target}` });
+      }
+      throw new Error(spec.message ?? `fault(${spec.kind}): ${target}`);
+    }
+    const v = real();
+    if (spec.kind === 'empty') {
+      if (v instanceof Map) return new Map() as unknown as T;
+      if (typeof v === 'string') return '' as unknown as T;
+      if (typeof v === 'number') return 0 as unknown as T;
+      return undefined as unknown as T;
+    }
+    if (spec.kind === 'corrupt') {
+      if (typeof v === 'string') {
+        const keep = Math.max(0, Math.floor(v.length / 2));
+        return (v.slice(0, keep) + '\n[fault:corrupt]') as unknown as T;
+      }
+      if (v instanceof Map) {
+        v.clear();
+        return v;
+      }
+    }
+    return v;
+  }
+
+  private async withFaultsAsync<T>(target: string, real: () => T | Promise<T>): Promise<T> {
+    const spec = this.matchFault(target);
+    if (!spec) return await real();
+    this.emit('fault_injected', { target, nth: spec.nth ?? 1, kind: spec.kind, message: spec.message ?? '' });
+    if (spec.kind === 'error' || spec.kind === 'deny') {
+      if (spec.kind === 'deny') {
+        this.emit('capability_denied', { target, reason: spec.message ?? `fault(deny): ${target}` });
+      }
+      throw new Error(spec.message ?? `fault(${spec.kind}): ${target}`);
+    }
+    if (spec.kind === 'slow') {
+      await new Promise((r) => setTimeout(r, spec.delayMs ?? 100));
+      return await real();
+    }
+    const v = await real();
+    if (spec.kind === 'empty') {
+      if (typeof v === 'string') return '' as unknown as T;
+      if (typeof v === 'object' && v !== null && 'ok' in (v as object)) {
+        return { ok: false, code: 0, stdout: '', stderr: spec.message ?? '[fault:empty]' } as unknown as T;
+      }
+      return undefined as unknown as T;
+    }
+    if (spec.kind === 'corrupt') {
+      if (typeof v === 'string') {
+        const keep = Math.max(0, Math.floor(v.length / 2));
+        return (v.slice(0, keep) + '\n[fault:corrupt]') as unknown as T;
+      }
+      if (typeof v === 'object' && v !== null && 'stdout' in (v as object)) {
+        const r = v as { ok: boolean; code: number; stdout: string; stderr: string };
+        return { ok: r.ok, code: r.code, stdout: r.stdout.slice(0, Math.floor(r.stdout.length / 2)) + '\n[fault:corrupt]', stderr: r.stderr } as unknown as T;
+      }
+    }
+    return v;
+  }
+
+  // ---- 多轨道剧本（Fixture v2） ----
+  private async fixtureNext(track: string): Promise<string> {
+    const target = `fixture.next:${track}`;
+    const spec = this.matchFault(target);
+    const consume = (): string => {
+      if (!this.fixture) throw new Error('fixture 未配置（--fixture）');
+      const list = this.fixture.tracks.get(track);
+      if (!list) throw new Error(`fixture 轨道 "${track}" 不存在（可用：${[...this.fixture.tracks.keys()].join(', ') || '无'}）`);
+      const i = this.fixture.trackIdx.get(track) ?? 0;
+      this.fixture.trackIdx.set(track, i + 1);
+      if (i >= list.length) throw new Error(`fixture 轨道 "${track}" 已耗尽（${list.length} 条）`);
+      return list[i]!;
+    };
+    if (!spec) return consume();
+    this.emit('fault_injected', { target, nth: spec.nth ?? 1, kind: spec.kind, message: spec.message ?? '' });
+    if (spec.kind === 'error' || spec.kind === 'deny') {
+      if (spec.kind === 'deny') {
+        this.emit('capability_denied', { target, reason: spec.message ?? `fault(deny): ${target}` });
+      }
+      throw new Error(spec.message ?? `fixture 轨道 ${track} 故障：${spec.kind}`);
+    }
+    if (spec.kind === 'slow') {
+      await new Promise((r) => setTimeout(r, spec.delayMs ?? 100));
+      return consume();
+    }
+    const v = consume();
+    if (spec.kind === 'empty') return '';
+    if (spec.kind === 'corrupt') {
+      const keep = Math.max(0, Math.floor(v.length / 2));
+      return v.slice(0, keep) + '\n[fault:corrupt]';
+    }
+    return v;
+  }
+
+  private fixtureLeft(track: string): number {
+    if (!this.fixture) return 0;
+    const list = this.fixture.tracks.get(track);
+    if (!list) return 0;
+    return list.length - (this.fixture.trackIdx.get(track) ?? 0);
   }
 
   // ---- 路径监狱 ----
