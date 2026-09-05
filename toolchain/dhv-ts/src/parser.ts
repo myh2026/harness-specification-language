@@ -450,7 +450,10 @@ export class Parser {
         // mut 是严格关键字（kw kind）；self 是上下文标识符（ident kind）
         return t.kind === 'ident' || t.kind === 'kw' ? t.text : undefined;
       };
-      const isSelfHere = peekText(0) === 'self';
+      // BUGFIX(2025-09): BNF v1.5 SelfParam ::= "&" "mut"? "self" | "mut"? "self"
+      // 此前未识别无引用符前缀的 `mut self` —— 它被误入常规参数分支
+      // （parsePattern 把 self 解析为普通绑定），导致运行期「参数不足」。
+      const isSelfHere = peekText(0) === 'self' || (peekText(0) === 'mut' && peekText(1) === 'self');
       const isRefSelf = this.atP('&') && (peekText(1) === 'self' || (peekText(1) === 'mut' && peekText(2) === 'self'));
       if (isSelfHere || isRefSelf) {
         let self: 'value' | 'mutvalue' | 'ref' | 'refmut';
