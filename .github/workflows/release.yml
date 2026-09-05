@@ -120,6 +120,12 @@ jobs:
           path: /tmp/artifacts
           merge-multiple: true
 
+      - name: Generate sha256 checksums
+        working-directory: /tmp/artifacts
+        run: |
+          sha256sum dhv-* > sha256sums.txt
+          cat sha256sums.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

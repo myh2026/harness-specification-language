@@ -259,13 +259,18 @@ project {
 
 ## 📦 版本化发布
 
-预编译二进制随 [GitHub Releases](https://github.com/myh2026/harness-specification-language/releases) 分发：
+预编译二进制随 [GitHub Releases](https://github.com/myh2026/harness-specification-language/releases) 分发（打 `v*` tag 自动构建，见 [release.yml](.github/workflows/release.yml)）：
 
-| 平台 | 架构 | 产物 |
+| 平台 | 架构 | 产物（`{VER}` 为版本号） |
 |:---|:---|:---|
-| Linux | x86_64 (gnu) | `dhv-v{VER}-linux-x86_64.tar.gz` |
-| macOS | arm64 (Apple Silicon) | `dhv-v{VER}-macos-aarch64.tar.gz` |
-| Windows | x86_64 | `dhv-v{VER}-windows-x86_64.zip` |
+| Linux | x86_64 (gnu) | `dhv-v{VER}-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `dhv-v{VER}-aarch64-apple-darwin.tar.gz` |
+| macOS | x86_64 (Intel) | `dhv-v{VER}-x86_64-apple-darwin.tar.gz` |
+| Windows | x86_64 (MSVC) | `dhv-v{VER}-windows-x86_64.zip` |
+
+- 最新版入口：[releases/latest](https://github.com/myh2026/harness-specification-language/releases/latest)；
+- 解压后单文件 `dhv`（Windows 为 `dhv.exe`），加入 `PATH` 即用，无运行时依赖；
+- 当前已发布：[v0.2.56](https://github.com/myh2026/harness-specification-language/releases/tag/v0.2.56)。
 
 ## 🛡️ 当前版本
 
