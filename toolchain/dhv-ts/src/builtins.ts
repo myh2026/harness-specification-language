@@ -282,6 +282,11 @@ export const OPTION_METHODS: Record<string, BuiltinMethod> = {
   ok_or: { fn: (r, a) => (isOption(r) && r.variant === 'Some' ? okV(enumPayload(r)) : errV(a[0])) },
   or: { fn: (r, a) => (isOption(r) && r.variant === 'Some' ? r : a[0]) },
   cloned: { fn: (r) => (isOption(r) && r.variant === 'Some' ? someV(cloneValue(enumPayload(r))) : noneV()) },
+  // v0.2.57 修复（Bug #4）：Option 缺 clone —— 自定义 derive(Clone) 枚举有
+  // clone 而内置 Option/Result 没有（Rust 语义：Option<T: Clone> 实现 Clone；
+  // .cloned() 是 Option<&T> 的另一方法，不能替代）。与用户枚举的 clone 同走
+  // cloneValue 深拷贝。
+  clone: { fn: (r) => cloneValue(r) },
   // v1.4.9 新增：Option::filter（Rust 语义：Some(x) 且 f(x) 真 → 保留原 Some；否则 None）
   filter: {
     fn: async (r, a, ctx) => (isOption(r) && r.variant === 'Some' && B(await ctx.call(a[0]!, [enumPayload(r)])) ? r : noneV()),
@@ -298,6 +303,8 @@ export const RESULT_METHODS: Record<string, BuiltinMethod> = {
   map: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Ok' ? okV(await ctx.call(a[0]!, [enumPayload(r)])) : r) },
   map_err: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Err' ? errV(await ctx.call(a[0]!, [enumPayload(r)])) : r) },
   unwrap_or: { fn: (r, a) => (isResult(r) && r.variant === 'Ok' ? enumPayload(r) : a[0]) },
+  // v0.2.57（Bug #4 同修）：Result 缺 clone
+  clone: { fn: (r) => cloneValue(r) },
   and_then: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Ok' ? await ctx.call(a[0]!, [enumPayload(r)]) : r) },
   or_else: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Err' ? await ctx.call(a[0]!, [enumPayload(r)]) : r) },
 };
