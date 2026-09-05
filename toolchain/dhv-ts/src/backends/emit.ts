@@ -11,7 +11,7 @@ import * as A from '../ast';
 import { LoadedProgram } from '../linker';
 import { Interp } from '../interp';
 import { getLang, isStaticLangId, codegenTier } from './registry';
-import { emitFile, emitTypeDeclOnly, ProjectedItem, EmitCtx, javaWrapperOf } from './decls';
+import { emitFile, emitTypeDeclOnly, ProjectedItem, EmitCtx, javaWrapperOf, camel } from './decls';
 import { validateGeneratedFile, validateStaticGeneratedFile } from './validate';
 import { VERSION } from '../version';
 
@@ -409,12 +409,34 @@ function importHeaderForFnDeps(
   };
   for (const name of [...fnRefs].sort()) {
     if (localNames.has(name)) continue;
-    addWired(name, fnLoc.get(langId)?.get(name));
+    const loc = fnLoc.get(langId)?.get(name);
+    if (!loc) {
+      // v0.2.55 L-16 修复（诚实协议补角）：本语言未投射的被引用可调用项此前静默
+      // 漏接 —— 生成物引用未定义名，import 期/运行期 ReferenceError 才暴露
+      // （与 X-1 类型未投射、X-2 跨目录不可接线的口径对齐：emit 期即告警）。
+      warnings.push(`X-5：${relPath} 引用函数/常量 ${name} 未投射到 ${langId}（生成物将引用未定义名，运行期报错 —— 请在 project{} 中补投该目标）`);
+      continue;
+    }
+    addWired(name, loc);
   }
   if (flattensVariants) {
     for (const name of [...variantRefs].sort()) {
       if (localVariants.has(name)) continue;
-      addWired(name, variantLoc.get(langId)?.get(name));
+      // v0.2.55 L-20c 修复：js/ts 无负载变体只有 snakeUpper 导出（LOW/MID 常量）——
+      // 原名（Low/Mid）无对应导出，import 即模块加载 SyntaxError（match 探针实录：
+      // `import { Low } ... Export named 'Low' not found`）。python 有同名类
+      // （class Low）✓ 不受影响。判据：variantOf 对单元变体双注册（原名 + snakeUpper），
+      // 若 snakeUpper 形态也在引用集 → ts/js 跳过原名（snakeUpper 孪生会被单独接线）。
+      if ((langId === 'typescript' || langId === 'javascript')
+        && name !== snakeUpperLocal(name) && variantRefs.has(snakeUpperLocal(name))) {
+        continue;
+      }
+      const loc = variantLoc.get(langId)?.get(name);
+      if (!loc) {
+        warnings.push(`X-5：${relPath} 引用枚举变体 ${name} 未投射到 ${langId}（生成物将引用未定义名，运行期报错 —— 请在 project{} 中补投该枚举）`);
+        continue;
+      }
+      addWired(name, loc);
     }
   }
   if (bySrc.size === 0) return { lines: [], unusedVariants: new Set() };
@@ -551,8 +573,21 @@ function importHeaderForTypeDeps(
       break;
     }
     case 'typescript': case 'javascript': {
+      // v0.2.55 L-20 修复（js）：枚举名/类型别名在 js 无值导出（只有变体工厂与
+      // struct 工厂是值导出）—— 此前 `import { Dir } from './dir'` 引用不存在的
+      // 导出 = 生成物模块加载即 SyntaxError。js 按投射项 kind 过滤：enum/typealias
+      // 跳过（枚举名只在 TS 有类型层导出）。struct 工厂与导入名同名 ✓ 保留。
+      // v0.2.55 L-20d 修复（js+ts）：snake 名 struct 的值导出是 camel 工厂
+      // （agent_config → agentConfig）—— import 原名必炸（entry_struct 语料实录）。
+      // structLit 已镜像 camel 约定（body.ts L-20），此处 import 同步镜像。
       for (const [src, names] of srcEntries) {
-        out.push(`import { ${names.join(', ')} } from '${tsImportPath(relPath, src)}';`);
+        const exported = names.flatMap((n) => {
+          const pi = typeLoc.get(langId)?.get(n)?.pi;
+          if (langId === 'javascript' && (pi?.kind === 'enum' || pi?.kind === 'typealias')) return [];
+          if (pi?.kind === 'struct' && camel(n) !== n) return [camel(n)];
+          return [n];
+        });
+        if (exported.length > 0) out.push(`import { ${exported.join(', ')} } from '${tsImportPath(relPath, src)}';`);
       }
       break;
     }

@@ -1,0 +1,35 @@
+// ============================================================================
+// tests/fixtures/emit/entry_enum.hsl — 行为级对拍语料：枚举构造/分派/显示
+// ----------------------------------------------------------------------------
+// L-20 锁定：js/ts 单元变体 snakeUpper 导出接线（LOW/MID）+ 构造工厂 +
+// match 分派 + Rust-Debug 显示（Mid）。
+// 历史缺陷：js `import { Low }` 引用不存在导出 → 模块加载 SyntaxError。
+// ============================================================================
+
+enum Level { Low, Mid, High(i64) }
+
+export fn weight(l: Level) -> i64 {
+    match l {
+        Level::Low => 1,
+        Level::Mid => 5,
+        Level::High(n) => n * 10,
+    }
+}
+
+export fn main() -> i64 {
+    println!("emit::w1={}", weight(Level::Low));
+    println!("emit::w2={}", weight(Level::Mid));
+    println!("emit::w3={}", weight(Level::High(7)));
+    let l: Level = Level::Mid;
+    println!("emit::disp={}", l);
+    0
+}
+
+project {
+    Level  -> "gen/python/level.py"     : python,
+    Level  -> "gen/javascript/level.js" : javascript,
+    weight -> "gen/python/weight.py"     : python,
+    weight -> "gen/javascript/weight.js" : javascript,
+    main   -> "gen/python/main.py"     : python,
+    main   -> "gen/javascript/main.js" : javascript,
+}

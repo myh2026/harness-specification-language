@@ -1,0 +1,26 @@
+// ============================================================================
+// tests/fixtures/emit/entry_vec.hsl — 行为级对拍语料：Vec 操作与集合显示
+// ----------------------------------------------------------------------------
+// L-19 锁定：Vec 显示 = 元素逗号连接无括号（interp display：'1, 2, 3'；
+// python f-string 默认 '[1, 2, 3]'、js Array.toString '1,2,3' 均发散）。
+// ============================================================================
+
+export fn main() -> i64 {
+    let mut v = vec![3, 1, 2];
+    v.sort();
+    println!("emit::sorted={}", v);
+    println!("emit::len={}", v.len());
+    let mut total: i64 = 0;
+    for x in v { total = total + x; }
+    println!("emit::sum={}", total);
+    let mut w = vec![];
+    w.push(7);
+    w.push(8);
+    println!("emit::pushed={}", w);
+    0
+}
+
+project {
+    main -> "gen/python/main.py"     : python,
+    main -> "gen/javascript/main.js" : javascript,
+}

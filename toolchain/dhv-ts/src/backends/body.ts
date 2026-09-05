@@ -11,6 +11,7 @@ import * as A from '../ast';
 import { LangSpec } from './registry';
 import { Lexer } from '../lexer';
 import { parseExprsFromTokens, treeText } from '../parser';
+import { camel } from './decls';
 import type { Token } from '../lexer';
 
 export class TranspileError extends Error {}
@@ -785,6 +786,13 @@ export class Body {
         if (e.lit.t === 'bool') return L === 'python' ? ((e.lit.v as boolean) ? 'True' : 'False') : String(e.lit.v);
         if (e.lit.t === 'str') return this.ctx.strLit(e.lit.v as string);
         if (e.lit.t === 'char') return L === 'rust' ? `'${e.lit.v}'` : this.ctx.strLit(e.lit.v as string);
+        if (e.lit.t === 'float') {
+          // v0.2.55 L-21 修复：整值浮点字面量此前 String(3.0) → '3' —— 生成物把它
+          // 当整数（rust i32 推断、1.0/2.0 → 1/2 整除 = 0、python f"{3}"）。
+          // 浮点身份必须在源码层保真：整值 → 补 .0（显示层由 _dhv_str 统一 JS 风格）。
+          const s = String(e.lit.v);
+          return /^-?\d+$/.test(s) ? `${s}.0` : s;
+        }
         if (e.lit.t === 'int') {
           // v0.2.54 L-9b（rust）：裸大字面量 → rustc 按 i32 推断 →
           // "literal out of range for `i32`" 编译拒绝（prec.hsl 实录：
@@ -844,11 +852,28 @@ export class Body {
         if (op === '&&') return L === 'python' ? `(${a} and ${b})` : `(${a} && ${b})`;
         if (op === '||') return L === 'python' ? `(${a} or ${b})` : `(${a} || ${b})`;
         if (op === '/') {
+          // v0.2.55 L-17/L-18 修复：interp 整除 = Rust 截断语义（-7/2 = -3）。此前
+          // python 生成 `//`（floor：-7//2 = -4）、js 生成 `/`（浮点：7/2 = 3.5）、
+          // unknown 类型静默真除 —— 三端三个值（emit 行为级对拍实录）。修复：
+          // 整型（含字面量推导）→ 截断除助手；浮点 → 真除；unknown → 运行期
+          // 类型分流助手（诚实兜底，不再赌类型）。rust/go/cpp 原生整除即截断 ✓。
+          const lk = this.exprKind(e.lhs), rk = this.exprKind(e.rhs);
           if (L === 'python') {
-            const lk = this.exprKind(e.lhs), rk = this.exprKind(e.rhs);
-            return (lk !== 'float' && rk !== 'float' && lk !== 'unknown' && rk !== 'unknown') ? `(${a} // ${b})` : `(${a} / ${b})`;
+            if (lk === 'float' || rk === 'float') return `(${a} / ${b})`;
+            if (lk !== 'unknown' && rk !== 'unknown') return `_dhv_idiv(${a}, ${b})`;
+            return `_dhv_div(${a}, ${b})`;
+          }
+          if (L === 'typescript' || L === 'javascript') {
+            if (lk === 'float' || rk === 'float') return `(${a} / ${b})`;
+            if (lk !== 'unknown' && rk !== 'unknown') return `_dhvIdiv(${a}, ${b})`;
+            return `_dhvDiv(${a}, ${b})`;
           }
           return `(${a} / ${b})`;
+        }
+        if (op === '%' && L === 'python') {
+          // v0.2.55 L-17：Python % 为 floor 模（-7%2 = 1）；interp/Rust/JS 为
+          // 截断模（-7%2 = -1）。统一走 _dhv_imod（= a - trunc(a/b)*b）。
+          return `_dhv_imod(${a}, ${b})`;
         }
         if (['+', '-', '*', '%', '<', '>', '<=', '>=', '==', '!=', '&', '|', '^', '<<', '>>'].includes(op)) return `(${a} ${op} ${b})`;
         throw new TranspileError(`二元运算 ${op}`);
@@ -1091,7 +1116,10 @@ export class Body {
     if (e.fields.some((f) => !f.value)) throw new TranspileError('字段简写');
     const vals = e.fields.map((f) => this.expr(f.value!));
     if (L === 'python') return `${name}(${e.fields.map((f, i) => `${ident(f.name, L)}=${vals[i]}`).join(', ')})`;
-    if (L === 'typescript' || L === 'javascript') return `${lowerFirst(name)}(${vals.join(', ')})`;
+    // v0.2.55 L-20 修复：js/ts 此前 lowerFirst(name) → `pt(1, 2)`，而投射侧导出
+    // camel(name) 工厂 `export function Pt(...)` / `agentConfig(...)` —— 大小写/蛇形
+    // 双重错配 = 生成物 ReferenceError。统一镜像投射侧的 camel 约定。
+    if (L === 'typescript' || L === 'javascript') return `${ident(camel(name), L)}(${vals.join(', ')})`;
     if (L === 'rust') return `${name} { ${e.fields.map((f, i) => `${f.name}: ${vals[i]}`).join(', ')} }`;
     if (L === 'go') return `&${name}{${e.fields.map((f, i) => `${capitalize(f.name)}: ${vals[i]}`).join(', ')}}`;
     if (L === 'cpp') return `${name}{${vals.join(', ')}}`;
@@ -1547,7 +1575,10 @@ export class Body {
       let out = '';
       for (const p of parts) {
         if (p.lit !== undefined) { out += escLit(p.lit); continue; }
-        out += p.prec !== undefined ? `{(${p.arg}):.${p.prec}f}` : `{${p.arg}}`;
+        // v0.2.55 L-19：插值统一经 _dhv_str（interp display 规范：bool 小写、
+        // 整值浮点 JS 风格 '3'、Vec 逗号连接无括号、Option/枚举 Debug 形态）。
+        // 精度说明符（:.Nf）需裸值，不包裹。
+        out += p.prec !== undefined ? `{(${p.arg}):.${p.prec}f}` : `{_dhv_str(${p.arg})}`;
       }
       return `f"${out}"`;
     }
@@ -1555,7 +1586,7 @@ export class Body {
       let out = '';
       for (const p of parts) {
         if (p.lit !== undefined) { out += escLit(p.lit); continue; }
-        out += p.prec !== undefined ? `\${(${p.arg}).toFixed(${p.prec})}` : `\${${p.arg}}`;
+        out += p.prec !== undefined ? `\${(${p.arg}).toFixed(${p.prec})}` : `\${_dhvStr(${p.arg})}`;
       }
       return `\`${out}\``;
     }
@@ -2575,21 +2606,63 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         "    if ty[:1] == 'u' and v < 0:",
         '        return None',
         '    return v',
-        // JS Number 语义子集：Infinity/NaN 接受，空串/下划线/裸 inf 拒绝（与 interp 逐字对齐）
-        'def _dhv_parse_float(s):',
-        '    import re as _dhv_re',
-        "    t = str(s).strip()",
-        "    if t == '':",
-        '        return None',
-        "    if t in ('Infinity', '+Infinity'):",
-        "        return float('inf')",
-        "    if t == '-Infinity':",
-        "        return float('-inf')",
-        "    if t in ('NaN', '+NaN', '-NaN'):",
-        "        return float('nan')",
-        "    if _dhv_re.fullmatch(r'[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?', t) is None:",
-        '        return None',
-        '    return float(t)',
+        // v0.2.55 L-17：HSL/Rust 截断除法/取模（Python // 与 % 为 floor 语义 ——
+        // -7//2=-4、-7%2=1，而 interp 为 -3/-1；行为级对拍实录）
+        'def _dhv_idiv(a, b):',
+        '    q = a // b',
+        '    if q < 0 and q * b != a:',
+        '        q += 1',
+        '    return q',
+        'def _dhv_imod(a, b):',
+        '    return a - _dhv_idiv(a, b) * b',
+        'def _dhv_div(a, b):',
+        '    # 类型未知时运行期分流：双整型（bool 不算）→ 截断整除；否则真除',
+        '    if isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool) and not isinstance(b, bool):',
+        '        return _dhv_idiv(a, b)',
+        '    return a / b',
+        // v0.2.55 L-19：interp display 规范的 python 实现（JS Number::toString 风格）
+        'def _dhv_float_str(x):',
+        "    if x != x:",
+        "        return 'NaN'",
+        "    if x == float('inf'):",
+        "        return 'Infinity'",
+        "    if x == float('-inf'):",
+        "        return '-Infinity'",
+        '    a = -x if x < 0 else x',
+        '    if x == int(x):',
+        '        if a < 1e16:',
+        '            return str(int(x))',
+        '        if a < 1e21:',
+        "            return '{:.0f}'.format(x)",
+        '        return repr(x)',
+        '    if 1e-7 <= a < 1e-4:',
+        "        s = '{:.20f}'.format(x).rstrip('0').rstrip('.')",
+        "        return s if s else '0'",
+        '    r = repr(x)',
+        "    if 'e' in r:",
+        "        r = r.replace('e-0', 'e-').replace('e+0', 'e+')",
+        '    return r',
+        'def _dhv_str(x):',
+        '    # interp display 规范：bool 小写；整值浮点 JS 风格（3.0 → \'3\'）；',
+        '    # Vec 逗号连接无括号；None → Option::None 显示；dict → HashMap { k: v }',
+        '    if x is True:',
+        "        return 'true'",
+        '    if x is False:',
+        "        return 'false'",
+        '    if x is None:',
+        "        return 'None'",
+        '    if isinstance(x, float):',
+        '        return _dhv_float_str(x)',
+        '    if isinstance(x, list):',
+        "        return ', '.join(_dhv_str(v) for v in x)",
+        '    if isinstance(x, dict):',
+        "        return 'HashMap { ' + ', '.join((_dhv_debug(k) + ': ' + _dhv_debug(v)) for k, v in x.items()) + ' }'",
+        '    return str(x)',
+        'def _dhv_debug(x):',
+        '    import json as _dhv_json',
+        '    if isinstance(x, str):',
+        '        return _dhv_json.dumps(x)',
+        '    return _dhv_str(x)',
         '',
       ];
     case 'typescript':
@@ -2638,6 +2711,36 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         '  const f = Number(t);',
         '  return Number.isNaN(f) ? null : f;',
         '}',
+        // v0.2.55 L-18：HSL/Rust 截断除法（JS / 为浮点除：7/2=3.5 而非 3；
+        // % 已是截断语义与 interp 同源 ✓）
+        'export function _dhvIdiv(a: number, b: number): number {',
+        '  return Math.trunc(a / b);',
+        '}',
+        'export function _dhvDiv(a: number, b: number): number {',
+        '  // 类型未知时运行期分流：双安全整数 → 截断整除；否则真除',
+        '  return Number.isInteger(a) && Number.isInteger(b) ? Math.trunc(a / b) : a / b;',
+        '}',
+        // v0.2.55 L-19：interp display 规范的 js 实现（null → 'None'；Vec 无括号；
+        // 枚举 kind-标签对象 → Rust-Debug 形态；Map → HashMap { k: v }）
+        'export function _dhvStr(x: unknown): string {',
+        "  if (x === null || x === undefined) return 'None';",
+        '  if (Array.isArray(x)) return x.map((v) => _dhvStr(v)).join(\', \');',
+        "  if (x instanceof Map) return `HashMap { ${[...x.entries()].map(([k, v]) => `${_dhvDebug(k)}: ${_dhvDebug(v)}`).join(', ')} }`;",
+        '  if (typeof x === \'object\' && x !== null && typeof (x as { kind?: unknown }).kind === \'string\') {',
+        '    const o = x as { kind: string } & Record<string, unknown>;',
+        "    const ks = Object.keys(o).filter((k) => k !== 'kind');",
+        '    if (ks.length === 0) return o.kind;',
+        "    if (ks.every((k) => /^f\\d+$/.test(k))) {",
+        "      const vs = ks.slice().sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).map((k) => _dhvStr(o[k]));",
+        "      return `${o.kind}(${vs.join(', ')})`;",
+        '    }',
+        "    return `${o.kind} { ${ks.map((k) => `${k}: ${_dhvStr(o[k])}`).join(', ')} }`;",
+        '  }',
+        '  return String(x);',
+        '}',
+        'export function _dhvDebug(x: unknown): string {',
+        '  return typeof x === \'string\' ? JSON.stringify(x) : _dhvStr(x);',
+        '}',
         '',
       ];
     case 'javascript':
@@ -2684,6 +2787,34 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         "  if (t === '') return null;",
         '  const f = Number(t);',
         '  return Number.isNaN(f) ? null : f;',
+        '}',
+        // v0.2.55 L-18：HSL/Rust 截断除法（JS / 为浮点除：7/2=3.5 而非 3）
+        'function _dhvIdiv(a, b) {',
+        '  return Math.trunc(a / b);',
+        '}',
+        'function _dhvDiv(a, b) {',
+        '  // 类型未知时运行期分流：双安全整数 → 截断整除；否则真除',
+        '  return Number.isInteger(a) && Number.isInteger(b) ? Math.trunc(a / b) : a / b;',
+        '}',
+        // v0.2.55 L-19：interp display 规范（null → 'None'；Vec 逗号连接无括号；
+        // 枚举 kind-标签对象 → Rust-Debug 形态；struct 经工厂烘焙的 toString；Map → HashMap { k: v }）
+        'function _dhvStr(x) {',
+        "  if (x === null || x === undefined) return 'None';",
+        "  if (Array.isArray(x)) return x.map((v) => _dhvStr(v)).join(', ');",
+        "  if (x instanceof Map) return `HashMap { ${[...x.entries()].map(([k, v]) => `${_dhvDebug(k)}: ${_dhvDebug(v)}`).join(', ')} }`;",
+        "  if (typeof x === 'object' && x !== null && typeof x.kind === 'string') {",
+        "    const ks = Object.keys(x).filter((k) => k !== 'kind');",
+        '    if (ks.length === 0) return x.kind;',
+        "    if (ks.every((k) => /^f\\d+$/.test(k))) {",
+        "      const vs = ks.slice().sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).map((k) => _dhvStr(x[k]));",
+        "      return `${x.kind}(${vs.join(', ')})`;",
+        '    }',
+        "    return `${x.kind} { ${ks.map((k) => `${k}: ${_dhvStr(x[k])}`).join(', ')} }`;",
+        '  }',
+        '  return String(x);',
+        '}',
+        'function _dhvDebug(x) {',
+        "  return typeof x === 'string' ? JSON.stringify(x) : _dhvStr(x);",
         '}',
         '',
       ];
@@ -3118,9 +3249,7 @@ function stdMathFreeCall(name: string, args: string[], L: string): string | null
 function snakeUpper(s: string): string {
   return s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
 }
-function lowerFirst(s: string): string {
-  return s ? s[0]!.toLowerCase() + s.slice(1) : s;
-}
+// v0.2.55 L-20：lowerFirst 弃用（js/ts structLit 大小写错配根源，改用原名对齐导出侧）
 function capitalize(s: string): string {
   return s ? s[0]!.toUpperCase() + s.slice(1) : s;
 }

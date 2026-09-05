@@ -3485,6 +3485,108 @@ project {
   execFileSync(JAVAC, ['-d', dir, ...javaFiles], { cwd: dir, timeout: 120_000, stdio: 'pipe' });
 });
 
+// ---- v0.2.55 第七轮锁定（L-15 / L-17 / L-18 / L-20）----
+test('emit', 'L-15 入口守卫：python/js 投射 fn main 可执行且行为与 interp 全等', () => {
+  const dir = path.join(TMP, 'entry-guard');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'eg.hsl'), `export fn main() -> i64 {
+    println!("emit::a={}", 1 + 1);
+    println!("emit::b={}", 2.0 * 1.5);
+    0
+}
+project { main -> "gen/python/main.py" : python, main -> "gen/javascript/main.js" : javascript }`);
+  const r = run(['emit', path.join(dir, 'eg.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  const py = fs.readFileSync(path.join(dir, 'gen/python/main.py'), 'utf-8');
+  const js = fs.readFileSync(path.join(dir, 'gen/javascript/main.js'), 'utf-8');
+  // 守卫存在性（python __main__ 惯例 / js import.meta 入口判别）
+  assert(py.includes("globals().get('__name__') == '__main__'"), `python 入口守卫缺失：\n${py.slice(-300)}`);
+  assert(js.includes('_dhv_is_entry'), `js 入口守卫缺失：\n${js.slice(-300)}`);
+  // 行为级：真机运行生成物，输出与 interp 全等（L-15 前生成物零输出零副作用 exit 0）
+  const interp = run(['run', path.join(dir, 'eg.hsl')]);
+  const interpLines = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
+  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
+  const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
+  const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));
+  assert(pyLines.join('|') === interpLines.join('|'), `python 输出漂移：${pyLines.join('|')} vs ${interpLines.join('|')}`);
+  assert(jsLines.join('|') === interpLines.join('|'), `js 输出漂移：${jsLines.join('|')} vs ${interpLines.join('|')}`);
+});
+
+test('emit', 'L-15 入口守卫惰性：exec/import 消费形态不触发（退出码语义对齐）', () => {
+  const dir = path.join(TMP, 'entry-inert');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'inert.hsl'), `export fn main() -> i64 { 0 }
+project { main -> "gen/python/main.py" : python }`);
+  const r = run(['emit', path.join(dir, 'inert.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  // exec 裸函数体消费形态（语义级测试既有口径）：从首个 def 切片 exec，
+  // 守卫用 globals().get('__name__') —— exec 命名空间无该键不炸、不触发
+  const pyCode = `src = open('${fwd(dir)}/gen/python/main.py').read()
+lines = src.splitlines()
+fn_start = next(i for i, l in enumerate(lines) if l.startswith('def '))
+ns = {}
+exec(chr(10).join(lines[fn_start:]), ns)
+assert ns['main']() == 0
+print('inert-ok')`;
+  fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
+  const out = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  assert(out.includes('inert-ok'), `exec 消费形态应惰性：${out}`);
+});
+
+test('emit', 'L-17/L-18 截断除法与取模：负操作数三端语义全等（python/js vs interp）', () => {
+  const dir = path.join(TMP, 'trunc-div');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'td.hsl'), `export fn q(a: i64, b: i64) -> i64 { a / b }
+export fn m(a: i64, b: i64) -> i64 { a % b }
+export fn main() -> i64 {
+    println!("emit::d1={}", q(-7, 2));
+    println!("emit::d2={}", q(7, -2));
+    println!("emit::d3={}", q(16, 5));
+    println!("emit::m1={}", m(-7, 2));
+    println!("emit::m2={}", m(7, -2));
+    0
+}
+project { q -> "gen/python/q.py" : python, q -> "gen/javascript/q.js" : javascript, m -> "gen/python/m.py" : python, m -> "gen/javascript/m.js" : javascript, main -> "gen/python/main.py" : python, main -> "gen/javascript/main.js" : javascript }`);
+  const r = run(['emit', path.join(dir, 'td.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  const interp = run(['run', path.join(dir, 'td.hsl')]);
+  const want = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
+  assertEq(want[0], 'emit::d1=-3', `interp 截断除语义锚点：${want[0]}`);
+  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
+  const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
+  const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));
+  // 历史缺陷锚点：python // floor（d1=-4）、js 浮点除（d3=3.2）、python floor 模（m1=1）
+  assertEq(pyLines.join('|'), want.join('|'), `python 除模漂移：${pyLines.join('|')}`);
+  assertEq(jsLines.join('|'), want.join('|'), `js 除模漂移：${jsLines.join('|')}`);
+});
+
+test('emit', 'L-20 js 枚举变体接线与 structLit camel 镜像（真机 bun 运行）', () => {
+  const dir = path.join(TMP, 'js-enum-wire');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'je.hsl'), `enum Level { Low, High(i64) }
+struct agent_config { n: i64 }
+export fn main() -> i64 {
+    let l = Level::High(7);
+    let c = agent_config { n: 6 };
+    let mut ok: i64 = 0;
+    match l { Level::Low => ok = 1, Level::High(v) => ok = v }
+    println!("emit::v={}", ok + c.n);
+    0
+}
+project { Level -> "gen/javascript/level.js" : javascript, agent_config -> "gen/javascript/agent_config.js" : javascript, main -> "gen/javascript/main.js" : javascript }`);
+  const r = run(['emit', path.join(dir, 'je.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  const main = fs.readFileSync(path.join(dir, 'gen/javascript/main.js'), 'utf-8');
+  // 历史缺陷锚点：① import 原名 Low（js 只有 LOW 导出）② import agent_config（值导出是 camel agentConfig）
+  assert(!/\bimport \{[^}]*\bLow\b[^}]*\}/.test(main), `js 不应 import 单元变体原名 Low（只有 LOW）：\n${main.split('\n').filter(l=>l.startsWith('import')).join('\n')}`);
+  assert(main.includes('agentConfig'), `snake struct 应镜像 camel：\n${main}`);
+  // 真机运行（L-20 前模块加载即 SyntaxError）
+  const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
+  assert(jsOut.includes('emit::v=13'), `js 枚举/struct 行为漂移：${jsOut}`);
+});
+
 // ---- v0.2.56 L-12 / L-13 / L-14 / S-17（hsl-fuzz 第六轮锁定） ----
 test('检查规则', 'L-12 unicode 转义码点越域：\\u{110000} 报错（pest 域收紧镜像）', () => {
   const out = checkSrc(`fn main() { let s = "\\u{110000}"; println!("{}", s); }`);

@@ -513,6 +513,13 @@ function structDecl(p: P, d: A.Item & { kind: 'struct' }, pi: ProjectedItem): st
       out.push(`class ${name}:`);
       if (fields.length === 0) out.push('    pass');
       for (const f of fields) out.push(`    ${f.name}: ${p.ty(f.ty)}`);
+      // v0.2.55 L-19：interp display 规范 — struct 显示 Pt { x: 1, y: 2 }（dataclass 默认 repr 是 Pt(x=1, y=2)）
+      // （f-string 字面大括号必须 {{ }} 转义）
+      if (fields.length > 0) {
+        out.push('    def __str__(self):');
+        const parts = fields.map((f) => `${f.name}: {_dhv_str(self.${f.name})}`).join(', ');
+        out.push(`        return f"${name} {{ ${parts} }}"`);
+      }
       break;
     }
     case 'typescript': {
@@ -521,7 +528,13 @@ function structDecl(p: P, d: A.Item & { kind: 'struct' }, pi: ProjectedItem): st
       for (const f of fields) out.push(`  ${f.name}: ${p.ty(f.ty)};`);
       out.push('}');
       out.push(`export function ${camel(name)}(${fields.map((f) => `${f.name}: ${p.ty(f.ty)}`).join(', ')}): ${name} {`);
-      out.push(`  return { ${fields.map((f) => f.name).join(', ')} };`);
+      // v0.2.55 L-19：display 规范烘焙（Pt { x: 1, y: 2 }）；as 断言避免 excess property 检查
+      if (fields.length === 0) {
+        out.push(`  return {} as ${name};`);
+      } else {
+        const parts = fields.map((f) => `${f.name}: \${_dhvStr(${f.name})}`).join(', ');
+        out.push(`  return { ${fields.map((f) => f.name).join(', ')}, toString() { return \`${name} { ${parts} }\`; } } as ${name};`);
+      }
       out.push('}');
       break;
     }
@@ -529,7 +542,13 @@ function structDecl(p: P, d: A.Item & { kind: 'struct' }, pi: ProjectedItem): st
       // JS 无接口：JSDoc 契约 + 工厂函数
       out.push(`/** @typedef {Object} ${name} HSL struct 契约：${fields.map((f) => `${f.name}: ${p.ty(f.ty)}`).join(', ')} */`);
       out.push(`export function ${camel(name)}(${fields.map((f) => f.name).join(', ')}) {`);
-      out.push(`  return { ${fields.map((f) => f.name).join(', ')} };`);
+      // v0.2.55 L-19：display 规范烘焙（Pt { x: 1, y: 2 }）
+      if (fields.length === 0) {
+        out.push('  return {};');
+      } else {
+        const parts = fields.map((f) => `${f.name}: \${_dhvStr(${f.name})}`).join(', ');
+        out.push(`  return { ${fields.map((f) => f.name).join(', ')}, toString() { return \`${name} { ${parts} }\`; } };`);
+      }
       out.push('}');
       break;
     }
@@ -726,12 +745,26 @@ function enumDecl(p: P, d: A.Item & { kind: 'enum' }, pi: ProjectedItem): string
         if (vfields.length === 0) {
           out.push(`class ${v.name}(${name}):`);
           out.push('    __slots__ = ()');
+          // v0.2.55 L-19：interp display 规范（Rust-Debug 风格）— 无负载变体 → 'Low'
+          out.push(`    def __str__(self):`);
+          out.push(`        return '${v.name}'`);
           out.push(`${snakeUpper(v.name)} = ${v.name}()  # 无负载单例`);
           out.push('');
         } else {
+          const tupleForm = v.fields && 'tuple' in v.fields;
           out.push('@dataclass');
           out.push(`class ${v.name}(${name}):`);
           for (const f of vfields) out.push(`    ${f.name}: ${p.ty(f.ty)}`);
+          // v0.2.55 L-19：interp display 规范 — South(5) / Rect { w: 3, h: 4 }
+          // （f-string 字面大括号必须 {{ }} 转义，插值处不转义）
+          out.push('    def __str__(self):');
+          if (tupleForm) {
+            const parts = vfields.map((f) => `{_dhv_str(self.${f.name})}`).join(', ');
+            out.push(`        return f"${v.name}(${parts})"`);
+          } else {
+            const parts = vfields.map((f) => `${f.name}: {_dhv_str(self.${f.name})}`).join(', ');
+            out.push(`        return f"${v.name} {{ ${parts} }}"`);
+          }
           out.push('');
         }
       }
@@ -760,6 +793,8 @@ function enumDecl(p: P, d: A.Item & { kind: 'enum' }, pi: ProjectedItem): string
       }
       break;
     }
+    // 注：js/ts 枚举的 display（South(5) / Rect { w: 3, h: 4 }）由 _dhvStr 的
+    // kind-标签对象渲染实现（v0.2.55 L-19）—— 不改发射对象形状，避免破坏既有消费方。
     case 'javascript': {
       // JS：标签对象 + 构造函数（无类型语法）
       out.push(`// ${name} — HSL enum 和类型（标签对象）`);
@@ -1386,12 +1421,29 @@ export function fnDecl(p: P, fn: A.FnDef, pi: ProjectedItem, isMethod: boolean, 
 
   const fenceName = isMethod && selfType ? `${selfType}_${fn.name}` : fn.name;
 
+  // v0.2.55 L-15 修复：活体翻译可执行后端（python/typescript/javascript）此前投射
+  // `fn main` 只生成函数定义、无入口调用 —— 生成物运行「成功」（exit 0）但零输出零
+  // 副作用（语法校验绿灯完全看不见行为为空；rust 后端 L-6 已有入口语义，三个
+  // full 后端从未对齐）。入口形态（fn main 无参，与 R-1 入口约定一致；带参 main
+  // 不是入口形态，不触发）在文件级追加入口守卫：直接运行时执行 main()，退出码 =
+  // 返回值（与 dhv run 语义对齐）。被 import/exec 消费时惰性：python 用
+  // globals().get('__name__')（exec 命名空间缺 __name__ 锭也不 NameError）；
+  // js/ts 用 import.meta.url 与 argv[1] 真实路径比对（ESM 无 __main__ 惯例）。
+  const isEntryForm = !isMethod && fn.name === 'main' && fn.params.length === 0;
+
   switch (L) {
     case 'python': {
       out.push(`${head}${ret}:`);
       out.push(...p.fence(pi.item, fenceName, body, p.ind));
       if (body === null) out.push(p.unimpl(p.ind, `${fenceName} 未翻译`));
       else if (fn.ret && !/None|->\s*$/.test(ret)) { /* python 隐式返回尾表达式 */ }
+      if (isEntryForm) {
+        out.push('');
+        out.push('# @dhv:generated — 入口守卫（L-15）：直接运行本文件 = 执行 main()，退出码 = 返回值；');
+        out.push('# 被 import / exec 消费时不触发（globals().get 防 exec 命名空间缺 __name__ 锭）。');
+        out.push("if globals().get('__name__') == '__main__':");
+        out.push(`    raise SystemExit(${fn.name}())`);
+      }
       break;
     }
     case 'typescript': {
@@ -1399,6 +1451,22 @@ export function fnDecl(p: P, fn: A.FnDef, pi: ProjectedItem, isMethod: boolean, 
       out.push(...p.fence(pi.item, fenceName, body, p.ind));
       if (body === null) out.push(p.unimpl(p.ind, `${fenceName} 未翻译`));
       out.push('}');
+      if (isEntryForm) {
+        out.push('');
+        out.push('// @dhv:generated — 入口守卫（L-15）：仅直接运行本文件时执行 main()，退出码 = 返回值；');
+        out.push('// 被 import 消费时不触发（import.meta.url 与实际入口比对）。');
+        out.push("import { pathToFileURL } from 'node:url';");
+        out.push("import { realpathSync } from 'node:fs';");
+        out.push('let _dhv_is_entry = false;');
+        out.push('try {');
+        out.push("  _dhv_is_entry = typeof process !== 'undefined' && !!process.argv[1]");
+        out.push('    && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;');
+        out.push('} catch { /* eval/REPL 消费形态：非直接运行 */ }');
+        out.push('if (_dhv_is_entry) {');
+        out.push(`  const _dhv_rc = ${fn.name}();`);
+        out.push('  if (_dhv_rc !== 0) process.exit(_dhv_rc);');
+        out.push('}');
+      }
       break;
     }
     case 'javascript': {
@@ -1408,6 +1476,22 @@ export function fnDecl(p: P, fn: A.FnDef, pi: ProjectedItem, isMethod: boolean, 
       out.push(...p.fence(pi.item, fenceName, body, p.ind));
       if (body === null) out.push(p.unimpl(p.ind, `${fenceName} 未翻译`));
       out.push('}');
+      if (isEntryForm) {
+        out.push('');
+        out.push('// @dhv:generated — 入口守卫（L-15）：仅直接运行本文件时执行 main()，退出码 = 返回值；');
+        out.push('// 被 import 消费时不触发（import.meta.url 与实际入口比对）。');
+        out.push("import { pathToFileURL } from 'node:url';");
+        out.push("import { realpathSync } from 'node:fs';");
+        out.push('let _dhv_is_entry = false;');
+        out.push('try {');
+        out.push("  _dhv_is_entry = typeof process !== 'undefined' && !!process.argv[1]");
+        out.push('    && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;');
+        out.push('} catch { /* eval/REPL 消费形态：非直接运行 */ }');
+        out.push('if (_dhv_is_entry) {');
+        out.push(`  const _dhv_rc = ${fn.name}();`);
+        out.push('  if (_dhv_rc !== 0) process.exit(_dhv_rc);');
+        out.push('}');
+      }
       break;
     }
     case 'rust': {

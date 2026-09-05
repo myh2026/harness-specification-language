@@ -1,0 +1,29 @@
+// ============================================================================
+// tests/fixtures/emit/entry_struct.hsl — 行为级对拍语料：struct 构造/字段/显示
+// ----------------------------------------------------------------------------
+// L-20 锁定：js/ts struct 工厂 camel 约定（snake 名 agent_config →
+// agentConfig(...)）与 structLit 镜像；L-19 锁定：struct 显示
+// Pt { x: 3, y: 4 }（Rust-Debug 风格，dataclass 默认 repr 是 Pt(x=3, y=4)）。
+// 历史缺陷：structLit lowerFirst → `pt(1, 2)` vs 导出 `Pt` → ReferenceError。
+// ============================================================================
+
+struct Pt { x: i64, y: i64 }
+struct agent_config { n: i64 }
+
+export fn main() -> i64 {
+    let p = Pt { x: 3, y: 4 };
+    println!("emit::norm={}", p.x * 10 + p.y);
+    let c = agent_config { n: 6 };
+    println!("emit::snake={}", c.n);
+    println!("emit::disp={}", p);
+    0
+}
+
+project {
+    Pt           -> "gen/python/pt.py"     : python,
+    Pt           -> "gen/javascript/pt.js" : javascript,
+    agent_config -> "gen/python/agent_config.py"     : python,
+    agent_config -> "gen/javascript/agent_config.js" : javascript,
+    main         -> "gen/python/main.py"     : python,
+    main         -> "gen/javascript/main.js" : javascript,
+}

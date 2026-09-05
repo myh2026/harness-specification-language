@@ -1,0 +1,30 @@
+// ============================================================================
+// tests/fixtures/emit/entry_arith.hsl — 行为级对拍语料：整型算术与负数除模
+// ----------------------------------------------------------------------------
+// L-17/L-18 锁定：interp 整除 = Rust 截断语义（-7/2 = -3）。历史缺陷：
+// python `//` floor（-4）、js `/` 浮点（-3.5）、unknown 静默真除 —— 三端三值。
+// 本语料经参数中转（q/r 的形参类型 unknown）→ 覆盖运行期类型分流助手。
+// ============================================================================
+
+export fn q(a: i64, b: i64) -> i64 { a / b }
+export fn r(a: i64, b: i64) -> i64 { a % b }
+
+export fn main() -> i64 {
+    println!("emit::div1={}", q(-7, 2));
+    println!("emit::div2={}", q(7, -2));
+    println!("emit::div3={}", q(-7, -2));
+    println!("emit::mod1={}", r(-7, 2));
+    println!("emit::mod2={}", r(7, -2));
+    println!("emit::mix={}", 2 + 3 * 4 - 10 / 2);
+    println!("emit::shift={}", (1 << 10) >> 3);
+    0
+}
+
+project {
+    q    -> "gen/python/q.py"        : python,
+    q    -> "gen/javascript/q.js"    : javascript,
+    r    -> "gen/python/r.py"        : python,
+    r    -> "gen/javascript/r.js"    : javascript,
+    main -> "gen/python/main.py"     : python,
+    main -> "gen/javascript/main.js" : javascript,
+}
