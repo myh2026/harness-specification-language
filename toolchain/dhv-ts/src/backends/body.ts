@@ -19,6 +19,8 @@ export interface BodyCtx {
   ty(t: A.HType | undefined): string;
   enums: Map<string, A.Item & { kind: 'enum' }>;
   strLit(s: string): string;
+  /** v0.2.54 L-9c：emit 期跨后端漂移告警通道（emit.ts 注入 warnings.push） */
+  warn?: (msg: string) => void;
 }
 
 // ---- 关键字避让 ----
@@ -783,6 +785,33 @@ export class Body {
         if (e.lit.t === 'bool') return L === 'python' ? ((e.lit.v as boolean) ? 'True' : 'False') : String(e.lit.v);
         if (e.lit.t === 'str') return this.ctx.strLit(e.lit.v as string);
         if (e.lit.t === 'char') return L === 'rust' ? `'${e.lit.v}'` : this.ctx.strLit(e.lit.v as string);
+        if (e.lit.t === 'int') {
+          // v0.2.54 L-9b（rust）：裸大字面量 → rustc 按 i32 推断 →
+          // "literal out of range for `i32`" 编译拒绝（prec.hsl 实录：
+          // check 双端绿灯、emit rust 必炸）。修复：超 i32 域补后缀
+          // i64 / i128（i64 域外）。S-16 已静态拒绝超 i128 源字面量。
+          if (L === 'rust') {
+            const v = BigInt(e.lit.v);
+            if (v > 2147483647n || v < -2147483648n) {
+              if (e.lit.suffix && /^[iu](8|16|32|64|128)$/.test(e.lit.suffix)) return String(e.lit.v);
+              if (v >= -9223372036854775808n && v <= 9223372036854775807n) return `${e.lit.v}i64`;
+              return `${e.lit.v}i128`;
+            }
+            return String(e.lit.v);
+          }
+          // v0.2.54 L-9c（js/ts）：Number 安全域外整数字面量 —— 读入即静默
+          // 舍入（9223372036854775806 → 9223372036854775808，prec.hsl 实录
+          // 输出 9223372036854776000 与 interp 差 3）。BigInt 投射会破坏
+          // 混算（bigint+number TypeError），保守：原样投射 + 显式告警。
+          if ((L === 'typescript' || L === 'javascript')) {
+            const num = Number(e.lit.v);
+            if (!Number.isSafeInteger(num)) {
+              this.ctx.warn?.(`L-9c：js/ts 后端整数字面量 ${e.lit.v} 超出 Number 安全整数域（±2^53-1），投射后读入即静默舍入（interp 为 BigInt 任意精度 —— 值漂移；如需精确请拆解为字符串/BigInt 运算或换 python 后端）`);
+            }
+            return String(e.lit.v);
+          }
+          return String(e.lit.v);
+        }
         return String(e.lit.v);
       }
       case 'path': {

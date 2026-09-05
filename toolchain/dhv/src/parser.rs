@@ -886,7 +886,7 @@ fn single_pattern(pair: Pair<'_, Rule>, sess: &mut ParseSession) -> Pattern {
             if negative {
                 lit.raw = format!("-{}", lit.raw);
                 lit.kind = match lit.kind {
-                    LiteralKind::Int { value, suffix } => LiteralKind::Int { value: -value, suffix },
+                    LiteralKind::Int { value, suffix, overflow } => LiteralKind::Int { value: -value, suffix, overflow },
                     LiteralKind::Float { value, suffix } => LiteralKind::Float { value: -value, suffix },
                     other => other,
                 };
@@ -1065,20 +1065,36 @@ fn literal(pair: Pair<'_, Rule>, f: FileId) -> Literal {
     let kind = match inner.as_rule() {
         Rule::integer_literal => {
             let text = inner.as_str();
-            let (radix, digits): (u32, &str) = if let Some(d) = text.strip_prefix("0x") {
+            // v0.2.54 L-11：pest 的 integer_literal 规则把后缀一并捕获进文本
+            // （`300u8` 的 as_str() 含后缀）—— 此前 from_str_radix("300u8")
+            // 必失败 → unwrap_or(0) 静默归零：**dhv 所有带后缀整数字面量
+            // 一直解析为 0**（值损坏；dhv-ts lexer 剥离后缀无此问题）。
+            // 修复：先剥后缀再解析。超 i128 容量记 overflow（S-16 拒绝）。
+            let suffix = int_suffix(text);
+            let digits_part = match &suffix {
+                Some(s) => {
+                    let s_str = int_suffix_str(*s);
+                    &text[..text.len() - s_str.len()]
+                }
+                None => text,
+            };
+            let (radix, digits): (u32, &str) = if let Some(d) = digits_part.strip_prefix("0x") {
                 (16, d)
-            } else if let Some(d) = text.strip_prefix("0o") {
+            } else if let Some(d) = digits_part.strip_prefix("0o") {
                 (8, d)
-            } else if let Some(d) = text.strip_prefix("0b") {
+            } else if let Some(d) = digits_part.strip_prefix("0b") {
                 (2, d)
             } else {
-                (10, text)
+                (10, digits_part)
             };
             let cleaned: String = digits.chars().filter(|c| *c != '_').collect();
-            let value = i128::from_str_radix(&cleaned, radix)
-                .unwrap_or_else(|_| 0);
-            let suffix = int_suffix(text);
-            LiteralKind::Int { value, suffix }
+            // v0.2.54 L-10：超 i128 域字面量此前静默归零 —— 双端分歧实录。
+            // 改记 overflow 标志，S-16 静态拒绝（零静默损坏）。
+            let (value, overflow) = match i128::from_str_radix(&cleaned, radix) {
+                Ok(v) => (v, false),
+                Err(_) => (0, true),
+            };
+            LiteralKind::Int { value, suffix, overflow }
         }
         Rule::float_literal => {
             let text: String = inner.as_str().chars().filter(|c| *c != '_').collect();
@@ -1132,6 +1148,24 @@ fn int_suffix(text: &str) -> Option<IntSuffix> {
         }
     }
     None
+}
+
+/// v0.2.54 L-11：后缀枚举 → 文本（剥后缀解析用；与 int_suffix 表同源）
+fn int_suffix_str(s: IntSuffix) -> &'static str {
+    match s {
+        IntSuffix::I128 => "i128",
+        IntSuffix::I64 => "i64",
+        IntSuffix::I32 => "i32",
+        IntSuffix::I16 => "i16",
+        IntSuffix::I8 => "i8",
+        IntSuffix::Isize => "isize",
+        IntSuffix::U128 => "u128",
+        IntSuffix::U64 => "u64",
+        IntSuffix::U32 => "u32",
+        IntSuffix::U16 => "u16",
+        IntSuffix::U8 => "u8",
+        IntSuffix::Usize => "usize",
+    }
 }
 
 fn unescape_string(s: &str) -> String {

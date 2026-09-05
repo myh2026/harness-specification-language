@@ -281,7 +281,9 @@ test('检查规则', 'S-13 整型域：边界值合法（-128/127/i64MAX/0xFF@u8
   assert(out.includes('0 error'), `边界值不应误报：${out.slice(0, 200)}`);
 });
 test('检查规则', 'S-13 整型域：无注解/非字面量不判（BigInt 任意精度既定设计）', () => {
-  const out = checkSrc(`fn main() { let big: i64 = 9223372036854775807; let over = big + 1; println!("{}", over); }`);
+  // v0.2.54：原样本 `big + 1`（i64::MAX+1）正是 S-15 的拦截目标（L-9 跨后端
+  // 溢出漂移），已升级为专项用例；本用例保留原意图 —— 域内算术不触发 S-13。
+  const out = checkSrc(`fn main() { let big: i64 = 9223372036854775807; let inner = big - 1; println!("{}", inner); }`);
   assert(out.includes('0 error'), `非字面量运算不应触发 S-13：${out.slice(0, 200)}`);
 });
 test('检查规则', 'G-8 重复边：同 (from,to,guard) 二次声明报错', () => {
@@ -320,6 +322,48 @@ test('检查规则', 'S-14 二元类型：动态值（调用/方法链/重赋值
 test('检查规则', 'S-14 二元类型：int+float 混算报错（S1 零隐式转换下沉）', () => {
   const out = checkSrc(`fn main() { let x = 1 + 0.5; println!("{}", x); }`);
   assert(out.includes('S-14'), `int+float 混算应触发 S-14：${out.slice(0, 200)}`);
+});
+
+// ---- v0.2.54 S-15 / S-16 / S-14 v3 / L-10 / L-11（hsl-fuzz 第四轮锁定） ----
+test('检查规则', 'S-15 注解域算术溢出：i64::MAX + 1 报错（四运行时漂移实录）', () => {
+  const out = checkSrc(`fn main() { let a: i64 = 9223372036854775807; let b = a + 1; println!("{}", b); }`);
+  assert(out.includes('S-15'), `i64::MAX+1 应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 注解域算术溢出：u8 250 + 250 报错', () => {
+  const out = checkSrc(`fn main() { let a: u8 = 250; let b = a + a; println!("{}", b); }`);
+  assert(out.includes('S-15'), `u8 250+250 应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 let 注解折叠：250 + 250 对 u8 报错', () => {
+  const out = checkSrc(`fn main() { let b: u8 = 250 + 250; println!("{}", b); }`);
+  assert(out.includes('S-15'), `注解折叠应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 静态可证除零：5 / 0 报错', () => {
+  const out = checkSrc(`fn main() { let y = 5 / 0; println!("{}", y); }`);
+  assert(out.includes('S-15'), `静态除零应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 赋值域越界：let mut u8 = 0; x = 300 报错', () => {
+  const out = checkSrc(`fn main() { let mut x: u8 = 0; x = 300; println!("{}", x); }`);
+  assert(out.includes('S-15'), `赋值域越界应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 复合赋值域溢出：a: u8 = 250; a += 10 报错', () => {
+  const out = checkSrc(`fn main() { let mut a: u8 = 250; a += 10; println!("{}", a); }`);
+  assert(out.includes('S-15'), `复合赋值溢出应触发 S-15：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-14 v3 重赋值中转：let mut x = 3; x = "abc"; x * 2 报错', () => {
+  const out = checkSrc(`fn main() { let mut x = 3; x = "abc"; let y = x * 2; println!("{}", y); }`);
+  assert(out.includes('S-14'), `重赋值中转应触发 S-14：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-13 后缀字面量域：300u8 报错', () => {
+  const out = checkSrc(`fn main() { let y = 300u8; println!("{}", y); }`);
+  assert(out.includes('S-13'), `后缀域越界应触发 S-13：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-16 i128 静态容量：超容量字面量报错（L-10 归零实录）', () => {
+  const out = checkSrc(`fn main() { let y = 170141183460469231731687303715884105728; println!("{}", y); }`);
+  assert(out.includes('S-16'), `超容量字面量应触发 S-16：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-15 合法族零误报：域内算术/合法后缀/域内赋值', () => {
+  const out = checkSrc(`fn main() { let a: i64 = 9223372036854775807; let b = a - 1; let c: u8 = 250; let d = c + 5; let e = 10 / 2; let mut f: u8 = 200; f += 50; let g = 250u8; println!("{} {} {} {} {} {} {}", b, d, e, f, g, a, c); }`);
+  assert(out.includes('0 error'), `合法族不应误报：${out.slice(0, 250)}`);
 });
 
 // ---------------------------------------------------------------------------

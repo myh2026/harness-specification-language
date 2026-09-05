@@ -893,6 +893,8 @@ export async function emitProgram(
         hslSourceOf: (item: A.Item) => (perItemLines.get(item) ?? []).join('\n'),
         // v1.4.10：go 同 package 多文件顶级助手去重（真机 go build 实测修复）
         goHelpersState,
+        // v0.2.54 L-9c：BodyEmitter 字面量精度告警通道（→ manifest warnings）
+        warn: (m: string) => { warnings.push(`${relPath}：${m}`); },
       };
       // ---- 跨文件依赖接线：类型（v0.2.4）+ 函数/常量/枚举变体（v0.2.51）----
       const fnDepHeader = importHeaderForFnDeps(

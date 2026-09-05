@@ -19,6 +19,55 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics};
 
+/// v0.2.54 S-15：12 种整型域边界（i128 容量内判定；u128 以 i128 上界为保守子集）
+pub fn int_domain_limits(name: &str) -> Option<(i128, i128)> {
+    Some(match name {
+        "i8" => (-128, 127),
+        "i16" => (-32768, 32767),
+        "i32" => (-2147483648, 2147483647),
+        "i64" | "isize" => (i64::MIN as i128, i64::MAX as i128),
+        "i128" => (i128::MIN, i128::MAX),
+        "u8" => (0, 255),
+        "u16" => (0, 65535),
+        "u32" => (0, 4294967295),
+        "u64" | "usize" => (0, u64::MAX as i128),
+        "u128" => (0, i128::MAX), // i128 上界即为 u128 域的保守子集判定（超界必非法）
+        _ => return None,
+    })
+}
+
+/// v0.2.54 S-15：字面量后缀 → 域名（250u8 → "u8"）
+fn int_suffix_domain(s: IntSuffix) -> Option<&'static str> {
+    Some(match s {
+        IntSuffix::I8 => "i8",
+        IntSuffix::I16 => "i16",
+        IntSuffix::I32 => "i32",
+        IntSuffix::I64 => "i64",
+        IntSuffix::I128 => "i128",
+        IntSuffix::Isize => "isize",
+        IntSuffix::U8 => "u8",
+        IntSuffix::U16 => "u16",
+        IntSuffix::U32 => "u32",
+        IntSuffix::U64 => "u64",
+        IntSuffix::U128 => "u128",
+        IntSuffix::Usize => "usize",
+    })
+}
+
+/// v0.2.54 S-15：单段整型注解 → 域名（非整型/多段/泛型 → None）
+fn annotation_domain(ty: &Type) -> Option<String> {
+    let TypeKind::Path(pt) = &ty.kind else { return None };
+    if pt.path.leading_colon || pt.path.segments.len() != 1 || !pt.generic_args.is_empty() {
+        return None;
+    }
+    let n = &pt.path.segments[0].name;
+    if int_domain_limits(n).is_some() {
+        Some(n.clone())
+    } else {
+        None
+    }
+}
+
 /// 绑定来源（S7 报告文案 / 豁免策略使用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -47,6 +96,10 @@ pub struct Symbol {
     /// v0.2.53 S-14：静态字面量类型事实（let 声明处记录，二元运算检查用；
     /// None = 动态值/不可判，保守放行 —— 与 dhv-ts 的 LitTy 口径一致）
     pub lit_ty: Option<SymbolLitTy>,
+    /// v0.2.54 S-15：静态可折叠整数值（i128；None = 不可折叠/动态值）
+    pub lit_val: Option<i128>,
+    /// v0.2.54 S-15：整型域事实（注解名，如 "u8"/"i64"；来源：let 注解/字面量后缀/cast）
+    pub dom: Option<String>,
 }
 
 /// S-14 字面量类型域（与 dhv-ts LitTy 同构）
@@ -93,6 +146,8 @@ impl SymbolTable {
                     kind,
                     span,
                     lit_ty: None,
+                    lit_val: None,
+                    dom: None,
                 },
             );
         }
@@ -120,6 +175,46 @@ impl SymbolTable {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(sym) = scope.get_mut(name) {
                 sym.lit_ty = Some(lit_ty);
+                return;
+            }
+        }
+    }
+    /// v0.2.54 S-14（v3）：重赋值更新字面量事实（None = 清除，保守放行）
+    pub fn set_lit_facts(
+        &mut self,
+        name: &str,
+        lit_ty: Option<SymbolLitTy>,
+        lit_val: Option<i128>,
+        dom: Option<String>,
+    ) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                sym.lit_ty = lit_ty;
+                sym.lit_val = lit_val;
+                sym.dom = dom;
+                return;
+            }
+        }
+    }
+    /// v0.2.54 S-15：只查折叠值/域（不标记 used）
+    pub fn peek_lit_val(&self, name: &str) -> Option<i128> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).and_then(|sym| sym.lit_val)
+    }
+    pub fn peek_dom(&self, name: &str) -> Option<String> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).and_then(|sym| sym.dom.clone())
+    }
+    pub fn set_lit_val(&mut self, name: &str, v: i128) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                sym.lit_val = Some(v);
+                return;
+            }
+        }
+    }
+    pub fn set_dom(&mut self, name: &str, dom: String) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                sym.dom = Some(dom);
                 return;
             }
         }
@@ -1004,26 +1099,16 @@ impl TypeChecker {
             return;
         }
         let name = &pt.path.segments[0].name;
-        let (lo, hi): (i128, i128) = match name.as_str() {
-            "i8" => (-128, 127),
-            "i16" => (-32768, 32767),
-            "i32" => (-2147483648, 2147483647),
-            "i64" | "isize" => (i64::MIN as i128, i64::MAX as i128),
-            "i128" => (i128::MIN, i128::MAX),
-            "u8" => (0, 255),
-            "u16" => (0, 65535),
-            "u32" => (0, 4294967295),
-            "u64" | "usize" => (0, u64::MAX as i128),
-            "u128" => (0, i128::MAX), // i128 上界即为 u128 域的保守子集判定（超界必非法）
-            _ => return,
-        };
+        let Some((lo, hi)) = int_domain_limits(name) else { return };
         // 展开一元负号（u* 域外负值同样在此拦截）
         let (neg, inner): (bool, &Expr) = match &init.kind {
             ExprKind::Unary { op: UnaryOp::Neg, operand } => (true, &**operand),
             _ => (false, init),
         };
         let ExprKind::Literal(lit) = &inner.kind else { return };
-        let LiteralKind::Int { value, .. } = &lit.kind else { return };
+        let LiteralKind::Int { value, overflow, .. } = &lit.kind else { return };
+        // v0.2.54 L-10：超 i128 容量字面量（S-16 另拒）此处不再误判域内
+        if *overflow { return; }
         let v: i128 = if neg { -(*value as i128) } else { *value as i128 };
         if v < lo || v > hi {
             self.diags.push(
@@ -1067,6 +1152,116 @@ impl TypeChecker {
                 self.symbols.peek_lit_ty(&p.segments[0].name)
             }
             _ => None,
+        }
+    }
+
+    /// v0.2.54 S-15：整型域事实（cast 目标 / 带后缀字面量 / 作用域声明）—— 与 dhv-ts intDomainOf 同构
+    fn int_domain_of(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Cast { ty, .. } => {
+                let TypeKind::Path(pt) = &ty.kind else { return None };
+                if pt.path.leading_colon || pt.path.segments.len() != 1 {
+                    return None;
+                }
+                let n = &pt.path.segments[0].name;
+                if int_domain_limits(n).is_some() {
+                    return Some(n.clone());
+                }
+                None
+            }
+            ExprKind::Literal(l) => match &l.kind {
+                // 后缀字面量（250u8）；overflow 字面量无域（S-16 另拒）
+                LiteralKind::Int { suffix: Some(s), overflow: false, .. } => {
+                    int_suffix_domain(*s).map(|d| d.to_string())
+                }
+                _ => None,
+            },
+            ExprKind::Path(p) if p.segments.len() == 1 && !p.leading_colon => {
+                self.symbols.peek_dom(&p.segments[0].name)
+            }
+            _ => None,
+        }
+    }
+
+    /// v0.2.54 S-15：静态可折叠整数值（i128 checked 运算，防检查器自身溢出 panic）
+    fn expr_int_val(&self, e: &Expr) -> Option<i128> {
+        match &e.kind {
+            ExprKind::Literal(l) => match &l.kind {
+                LiteralKind::Int { value, overflow: false, .. } => Some(*value),
+                _ => None,
+            },
+            ExprKind::Unary { op: UnaryOp::Neg, operand, .. } => self.expr_int_val(operand).map(|v| v.checked_neg()).flatten(),
+            ExprKind::Path(p) if p.segments.len() == 1 && !p.leading_colon => {
+                self.symbols.peek_lit_val(&p.segments[0].name)
+            }
+            ExprKind::Binary { op, lhs, rhs, .. } => {
+                use BinaryOp::*;
+                if !matches!(op, Add | Sub | Mul | Div | Rem) {
+                    return None;
+                }
+                let l = self.expr_int_val(lhs)?;
+                let r = self.expr_int_val(rhs)?;
+                let res = match op {
+                    Add => l.checked_add(r),
+                    Sub => l.checked_sub(r),
+                    Mul => l.checked_mul(r),
+                    Div => {
+                        if r == 0 { return None; } // 除零不折叠（静态另有专项诊断）
+                        l.checked_div(r)
+                    }
+                    Rem => {
+                        if r == 0 { return None; }
+                        l.checked_rem(r)
+                    }
+                    _ => return None,
+                };
+                res // 折叠自身溢出 i128 → None（保守；dhv-ts BigInt 精确折叠但两侧零误报口径一致 —— 超容量的源字面量已由 S-16 拒绝）
+            }
+            _ => None,
+        }
+    }
+
+    /// v0.2.54 S-15：静态折叠 + 域已知 → 溢出/除零检查（与 dhv-ts checkDomainArith 同口径）
+    fn check_domain_arith(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: Span) {
+        use BinaryOp::*;
+        let (Some(lv), Some(rv)) = (self.expr_int_val(lhs), self.expr_int_val(rhs)) else { return };
+        if matches!(op, Div | Rem) && rv == 0 {
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::Strictness("S15"),
+                    format!(
+                        "静态可证除零：{lv} {} 0（interp 运行期 HRuntimeError，rustc 后端 deny(unconditional_panic) 编译期拒绝；python ZeroDivisionError，js 静默 NaN）",
+                        op.as_str()
+                    ),
+                    span,
+                ),
+            );
+            return;
+        }
+        let dom = self.int_domain_of(lhs).or_else(|| self.int_domain_of(rhs));
+        let Some(dom) = dom else { return };
+        let Some((lo, hi)) = int_domain_limits(&dom) else { return };
+        let res: Option<i128> = match op {
+            Add => lv.checked_add(rv),
+            Sub => lv.checked_sub(rv),
+            Mul => lv.checked_mul(rv),
+            Div => lv.checked_div(rv),
+            Rem => lv.checked_rem(rv),
+            _ => return,
+        };
+        if let Some(res) = res {
+            if res < lo || res > hi {
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::Strictness("S15"),
+                        format!(
+                            "注解域算术溢出：{lv} {} {rv} = {res} 超出 {dom} 域 [{lo}, {hi}]（interp BigInt 任意精度静默越域、rust 后端环绕/panic —— 跨后端漂移；显式扩域请用 as）",
+                            op.as_str()
+                        ),
+                        span,
+                    ),
+                );
+            }
         }
     }
 
@@ -1133,12 +1328,48 @@ impl TypeChecker {
         if let PatternKind::Ident { name, .. } = &l.pattern.kind {
             self.declare_binding(name, l.mutable, SymbolKind::Let);
             // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入符号表 ——
-            // 后续 path 引用可判（变量中转场景）。赋值更新不追踪（保守边界）。
+            // 后续 path 引用可判（变量中转场景）。
+            // v0.2.54 S-14（v3）+ S-15：赋值更新已追踪（见 Assign 臂）；整型
+            // 记录还带折叠值 lit_val 与域 dom（注解/后缀来源）。
             if let Some(t) = init_lit_ty {
                 self.symbols.set_lit_ty(&name.name, t);
+                if t == SymbolLitTy::Int {
+                    if let Some(v) = l.init.as_ref().and_then(|init| self.expr_int_val(init)) {
+                        self.symbols.set_lit_val(&name.name, v);
+                    }
+                    let d = l.ty.as_ref().and_then(annotation_domain)
+                        .or_else(|| l.init.as_ref().and_then(|init| self.int_domain_of(init)));
+                    if let Some(d) = d {
+                        self.symbols.set_dom(&name.name, d);
+                    }
+                }
             }
         } else {
             self.walk_pattern(&l.pattern, SymbolKind::Let);
+        }
+        // v0.2.54 S-15（let 层）：注解域 + 可折叠算术 init → 结果域检查。
+        // S-13 只判纯字面量；这里下沉到折叠算术（250 + 250 对 u8）——
+        // 操作数无域时 binary 层查不到，注解域在 let 处才可见。
+        if let (Some(ty), Some(init)) = (&l.ty, &l.init) {
+            if let ExprKind::Binary { op, .. } = &init.kind {
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem) {
+                    if let Some(name) = annotation_domain(ty) {
+                        if let Some((lo, hi)) = int_domain_limits(&name) {
+                            if let Some(v) = self.expr_int_val(init) {
+                                if v < lo || v > hi {
+                                    self.diags.push(
+                                        Diagnostic::error(
+                                            DiagCode::Strictness("S15"),
+                                            format!("注解域算术溢出：折叠结果 {v} 超出 {name} 域 [{lo}, {hi}]（interp BigInt 静默越域，rust 后端环绕/panic —— 跨后端漂移；显式扩域请用 as）"),
+                                            init.span,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1165,7 +1396,40 @@ impl TypeChecker {
 
     fn walk_expr(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::Literal(_) => {}
+            // v0.2.54 S-16（L-10）：超 i128 容量字面量静态拒绝 —— 此前 parser
+            // 静默归零（值损坏比溢出更糟），dhv-ts BigInt 精确而 dhv 归零的
+            // 双端分歧实录。表达式位置的字面量一律拒绝（与 dhv-ts 同口径）。
+            // S-13（v2）：后缀字面量域检查（300u8 —— 注解路径已有，后缀漏拦）。
+            ExprKind::Literal(l) => {
+                if let LiteralKind::Int { value, suffix, overflow } = &l.kind {
+                    if *overflow {
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::Strictness("S16"),
+                                format!(
+                                    "整数字面量超出 i128 静态容量：{}（parse 静默归零为 0 —— 值损坏；dhv-ts BigInt 精确解析、rust 后端 i128 无域 —— 静态域分析以 i128 为容量上界，源字面量必须可精确表示）",
+                                    l.raw
+                                ),
+                                e.span,
+                            ),
+                        );
+                    } else if let Some(s) = suffix {
+                        if let Some(dom) = int_suffix_domain(*s) {
+                            if let Some((lo, hi)) = int_domain_limits(dom) {
+                                if *value < lo || *value > hi {
+                                    self.diags.push(
+                                        Diagnostic::error(
+                                            DiagCode::Strictness("S13"),
+                                            format!("整数字面量 {value} 超出后缀 {dom} 域 [{lo}, {hi}]（rustc 后端将拒绝编译，python/js 后端静默放行 —— 跨后端漂移；显式截断请用 as）"),
+                                            e.span,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             ExprKind::Macro { args, .. } => {
                 // 实参 token 树里的标识符按名使用（println!("...", n) 的 n 等），防 S7 误报
                 let mut words = Vec::new();
@@ -1209,6 +1473,12 @@ impl TypeChecker {
                 let rt = self.expr_lit_ty(rhs);
                 if let (Some(lt), Some(rt)) = (lt, rt) {
                     self.check_binary_op_types(*op, lt, rt, e.span);
+                }
+                // v0.2.54 S-15：两侧 int 且静态可折叠 → 注解域溢出/除零检查
+                if matches!((lt, rt), (Some(SymbolLitTy::Int), Some(SymbolLitTy::Int)))
+                    && matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem)
+                {
+                    self.check_domain_arith(*op, lhs, rhs, e.span);
                 }
             }
             ExprKind::Unary { operand, .. } => self.walk_expr(operand),
@@ -1262,6 +1532,106 @@ impl TypeChecker {
                 self.check_assign_target(lhs); // S4
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);
+                // v0.2.54 S-14（v3）：重赋值更新字面量事实 —— 消除「先 int 后 str
+                // 重赋值」中转的假阴性（e04 实录：let mut x = 1; x = "s"; x * 2
+                // 静态漏拦）。字面量赋值 → 记新事实；非字面量 → 清除（保守放行）。
+                // 复合赋值 → 折叠更新 + 域检查（与 dhv-ts 同口径）。
+                if let ExprKind::Path(p) = &lhs.kind {
+                    if p.segments.len() == 1 && !p.leading_colon {
+                        let name = &p.segments[0].name;
+                        let is_plain = matches!(&e.kind, ExprKind::Assign { .. });
+                        if is_plain {
+                            let t = self.expr_lit_ty(rhs);
+                            let v = self.expr_int_val(rhs);
+                            let dom = if t == Some(SymbolLitTy::Int) {
+                                self.int_domain_of(rhs).or_else(|| self.symbols.peek_dom(name))
+                            } else {
+                                None
+                            };
+                            // v0.2.54 S-15：赋值域检查（let mut x: u8 = 0; x = 300
+                            // —— S-13 只判 let 声明，赋值路径此前漏拦）
+                            if let (Some(v), Some(dom)) = (v, dom.as_deref()) {
+                                if let Some((lo, hi)) = int_domain_limits(dom) {
+                                    if v < lo || v > hi {
+                                        self.diags.push(
+                                            Diagnostic::error(
+                                                DiagCode::Strictness("S15"),
+                                                format!("赋值域越界：{v} 超出 {dom} 域 [{lo}, {hi}]（interp BigInt 静默越域，rust 后端字面量编译期拒绝 —— 跨后端漂移；显式截断请用 as）"),
+                                                e.span,
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            self.symbols.set_lit_facts(name, t, v, dom);
+                        } else {
+                            // 复合赋值（a += n）：折叠更新 lit_val；域检查
+                            let bin_op = match &e.kind {
+                                ExprKind::CompoundAssign { op, .. } => *op,
+                                _ => BinaryOp::Add,
+                            };
+                            let base = self.symbols.peek_lit_val(name);
+                            let rv = self.expr_int_val(rhs);
+                            if let (Some(base), Some(rv)) = (base, rv) {
+                                let res: Option<i128> = match bin_op {
+                                    BinaryOp::Add => base.checked_add(rv),
+                                    BinaryOp::Sub => base.checked_sub(rv),
+                                    BinaryOp::Mul => base.checked_mul(rv),
+                                    BinaryOp::Div => {
+                                        if rv == 0 {
+                                            self.diags.push(
+                                                Diagnostic::error(
+                                                    DiagCode::Strictness("S15"),
+                                                    format!("静态可证除零：{base} {}= 0（interp 运行期 HRuntimeError，rustc 后端编译期拒绝；js 静默 NaN）", bin_op.as_str()),
+                                                    e.span,
+                                                ),
+                                            );
+                                            None
+                                        } else {
+                                            base.checked_div(rv)
+                                        }
+                                    }
+                                    BinaryOp::Rem => {
+                                        if rv == 0 {
+                                            self.diags.push(
+                                                Diagnostic::error(
+                                                    DiagCode::Strictness("S15"),
+                                                    format!("静态可证除零：{base} {}= 0（interp 运行期 HRuntimeError，rustc 后端编译期拒绝；js 静默 NaN）", bin_op.as_str()),
+                                                    e.span,
+                                                ),
+                                            );
+                                            None
+                                        } else {
+                                            base.checked_rem(rv)
+                                        }
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(res) = res {
+                                    self.symbols.set_lit_val(name, res);
+                                    if let Some(dom) = self.symbols.peek_dom(name) {
+                                        if let Some((lo, hi)) = int_domain_limits(&dom) {
+                                            if res < lo || res > hi {
+                                                self.diags.push(
+                                                    Diagnostic::error(
+                                                        DiagCode::Strictness("S15"),
+                                                        format!("注解域算术溢出：{base} {}= {rv} = {res} 超出 {dom} 域 [{lo}, {hi}]（interp BigInt 静默越域，rust 后端环绕/panic —— 跨后端漂移）", bin_op.as_str()),
+                                                        e.span,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 动态值复合赋值 → 折叠值事实失效保守清除（类型/域事实保留）
+                                let t = self.symbols.peek_lit_ty(name);
+                                let dom = self.symbols.peek_dom(name);
+                                self.symbols.set_lit_facts(name, t, None, dom);
+                            }
+                        }
+                    }
+                }
             }
             ExprKind::Closure { params, ret, body, .. } => {
                 self.symbols.push_scope();

@@ -433,7 +433,7 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
 
 // ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2）----
 interface Scope {
-  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy }>;
+  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy; litVal?: bigint; dom?: string }>;
   parent?: Scope;
   used: Set<string>;
 }
@@ -502,7 +502,19 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
         const t = litTypeOf(st.init, scope);
         if (t !== null) {
           const cur = scope.vars.get(st.pat.name);
-          if (cur) cur.litTy = t;
+          if (cur) {
+            cur.litTy = t;
+            // v0.2.54 S-15：整型字面量值 + 域（注解/后缀）一并入作用域 ——
+            // 后续 a + 1 / a + a 的静态折叠检查与域传播都依赖这两项事实。
+            if (t === 'int') {
+              const v = intValOf(st.init, scope);
+              if (v !== null) cur.litVal = v;
+              const d = (st.ty && st.ty.kind === 'path' && st.ty.segs.length === 1 && INT_LIMITS[st.ty.segs[0]!])
+                ? st.ty.segs[0]!
+                : intDomainOf(st.init, scope);
+              if (d) cur.dom = d;
+            }
+          }
         }
       }
       // v0.2.53 S-13：整型注解的字面量域校验。
@@ -512,6 +524,18 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
       // 时，值必须落在注解类型域内。非字面量/运行期动态值不判（BigInt 任意精度
       // 为既定设计，见 guide 已知限制 #48）；显式转换请用 as（S-1 零隐式转换）。
       if (st.ty && st.init) checkIntLiteralRange(st.ty, st.init, diags, file);
+      // v0.2.54 S-15（let 层）：注解域 + 可折叠算术 init → 结果域检查。
+      // S-13 只判纯字面量；这里下沉到折叠算术（250 + 250 对 u8）——
+      // 操作数无域时 binary 层查不到，注解域在 let 处才可见。
+      if (st.ty && st.init && st.init.kind === 'binary' && st.ty.kind === 'path' && st.ty.segs.length === 1) {
+        const limits = INT_LIMITS[st.ty.segs[0]!];
+        if (limits && ARITH_OPS.has(st.init.op)) {
+          const v = intValOf(st.init, scope);
+          if (v !== null && (v < limits[0] || v > limits[1])) {
+            diags.push(err('S-15', `注解域算术溢出：折叠结果 ${v} 超出 ${st.ty.segs[0]} 域 [${limits[0]}, ${limits[1]}]（interp BigInt 静默越域，rust 后端环绕/panic —— 跨后端漂移；显式扩域请用 as）`, st.init.span, file));
+          }
+        }
+      }
       if (st.elseBlock) {
         const elseScope: Scope = { vars: new Map(), used: new Set(), parent: scope };
         checkStmts(st.elseBlock, elseScope, enums, diags, file, inAgentLoop);
@@ -590,6 +614,97 @@ function patternDisplay(p: A.Pattern): string {
 // 表达式的静态可判类型（字面量域；未知 → null 不判）
 type LitTy = 'int' | 'float' | 'bool' | 'str' | 'char' | null;
 
+// ---- v0.2.54 S-15：注解域整型算术的静态溢出检查 ----
+// L-9 证据链（四运行时真机对拍）：
+//   let a: i64 = 9223372036854775807; let b = a + 1; →
+//     interp:     9223372036854775808（BigInt 任意精度，静默越域不环绕）
+//     rust(release): 环绕 -9223372036854775808（debug: panic）
+//     python:     9223372036854775808（任意精度，与 interp 一致）
+//     js/ts:      字面量读入即舍入（Number 精度城外）
+//   let a: u8 = 250; a + a → interp 500（越域）/ rust 环绕 244
+// 域语义只能静态守门（interp 参考语义 = 任意精度不环绕；rust 后端环绕为投射差异）。
+// 口径：仅当「两侧静态可折叠整数值 + 至少一侧域已知」或「let 注解域 + 可折叠算术 init」
+// 才判 —— 零误报优先，动态值留运行期。
+
+// 整型域事实来源：显式 cast 目标 / 带后缀字面量 / 作用域声明（注解或后缀）
+function intDomainOf(e: A.Expr, scope?: Scope): string | null {
+  if (e.kind === 'cast' && e.ty.kind === 'path' && e.ty.segs.length === 1) {
+    const t = e.ty.segs[0]!;
+    if (INT_LIMITS[t]) return t;
+  }
+  if (e.kind === 'lit' && e.lit.t === 'int' && e.lit.suffix && INT_LIMITS[e.lit.suffix]) return e.lit.suffix;
+  if (e.kind === 'path' && e.segs.length === 1 && scope) {
+    let s: Scope | undefined = scope;
+    while (s) {
+      const hit = s.vars.get(e.segs[0]!);
+      if (hit) return hit.dom ?? null;
+      s = s.parent;
+    }
+    return null;
+  }
+  return null;
+}
+
+// 静态可折叠整数值（BigInt 任意精度）：lit / 一元负 / path 查作用域 litVal / 二元折叠
+function intValOf(e: A.Expr, scope?: Scope): bigint | null {
+  if (e.kind === 'lit' && e.lit.t === 'int') return BigInt(e.lit.v);
+  if (e.kind === 'unary' && e.op === '-') {
+    const v = intValOf(e.operand, scope);
+    return v === null ? null : -v;
+  }
+  if (e.kind === 'unary' && e.op === '+') return intValOf(e.operand, scope);
+  if (e.kind === 'path' && e.segs.length === 1 && scope) {
+    let s: Scope | undefined = scope;
+    while (s) {
+      const hit = s.vars.get(e.segs[0]!);
+      if (hit) return hit.litVal ?? null;
+      s = s.parent;
+    }
+    return null;
+  }
+  if (e.kind === 'binary' && (e.op === '+' || e.op === '-' || e.op === '*' || e.op === '/' || e.op === '%')) {
+    const l = intValOf(e.lhs, scope);
+    const r = intValOf(e.rhs, scope);
+    if (l === null || r === null) return null;
+    if ((e.op === '/' || e.op === '%') && r === 0n) return null; // 除零不折叠（静态另有专项诊断）
+    switch (e.op) {
+      case '+': return l + r;
+      case '-': return l - r;
+      case '*': return l * r;
+      case '/': return l / r;
+      case '%': return l % r;
+    }
+  }
+  return null;
+}
+
+const ARITH_OPS = new Set(['+', '-', '*', '/', '%']);
+
+function checkDomainArith(e: A.Expr & { kind: 'binary' }, scope: Scope, diags: Diag[], file: string): void {
+  // S-15 主检查：静态可折叠 + 域已知 → 结果域检查；除零专项
+  const lv = intValOf(e.lhs, scope);
+  const rv = intValOf(e.rhs, scope);
+  if (lv === null || rv === null) return;
+  if ((e.op === '/' || e.op === '%') && rv === 0n) {
+    diags.push(err('S-15', `静态可证除零：${lv} ${e.op} 0（interp 运行期 HRuntimeError，rustc 后端 deny(unconditional_panic) 编译期拒绝；python ZeroDivisionError，js 静默 NaN）`, e.span, file));
+    return;
+  }
+  const dom = intDomainOf(e.lhs, scope) ?? intDomainOf(e.rhs, scope);
+  if (!dom) return;
+  const limits = INT_LIMITS[dom]!;
+  let res: bigint;
+  switch (e.op) {
+    case '+': res = lv + rv; break;
+    case '-': res = lv - rv; break;
+    case '*': res = lv * rv; break;
+    case '/': res = lv / rv; break;
+    default: res = lv % rv; break;
+  }
+  if (res < limits[0] || res > limits[1]) {
+    diags.push(err('S-15', `注解域算术溢出：${lv} ${e.op} ${rv} = ${res} 超出 ${dom} 域 [${limits[0]}, ${limits[1]}]（interp BigInt 任意精度静默越域、rust 后端环绕/panic —— 跨后端漂移；显式扩域请用 as）`, e.span, file));
+  }
+}
+
 function litTypeOf(e: A.Expr, scope?: Scope): LitTy {
   if (e.kind === 'lit') {
     if (e.lit.t === 'int') return 'int';
@@ -643,11 +758,15 @@ function checkBinaryOpTypes(e: A.Expr & { kind: 'binary' }, scope: Scope, diags:
     // 算术：仅数值域（str*int 是 python 的字符串重复但非 HSL 语义 —— interp 运行期拒绝，静态提前拦）
     if (!NUMERIC_TYS.has(lhs) || !NUMERIC_TYS.has(rhs)) { fail('算术运算符要求两侧数值（str 重复/拼接请用显式转换或 str 方法）'); return; }
     if ((lhs === 'float') !== (rhs === 'float')) { fail('int 与 float 混算需显式 as 转换（S1 零隐式转换）'); return; }
+    // v0.2.54 S-15：注解域整型算术的静态溢出/除零检查（两侧静态可折叠时）
+    if (lhs === 'int' && rhs === 'int') checkDomainArith(e, scope, diags, file);
     return;
   }
   if (op === '+' ) {
     if (!NUMERIC_TYS.has(lhs) || !NUMERIC_TYS.has(rhs)) { fail('加法仅数值加法或 str+str 拼接'); return; }
     if ((lhs === 'float') !== (rhs === 'float')) { fail('int 与 float 混算需显式 as 转换（S1 零隐式转换）'); return; }
+    // v0.2.54 S-15：同上
+    if (lhs === 'int' && rhs === 'int') checkDomainArith(e, scope, diags, file);
     return;
   }
   // 比较运算：==/!=/</>/<=/>= —— 数值×数值 / str×str / bool×bool / char×char 合法；跨类非法
@@ -664,6 +783,27 @@ function checkBinaryOpTypes(e: A.Expr & { kind: 'binary' }, scope: Scope, diags:
 
 function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
   switch (e.kind) {
+    case 'lit': {
+      // v0.2.54 S-13（v2）：后缀字面量域检查（300u8 —— 注解路径 S-13 已有，
+      // 后缀路径此前漏拦；lexer 记 suffix，域界 INT_LIMITS）。
+      if (e.lit.t === 'int' && e.lit.suffix && INT_LIMITS[e.lit.suffix]) {
+        const limits = INT_LIMITS[e.lit.suffix]!;
+        const v = BigInt(e.lit.v);
+        if (v < limits[0] || v > limits[1]) {
+          diags.push(err('S-13', `整数字面量 ${v} 超出后缀 ${e.lit.suffix} 域 [${limits[0]}, ${limits[1]}]（rustc 后端将拒绝编译，python/js 后端静默放行 —— 跨后端漂移；显式截断请用 as）`, e.span, file));
+        }
+      }
+      // v0.2.54 S-16（L-10）：超 i128 容量字面量静态拒绝 —— dhv(Rust) parser
+      // 此前静默归零（值损坏比溢出更糟）双端分歧实录；静态域分析以 i128 为
+      // 容量上界（与 dhv walk_expr Literal 臂同口径）。
+      if (e.lit.t === 'int') {
+        const v = BigInt(e.lit.v);
+        if (v > 170141183460469231731687303715884105727n || v < -170141183460469231731687303715884105728n) {
+          diags.push(err('S-16', `整数字面量超出 i128 静态容量：${e.lit.v}（dhv(Rust) parse 静默归零为 0 —— 值损坏；interp BigInt 精确解析、rust 后端 i128 无域 —— 静态域分析以 i128 为容量上界，源字面量必须可精确表示）`, e.span, file));
+        }
+      }
+      break;
+    }
     case 'path':
       for (const s of e.segs) {
         // 只有首段是变量名（后续是枚举/结构体命名空间）
@@ -698,6 +838,76 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
         checkExpr(e.target, scope, enums, diags, file, inAgentLoop);
       }
       checkExpr(e.value, scope, enums, diags, file, inAgentLoop);
+      // v0.2.54 S-14（v3）：重赋值更新字面量事实 —— 消除「先 int 后 str 重赋值」
+      // 中转的假阴性（e04 实录：let mut x = 1; x = "s"; x * 2 静态漏拦）。
+      // 字面量/可折叠赋值 → 记新事实（含域）；非字面量 → 清除（保守放行，
+      // 运行期仍守门）。注解变量的 dom 跟随变量类型不随值变；无注解则域
+      // 事实来自字面量后缀/cast，重赋值时随之更新。
+      if (e.target.kind === 'path' && e.target.segs.length === 1) {
+        const name = e.target.segs[0]!;
+        let s: Scope | undefined = scope;
+        while (s) {
+          const cur = s.vars.get(name);
+          if (cur) {
+            if (e.op === '=') {
+              const t = litTypeOf(e.value, scope);
+              cur.litTy = t ?? undefined;
+              if (t === 'int') {
+                cur.litVal = intValOf(e.value, scope) ?? undefined;
+                const d = intDomainOf(e.value, scope) ?? cur.dom ?? undefined;
+                cur.dom = d;
+                // v0.2.54 S-15：赋值域检查（let mut x: u8 = 0; x = 300 ——
+                // S-13 只判 let 声明，赋值路径此前漏拦）
+                if (cur.litVal !== undefined && d) {
+                  const limits = INT_LIMITS[d];
+                  if (limits && (cur.litVal < limits[0] || cur.litVal > limits[1])) {
+                    diags.push(err('S-15', `赋值域越界：${cur.litVal} 超出 ${d} 域 [${limits[0]}, ${limits[1]}]（interp BigInt 静默越域，rust 后端字面量编译期拒绝 —— 跨后端漂移；显式截断请用 as）`, e.span, file));
+                  }
+                }
+              } else {
+                cur.litVal = undefined;
+                cur.dom = undefined;
+              }
+            } else if (ARITH_OPS.has(e.op.slice(0, -1))) {
+              // 复合赋值（+= 等）：折叠更新 litVal + 域检查（a: u8 = 250; a += 10）
+              const binOp = e.op.slice(0, -1);
+              const base = cur.litVal;
+              const rv = intValOf(e.value, scope);
+              if (base !== undefined && rv !== null) {
+                if ((binOp === '/' || binOp === '%') && rv === 0n) {
+                  diags.push(err('S-15', `静态可证除零：${base} ${binOp}= 0（interp 运行期 HRuntimeError，rustc 后端编译期拒绝；js 静默 NaN）`, e.span, file));
+                } else {
+                  let res: bigint | null = null;
+                  switch (binOp) {
+                    case '+': res = base + rv; break;
+                    case '-': res = base - rv; break;
+                    case '*': res = base * rv; break;
+                    case '/': res = base / rv; break;
+                    case '%': res = base % rv; break;
+                  }
+                  if (res !== null) {
+                    cur.litVal = res;
+                    if (cur.dom) {
+                      const limits = INT_LIMITS[cur.dom]!;
+                      if (res < limits[0] || res > limits[1]) {
+                        diags.push(err('S-15', `注解域算术溢出：${base} ${e.op} ${rv} = ${res} 超出 ${cur.dom} 域 [${limits[0]}, ${limits[1]}]（interp BigInt 静默越域，rust 后端环绕/panic —— 跨后端漂移）`, e.span, file));
+                      }
+                    }
+                  }
+                }
+              } else {
+                // 动态值复合赋值 → 折叠值事实失效保守清除；类型事实按 RHS
+                // 字面量类型对齐（a += <dyn数值> 保持 int；非数值 RHS 清除）
+                cur.litVal = undefined;
+                const vt = litTypeOf(e.value, scope);
+                if (vt !== 'int' && vt !== null) cur.litTy = vt;
+              }
+            }
+            break;
+          }
+          s = s.parent;
+        }
+      }
       break;
     }
     case 'call': {

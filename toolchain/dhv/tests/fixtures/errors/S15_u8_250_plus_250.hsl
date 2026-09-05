@@ -1,0 +1,6 @@
+// v0.2.54 S-15：u8 域算术溢出（interp 500 静默越域 / rust 环绕 244）
+fn main() {
+  let a: u8 = 250;
+  let b = a + a;
+  println!("{}", b);
+}

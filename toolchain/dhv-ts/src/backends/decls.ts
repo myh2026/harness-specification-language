@@ -33,6 +33,8 @@ export interface EmitCtx {
   enums: Map<string, A.Item & { kind: 'enum' }>; // 全程序枚举注册表
   /** go 同 package 多文件顶级助手去重状态（v1.4.10：跨文件共享，首文件注入助手） */
   goHelpersState?: { done: boolean };
+  /** v0.2.54 L-9c：emit 期跨后端漂移告警通道 */
+  warn?: (msg: string) => void;
 }
 
 export interface P {
@@ -1373,6 +1375,7 @@ export function fnDecl(p: P, fn: A.FnDef, pi: ProjectedItem, isMethod: boolean, 
         ty: p.ty,
         enums: p.ctx.enums,
         strLit: p.strLit,
+        warn: p.ctx.warn,
       }, p.ind);
     } catch (err) {
       if (!(err instanceof TranspileError)) throw err;
@@ -1637,7 +1640,7 @@ function goZero(ty: string): string {
 function tryBody(p: P, fn: A.FnDef, pi: ProjectedItem, selfType: string): string[] {
   if ((p.lang.body === 'full' || p.lang.body === 'logic') && fn.body) {
     try {
-      const lines = transpileBody(fn, p.lang, { ty: p.ty, enums: p.ctx.enums, strLit: p.strLit }, p.ind);
+      const lines = transpileBody(fn, p.lang, { ty: p.ty, enums: p.ctx.enums, strLit: p.strLit, warn: p.ctx.warn }, p.ind);
       return p.fence(pi.item, `${selfType}_${fn.name}`, lines, p.ind);
     } catch {
       /* fallthrough */

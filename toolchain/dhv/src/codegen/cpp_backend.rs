@@ -643,7 +643,7 @@ fn emit_expr_cpp(expr: &Expr) -> String {
 fn cpp_literal(lit: &Literal) -> String {
     match &lit.kind {
         LiteralKind::Str { value, .. } => format!("\"{}\"", value),
-        LiteralKind::Int { value, suffix: _ } => value.to_string(),
+        LiteralKind::Int { value, .. } => value.to_string(),
         LiteralKind::Float { value, suffix: _ } => value.to_string(),
         LiteralKind::Bool(b) => if *b { "true".into() } else { "false".into() },
         LiteralKind::Char(c) => format!("'{}'", c),

@@ -837,7 +837,7 @@ fn rb_pattern(pat: &Pattern) -> String {
 
 fn rb_literal(lit: &Literal) -> String {
     match &lit.kind {
-        LiteralKind::Int { value, suffix: _ } => {
+        LiteralKind::Int { value, .. } => {
             value.to_string()
         }
         LiteralKind::Float { value, suffix: _ } => {

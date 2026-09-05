@@ -1062,7 +1062,7 @@ fn java_pattern_literal(lit: &Literal) -> String {
 fn java_literal(lit: &Literal) -> String {
     match &lit.kind {
         LiteralKind::Bool(b) => if *b { "true".into() } else { "false".into() },
-        LiteralKind::Int { value, suffix } => {
+        LiteralKind::Int { value, suffix, .. } => {
             let mut s = value.to_string();
             match suffix {
                 Some(IntSuffix::I8) | Some(IntSuffix::U8) => s.push_str("/* byte */"),

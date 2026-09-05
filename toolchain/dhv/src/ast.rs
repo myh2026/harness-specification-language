@@ -602,7 +602,10 @@ pub struct Literal {
 
 #[derive(Debug, Clone)]
 pub enum LiteralKind {
-    Int { value: i128, suffix: Option<IntSuffix> },
+    /// value：i128 域内的值；overflow=true 表示源字面量超出 i128 容量
+    /// （v0.2.54 L-10：此前 parse 失败静默归零 —— 值损坏比溢出更糟，
+    /// dhv-ts BigInt 精确而 dhv 归零的双端漂移实录。S-16 静态拒绝）
+    Int { value: i128, suffix: Option<IntSuffix>, overflow: bool },
     Float { value: f64, suffix: Option<FloatSuffix> },
     /// 已去除引号与转义的字符串值
     Str { value: String, raw_string: bool },

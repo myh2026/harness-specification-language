@@ -1,0 +1,7 @@
+// v0.2.54 S-15：注解域算术溢出（四运行时漂移实录：
+// interp BigInt 静默越域 / rust 环绕 / python 任意精度 / js 字面量舍入）
+fn main() {
+  let a: i64 = 9223372036854775807;
+  let b = a + 1;
+  println!("{}", b);
+}

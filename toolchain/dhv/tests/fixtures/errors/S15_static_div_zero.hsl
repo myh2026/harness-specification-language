@@ -1,0 +1,5 @@
+// v0.2.54 S-15：静态可证除零（rustc deny(unconditional_panic) 编译期拒绝）
+fn main() {
+  let y = 5 / 0;
+  println!("{}", y);
+}

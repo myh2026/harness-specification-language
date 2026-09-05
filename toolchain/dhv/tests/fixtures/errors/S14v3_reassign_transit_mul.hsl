@@ -1,0 +1,7 @@
+// v0.2.54 S-14（v3）：重赋值类型中转 —— 先 int 后 str，字面量事实更新后可静态拦
+fn main() {
+  let mut x = 3;
+  x = "abc";
+  let y = x * 2;
+  println!("{}", y);
+}

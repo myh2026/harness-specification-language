@@ -788,8 +788,18 @@ export class Interp {
         }
         throw new HRuntimeError(`"/" 不能用于 ${typeNameOf(l)} 与 ${typeNameOf(r)}`);
       case '%':
-        if (typeof l === 'number' && typeof r === 'number') return l % r;
-        if (typeof l === 'bigint' || typeof r === 'bigint') return BigInt(l as number) % BigInt(r as number);
+        // v0.2.54 L-9 修复：`/` 有除零检查而 `%` 没有 —— `5 % 0` 在 number 路径
+        // 静默返回 NaN（垃圾值污染数据流）、bigint 路径抛裸 RangeError（非干净
+        // HRuntimeError）。rustc 后端 deny(unconditional_panic) 编译期拒绝 ——
+        // 双路径统一为运行期 HRuntimeError（与 `/` 的口径对齐）。
+        if (typeof l === 'number' && typeof r === 'number') {
+          if (r === 0) throw new HRuntimeError('除以零（模运算）');
+          return l % r;
+        }
+        if (typeof l === 'bigint' || typeof r === 'bigint') {
+          if (BigInt(r as number) === 0n) throw new HRuntimeError('除以零（模运算）');
+          return BigInt(l as number) % BigInt(r as number);
+        }
         throw new HRuntimeError(`"%" 不能用于 ${typeNameOf(l)} 与 ${typeNameOf(r)}`);
       case '&': case '|': case '^': case '<<': case '>>': {
         const ln = Number(l), rn = Number(r);
