@@ -960,6 +960,16 @@ export class Parser {
         continue;
       }
       if (this.atP('(')) {
+        // v0.2.57 修复（Bug #3 换行粘调用）：表达式结束后，若 `(` 位于新行，
+        // 不再把 `(...)` 粘成对前一表达式的调用 —— 否则块型表达式语句
+        // （if/match/loop/原生块）后跟元组字面量会被解析成
+        // 「调用 if 结果」，运行期爆「不可调用的值：unit」：
+        //   if cond { ... }      // 语句（自终结）
+        //   (docs, versions)     // ← 此前被误粘为 if结果(docs, versions)
+        // 合法多行调用不受影响：`(` 与被调者同行（foo(\n  arg\n)）依旧成立；
+        // 以 `.` 开头的新行方法链、`[` 下标同理不受影响。
+        const prevTok = this.i > 0 ? this.toks[this.i - 1]! : null;
+        if (prevTok && this.peek().line > prevTok.line) return expr;
         this.next();
         const args: A.Expr[] = [];
         while (!this.atP(')')) {
