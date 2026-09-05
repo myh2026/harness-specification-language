@@ -5,7 +5,7 @@
 **从逻辑到 38 个后端的工程投射 · 为编写 AI Agent harness 而生的编译型语言**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-[![dhv](https://img.shields.io/badge/dhv-v0.2.52-success.svg)](toolchain/dhv/Cargo.toml)
+[![dhv](https://img.shields.io/badge/dhv-v0.2.56-success.svg)](toolchain/dhv/Cargo.toml)
 [![dhv-ts](https://img.shields.io/badge/dhv--ts-v0.2.56-success.svg)](toolchain/dhv-ts/package.json)
 [![BNF](https://img.shields.io/badge/BNF-v1.5.0-blue.svg)](toolchain/hsl-spec/BNF.md)
 [![Backend](https://img.shields.io/badge/backends-38-orange.svg)](toolchain/hsl-spec/BNF.md)
@@ -269,7 +269,7 @@ project {
 
 ## 🛡️ 当前版本
 
-**dhv 0.2.52 · dhv-ts 0.2.56 · BNF v1.5.0 · 指南 v0.2.51 · IDE v0.1.1**
+**dhv 0.2.56 · dhv-ts 0.2.56 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.1.1**
 
 - 版本号以 `toolchain/dhv/Cargo.toml` 与 `toolchain/dhv-ts/package.json` 为准，随每次功能/修复递增；
 - 详见 [CHANGELOG.md](CHANGELOG.md)。

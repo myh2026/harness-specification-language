@@ -6,9 +6,9 @@
 
 | | |
 |:---|:---|
-| 文档版本 | v0.2.51（与工具链同步） |
+| 文档版本 | v0.2.56（与工具链同步） |
 | 语言规范 | BNF v1.5.0（`toolchain/hsl-spec/BNF.md`；新增 §3.4 投射规则组 rules） |
-| 参考实现 | dhv-ts v0.2.27（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.27 |
+| 参考实现 | dhv-ts v0.2.56（`bun toolchain/dhv-ts/src/main.ts ...`）；dhv Rust 编译器 v0.2.56 |
 | 许可证 | MIT |
 | 后端 | 38 个：32 编程语言 + 6 静态格式 |
 
