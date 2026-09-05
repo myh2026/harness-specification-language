@@ -324,6 +324,10 @@ export class Lexer {
       while (p < this.src.length && isIdentCont(this.src[p]!)) { s += this.src[p]; p++; }
       if (/^(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64)$/.test(s)) {
         suffix = s;
+        // v0.2.56 L-14：`1f32`/`2f64` 此前被分派为 int token（带 f 后缀）——
+        // 与 dhv 的 float_literal 语法（dec_literal ~ float_suffix）kind 漂移，
+        // 值级对拍 float 扩展必失配。后缀 f32/f64 ⇒ 一律 float。
+        if (s === 'f32' || s === 'f64') isFloat = true;
         while (s.length > 0) { s = s.slice(1); this.advance(); }
       }
     }
@@ -359,7 +363,16 @@ export class Lexer {
         let h = '';
         while (this.peek() !== '}' && this.pos < this.src.length) h += this.advance();
         this.advance();
-        return String.fromCodePoint(parseInt(h.replace(/_/g, ''), 16));
+        // v0.2.56 L-12 对齐：pest 已收紧码点域（1-6 位 hex、无下划线、≤ 0x10FFFF）。
+        // 此前 ts 容忍下划线（\u{_4_1_}）而 dhv 拒绝 —— 双端口径统一为严格式。
+        if (h.length === 0 || /[^0-9a-fA-F]/.test(h)) {
+          throw new LexError(`\\u{${h}} 转义必须是 1-6 位十六进制（不含下划线）`, this.line, this.col);
+        }
+        const cp = parseInt(h, 16);
+        if (cp > 0x10ffff) {
+          throw new LexError(`\\u{${h}} 超出 Unicode 标量值上限 0x10FFFF`, this.line, this.col);
+        }
+        return String.fromCodePoint(cp);
       }
       default:
         throw new LexError(`未知转义 \\${e}`, this.line, this.col);

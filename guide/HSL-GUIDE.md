@@ -3796,6 +3796,8 @@ AGENTS.md 是给「读仓库的 agent」看的行为说明文件（目录纪律�
 | 65 | **dhv(Rust) 带后缀整数字面量曾一直解析为 0**（v0.2.54 L-11 已修）：pest 的 `integer_literal` 规则把后缀并入捕获文本，`from_str_radix("300u8")` 必失败 → `unwrap_or(0)` 静默归零（`250u8` 的值是 0！）—— dhv-ts lexer 剥离后缀无此问题。修复后后缀先剥离再解析；S-13（v2）新增后缀域字面量校验（`300u8` 报错） | 已无此损坏（锁定用例 S13_suffix_domain + run-all 后缀族） |
 | 66 | **结论对拍对 parse 层静默损坏失明 → 已建值级对拍**（v0.2.54 第五轮）：`dhv parse <file> --dump-values` 按文件序 dump 全部整数字面量（raw/值/后缀）；`bun tests/run_value_conformance.ts` 与 dhv-ts AST 遍历逐条比对（fixtures/values 语料 8 类：十进制/进制/后缀/表达式序/模式位/图拓扑/判别式/浮点判别）。L-11 类 bug（归零、舍入、后缀吞字）从此被机器护栏锁定 —— RED 注入实验实证：恢复旧 bug 后 suffix_family 7 字面量立即报不一致。已并入 run_conformance.sh 第 4 段 | 新增字面量形态（新进制/新后缀）时在 fixtures/values 加语料即可 |
 
+| 67 | **字符串/浮点值损坏曾无机器护栏 → 三族值级对拍**（v0.2.56 第六轮）：(a) **L-12** dhv `unescape_string` 的 `\u{...}` 收集循环越过 `}` 吞掉后续字符（`"\u{41}bc"` 输出 `'䆼'` 而非 `"Abc"`；`"\u{41}x"` 整串静默空）—— 修复：遇 `}` 停止 + pest 码点域收紧（1-5 位任意 / 6 位 ≤ 0x10FFFF）+ 无效码点保留原文；ts 端同步去除下划线容忍（`\u{_4_1_}` 双端拒绝）。(b) **L-13** dhv float 后缀剥离用 `trim_end_matches(is_alphabetic)` 剥不掉以数字结尾的 `f32/f64` → `1f32` parse 失败 **静默归 0**（每条带 f 后缀浮点必损坏）—— 值级对拍 float 扩展当场抓获；修复：精确后缀剥离 + 失败改 NaN（可观测）。(c) **L-14** ts lexer 曾把 `1f32` 分派为 int token（kind 漂移）—— 后缀 f32/f64 ⇒ 一律 float。值级对拍扩展：**float 用 IEEE754 位模式（16 hex，双端唯一可靠等价判据，NaN payload/符号位全保真）**；string 用统一转义 repr；宏 token 树 walk 对齐（表达式宏 dump / 语句级 macro_invocation_semi 不 dump）；语料 8→12 类（浮点族/转义族/unicode 边界/宏口径） | RED 注入实证：模拟 L-12 复发 unicode_edge 立即失配；新增字面量形态时在 fixtures/values 加语料 |
+| 68 | **cast 域折叠（truncation-aware）已进静态检查**（v0.2.56 S-17）：`300 as u8 + 300`（环绕折叠后 344 越域）此前静态漏报（intValOf 不穿 cast）；现 cast 到整型域 = 显式截断投射（与 interp castValue / rust as 同构环绕），cast 到 float/String/bool/char 不折叠。合法族（`300 as u8 + 200` = 244 域内）零误报 | 折叠域外表达式（动态值）仍留运行期参考语义 |
 
 ---
 

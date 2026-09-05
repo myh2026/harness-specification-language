@@ -1,0 +1,8 @@
+// 值域语料 12（第六轮）：宏字面量口径 —— 表达式宏 dump / 语句宏不 dump
+// （对齐 dhv：macro_invocation_semi 是项级；Expr::Macro 走 token 树）
+fn main() {
+  let x = format!("f{}z", 1);
+  println!("stmt-macro-skipped");
+  let y = format!("{}-{}", 2u8, 3i64);
+  println!("{} {} {}", x, y, "tail");
+}

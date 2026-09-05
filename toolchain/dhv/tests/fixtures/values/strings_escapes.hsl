@@ -1,0 +1,11 @@
+// 值域语料 10（第六轮）：字符串转义族 —— L-12 锁（\u 收集曾越过 } 吞字）
+fn main() {
+  let a = "line1\nline2";
+  let b = "tab\tsep";
+  let c = "back\\slash";
+  let d = "nul\0end";
+  let e = "hex\x41\x7A";
+  let f = "quote\"inside";
+  let g = "中文emoji🐶";
+  println!("{} {} {} {} {} {} {}", a, b, c, d, e, f, g);
+}

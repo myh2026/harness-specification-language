@@ -1097,11 +1097,20 @@ fn literal(pair: Pair<'_, Rule>, f: FileId) -> Literal {
             LiteralKind::Int { value, suffix, overflow }
         }
         Rule::float_literal => {
-            let text: String = inner.as_str().chars().filter(|c| *c != '_').collect();
-            let value: f64 = text.trim_end_matches(|c: char| c.is_alphabetic())
-                .parse()
-                .unwrap_or(0.0);
-            let suffix = if text.ends_with("f32") { Some(FloatSuffix::F32) } else if text.ends_with("f64") { Some(FloatSuffix::F64) } else { None };
+            let raw_text = inner.as_str();
+            let text: String = raw_text.chars().filter(|c| *c != '_').collect();
+            // v0.2.56 L-13 实锤（值级对拍当场抓获）：`1f32` 尾部是数字 '2'，
+            // trim_end_matches(is_alphabetic) 剥不掉 f32/f64 后缀 →
+            // parse("1f32") 必失败 → 旧版 unwrap_or(0.0) 静默归零（每条带
+            // f 后缀的浮点字面量值必损坏）；中版 NaN。正确做法：精确匹配剥离。
+            let (num_text, suffix) = if let Some(st) = text.strip_suffix("f32") {
+                (st, Some(FloatSuffix::F32))
+            } else if let Some(st) = text.strip_suffix("f64") {
+                (st, Some(FloatSuffix::F64))
+            } else {
+                (text.as_str(), None)
+            };
+            let value: f64 = num_text.parse().unwrap_or(f64::NAN);
             LiteralKind::Float { value, suffix }
         }
         Rule::string_literal => LiteralKind::Str {
@@ -1189,23 +1198,28 @@ fn unescape_string(s: &str) -> String {
                     }
                 }
                 Some('u') => {
+                    // v0.2.56 L-12：收集必须在 '}' 处停止 —— 此前循环越过 '}'，
+                    // 把 `\u{41}bc` 的 "bc" 吞进码点（hex="41bc" → 输出 '䆼' 而非
+                    // "Abc"）：错值 + 吞内容 + 无效时静默空，三重静默损坏。
+                    // pest 已收紧码点域（≤ 0x10FFFF）；此处防御：无效码点保留
+                    // 原始转义文本（不丢内容、可诊断），而非静默丢弃。
                     let mut hex = String::new();
                     for c2 in chars.by_ref() {
-                        if c2 == '{' || c2 == '}' || c2 == '_' {
-                            continue;
-                        }
+                        if c2 == '}' { break; }
+                        if c2 == '{' || c2 == '_' { continue; }
                         hex.push(c2);
-                        if hex.len() >= 6 {
-                            break;
-                        }
                     }
-                    if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(cp) {
-                            out.push(ch);
-                        }
+                    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        Some(ch) => out.push(ch),
+                        None => out.push_str(&format!("\\u{{{}}}", hex)),
                     }
                 }
-                Some(other) => out.push(other),
+                // v0.2.56 L-12 防御：未知转义不再静默吞掉 '\'（pest 语法层
+                // 已拒绝未知转义；此分支仅 import path 等文本语境可达）
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
                 None => {}
             }
         } else {
@@ -2410,5 +2424,39 @@ fn token(pair: Pair<'_, Rule>, f: FileId) -> Token {
         }
         Rule::label_token => Token::Label(pair.as_str().to_string()),
         _ => Token::Punct(pair.as_str().to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.2.56 L-12 回归锁：\u 转义收集遇 '}' 停止（吞字/错值/静默空三重损坏）
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod l12_unicode_escape {
+    use super::unescape_string;
+
+    #[test]
+    fn unicode_stops_at_brace() {
+        // 核心回归：`\u{41}bc` 此前输出 '䆼'（hex 吞成 41bc）
+        assert_eq!(unescape_string(r#"\u{41}bc"#), "Abc");
+    }
+
+    #[test]
+    fn unicode_plain_forms() {
+        assert_eq!(unescape_string(r#"\u{1F600}"#), "\u{1F600}");
+        assert_eq!(unescape_string(r#"\u{0}"#), "\0");
+        assert_eq!(unescape_string(r#"\u{10FFFF}"#), "\u{10FFFF}");
+    }
+
+    #[test]
+    fn unicode_invalid_codepoint_preserves_source() {
+        // 防御路径：无效码点保留原文（不丢内容）而非静默空
+        assert_eq!(unescape_string(r#"\u{110000}"#), "\\u{110000}");
+    }
+
+    #[test]
+    fn other_escapes_unchanged() {
+        assert_eq!(unescape_string(r#"a\tb\nc"#), "a\tb\nc");
+        assert_eq!(unescape_string(r#"\x41"#), "A");
+        assert_eq!(unescape_string(r#"plain"#), "plain");
     }
 }

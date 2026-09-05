@@ -81,10 +81,24 @@ fn cmd_parse(path: &Path, dump_values: bool) -> Result<(), String> {
             println!("{}", summarize(&ast));
             // v0.2.54 值级对拍（L-11 教训）：按文件内出现顺序 dump 所有整数字面量
             // —— 双编译器逐字面量比对值与域，parse 层静默损坏（归零/舍入）
-            // 无处遁形。格式：`int\t<raw>\t<value>[u 后缀]\t<line>:<col>`
+            // 无处遁形。格式：`int\t<raw>\t<value>[u 后缀]`
+            //
+            // v0.2.56 三族扩展（L-12/L-14 教训：值损坏不只在整数）：
+            // - float：IEEE754 位模式（{:016x}，双端 16 hex），NaN payload / 符号位全保真
+            // - string：统一转义 repr（长度 + 可见化），unescape 层吞字/错值无处遁形
             if dump_values {
-                for v in collect_int_literals(&ast) {
-                    println!("int\t{}\t{}{}", v.raw, v.value, v.suffix.unwrap_or_default());
+                for v in collect_literals(&ast) {
+                    match v {
+                        LitDump::Int { raw, value, suffix } => {
+                            println!("int\t{}\t{}{}", escape_for_dump(&raw), value, suffix)
+                        }
+                        LitDump::Float { raw, bits, suffix } => {
+                            println!("float\t{}\t{}\t{}", escape_for_dump(&raw), bits, suffix)
+                        }
+                        LitDump::Str { raw, value } => {
+                            println!("string\t{}\t{}", escape_for_dump(&raw), value)
+                        }
+                    }
                 }
             }
             Ok(())
@@ -160,32 +174,49 @@ fn cmd_watch(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// v0.2.54 值级对拍：按文件顺序收集所有整数字面量（含模式位/枚举判别式）。
-/// source map 保序依赖 walk 顺序与 pest 解析顺序一致（语句序列）。每条：
-/// raw 原文 / value 十进制值 / suffix（空 = 无后缀）。
-struct IntLitDump {
-    raw: String,
-    value: String,
-    suffix: Option<&'static str>,
+/// v0.2.54 值级对拍：按文件顺序收集所有字面量（含模式位/枚举判别式）。
+/// source map 保序依赖 walk 顺序与 pest 解析顺序一致（语句序列）。
+/// v0.2.56 三族扩展：int / float（IEEE754 位模式）/ string（统一转义 repr）。
+enum LitDump {
+    Int { raw: String, value: String, suffix: String },
+    Float { raw: String, bits: String, suffix: String },
+    Str { raw: String, value: String },
 }
 
-fn collect_int_literals(file: &dhv::ast::SourceFile) -> Vec<IntLitDump> {
+fn collect_literals(file: &dhv::ast::SourceFile) -> Vec<LitDump> {
     use dhv::ast::*;
     let mut out = Vec::new();
-    let push = |l: &Literal, out: &mut Vec<IntLitDump>| {
-        if let LiteralKind::Int { value, suffix, overflow } = &l.kind {
-            let suffix_str = suffix.map(|s| match s {
-                IntSuffix::I8 => "u i8", IntSuffix::I16 => "u i16", IntSuffix::I32 => "u i32",
-                IntSuffix::I64 => "u i64", IntSuffix::I128 => "u i128", IntSuffix::Isize => "u isize",
-                IntSuffix::U8 => "u u8", IntSuffix::U16 => "u u16", IntSuffix::U32 => "u u32",
-                IntSuffix::U64 => "u u64", IntSuffix::U128 => "u u128", IntSuffix::Usize => "u usize",
-            });
-            let value_str = if *overflow {
-                format!("OVERFLOW({})", l.raw)
-            } else {
-                value.to_string()
-            };
-            out.push(IntLitDump { raw: l.raw.clone(), value: value_str, suffix: suffix_str });
+    let push = |l: &Literal, out: &mut Vec<LitDump>| {
+        match &l.kind {
+            LiteralKind::Int { value, suffix, overflow } => {
+                let suffix_str = suffix.map(|s| match s {
+                    IntSuffix::I8 => "u i8", IntSuffix::I16 => "u i16", IntSuffix::I32 => "u i32",
+                    IntSuffix::I64 => "u i64", IntSuffix::I128 => "u i128", IntSuffix::Isize => "u isize",
+                    IntSuffix::U8 => "u u8", IntSuffix::U16 => "u u16", IntSuffix::U32 => "u u32",
+                    IntSuffix::U64 => "u u64", IntSuffix::U128 => "u u128", IntSuffix::Usize => "u usize",
+                }).unwrap_or("");
+                let value_str = if *overflow {
+                    format!("OVERFLOW({})", l.raw)
+                } else {
+                    value.to_string()
+                };
+                out.push(LitDump::Int { raw: l.raw.clone(), value: value_str, suffix: suffix_str.to_string() });
+            }
+            LiteralKind::Float { value, suffix } => {
+                // IEEE754 位模式：双端唯一可靠的浮点值等价判据（字符串格式化
+                // 双端有差异：Rust "inf" vs JS "Infinity"、大数指数形态不同）
+                let bits = format!("{:016x}", value.to_bits());
+                let suffix_str = match suffix {
+                    Some(FloatSuffix::F32) => "f32",
+                    Some(FloatSuffix::F64) => "f64",
+                    None => "",
+                };
+                out.push(LitDump::Float { raw: l.raw.clone(), bits, suffix: suffix_str.to_string() });
+            }
+            LiteralKind::Str { value, raw_string: _ } => {
+                out.push(LitDump::Str { raw: l.raw.clone(), value: escape_for_dump(value) });
+            }
+            _ => {}
         }
     };
     for top in &file.items {
@@ -196,10 +227,29 @@ fn collect_int_literals(file: &dhv::ast::SourceFile) -> Vec<IntLitDump> {
     out
 }
 
+/// v0.2.56：字符串值级 dump 的统一转义 repr（双端同规则）。
+/// \\ \" \n \r \t \0 控制字符 \xNN（两位小写 hex）；其余字符原样（含 unicode）。
+fn escape_for_dump(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn walk_item_lits(
     item: &dhv::ast::Item,
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     use dhv::ast::*;
     match item {
@@ -250,8 +300,8 @@ fn walk_item_lits(
 
 fn walk_block_lits(
     b: &dhv::ast::BlockExpr,
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     for s in &b.stmts {
         walk_stmt_lits(s, push, out);
@@ -263,8 +313,8 @@ fn walk_block_lits(
 
 fn walk_stmt_lits(
     s: &dhv::ast::Stmt,
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     match s {
         dhv::ast::Stmt::Let(l) => {
@@ -284,8 +334,8 @@ fn walk_stmt_lits(
 
 fn walk_pattern_lits(
     p: &dhv::ast::Pattern,
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     use dhv::ast::PatternKind::*;
     match &p.kind {
@@ -318,8 +368,8 @@ fn walk_pattern_lits(
 
 fn walk_expr_lits(
     e: &dhv::ast::Expr,
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     use dhv::ast::ExprKind::*;
     match &e.kind {
@@ -418,8 +468,8 @@ fn walk_expr_lits(
 
 fn walk_token_tree(
     tts: &[dhv::ast::TokenTree],
-    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<IntLitDump>),
-    out: &mut Vec<IntLitDump>,
+    push: &dyn Fn(&dhv::ast::Literal, &mut Vec<LitDump>),
+    out: &mut Vec<LitDump>,
 ) {
     for tt in tts {
         match tt {

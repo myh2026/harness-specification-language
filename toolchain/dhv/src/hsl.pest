@@ -85,7 +85,11 @@ float_literal  = @{
 escape = @{
       "\\n" | "\\r" | "\\t" | "\\\\" | "\\0" | "\\'" | "\\\""
     | "\\x" ~ hex_digit ~ hex_digit
-    | "\\u{" ~ (hex_digit | "_")+ ~ "}"
+    // v0.2.56 L-12：码点域收紧 —— Unicode 标量值上限 0x10FFFF。
+    // 1-5 位 hex 任意（≤ 0xFFFFF）；6 位时「首位 0」或「首位 1 且第二位 0」
+    // （≤ 0x10FFFF）。此前 `\u{110000}` 语法层放行、unescape 静默丢内容（值损坏）。
+    | "\\u{" ~ (hex_digit){1,5} ~ "}"
+    | "\\u{" ~ ("0" ~ hex_digit | "1" ~ "0") ~ hex_digit ~ hex_digit ~ hex_digit ~ hex_digit ~ "}"
 }
 
 char_literal    = @{ "'" ~ (escape | !("'" | "\\" | NEWLINE) ~ ANY) ~ "'" }

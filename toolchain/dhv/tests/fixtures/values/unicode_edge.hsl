@@ -1,0 +1,10 @@
+// 值域语料 11（第六轮）：unicode 转义边界 —— pest 域收紧锁（≤ 0x10FFFF）
+// \u{41}bc 为 L-12 核心回归（曾输出 '䆼' 而非 "Abc"）
+fn main() {
+  let a = "\u{41}bc";
+  let b = "\u{0}";
+  let c = "\u{10FFFF}";
+  let d = "\u{0FFFFF}";
+  let e = "\u{1F600}\u{1F601}";
+  println!("{} {} {} {} {}", a, b, c, d, e);
+}

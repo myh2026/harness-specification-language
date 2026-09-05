@@ -1,0 +1,5 @@
+// v0.2.56 S-17：cast 折叠后越域（此前 intValOf 不穿 cast → 静态漏报）
+fn main() {
+  let a: u8 = 300 as u8 + 300;     // 44 + 300 = 344 超出 [0, 255]
+  println!("{}", a);
+}

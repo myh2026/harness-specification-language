@@ -249,5 +249,5 @@ export interface File {
 
 // ---- token 树（宏用）----
 export type TokenTree =
-  | { t: 'tok'; tok: { kind: string; text: string; value?: unknown; line: number; col: number } }
+  | { t: 'tok'; tok: { kind: string; text: string; value?: unknown; suffix?: string; line: number; col: number } }
   | { t: 'delim'; open: string; close: string; items: TokenTree[] };

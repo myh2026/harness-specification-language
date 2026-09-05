@@ -662,6 +662,21 @@ function intValOf(e: A.Expr, scope?: Scope): bigint | null {
     }
     return null;
   }
+  // v0.2.56 S-17：cast 域折叠（truncation-aware）—— intValOf 此前不穿 cast，
+  // `300 as u8 + 300`（折叠后 344 越域）静态漏报。cast 到整型域 = 显式截断
+  // 投射（interp castValue 环绕语义同构，BigInt 精确）；cast 到 float/其他
+  // = 离开整数值域 → 不折叠。
+  if (e.kind === 'cast' && e.ty.kind === 'path' && e.ty.segs.length === 1) {
+    const t = e.ty.segs[0]!;
+    const lim = INT_LIMITS[t];
+    if (!lim) return null; // f32/f64/String/bool/char → 非整数域
+    const v = intValOf(e.expr, scope);
+    if (v === null) return null;
+    const signed = t.startsWith('i');
+    const span = lim[1] - lim[0] + 1n; // 2^N
+    const mod = ((v % span) + span) % span; // [0, 2^N)
+    return signed && mod > lim[1] ? mod - span : mod;
+  }
   if (e.kind === 'binary' && (e.op === '+' || e.op === '-' || e.op === '*' || e.op === '/' || e.op === '%')) {
     const l = intValOf(e.lhs, scope);
     const r = intValOf(e.rhs, scope);

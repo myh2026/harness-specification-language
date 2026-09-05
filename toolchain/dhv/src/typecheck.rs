@@ -68,6 +68,32 @@ fn annotation_domain(ty: &Type) -> Option<String> {
     }
 }
 
+/// v0.2.56 S-17：cast 目标 → 域名（复用 annotation_domain 的单段路径判定）
+fn domain_of_ty(ty: &Type) -> Option<String> {
+    annotation_domain(ty)
+}
+
+/// v0.2.56 S-17：按域环绕折叠（truncation-aware，与 interp castValue /
+/// rust as 同构）。i128 checked 防检查器自身溢出；u128 以 i128 为保守子集
+/// （超出即返回 None —— 与 S-16 静态容量拒绝的口径衔接）。
+fn wrap_to_domain(v: i128, dom: &str) -> Option<i128> {
+    let (lo, hi) = int_domain_limits(dom)?;
+    if dom == "u128" {
+        // u128 域在 i128 容量之外：负数环绕会超出 i128 表示 → 保守不折叠
+        return if v >= 0 { Some(v) } else { None };
+    }
+    let span: i128 = hi.wrapping_sub(lo).wrapping_add(1); // 2^N（≤ 2^127，i128 内安全）
+    // [0, 2^N) 环绕
+    let m = v.rem_euclid(span);
+    // 有符号域：[0, 2^(N-1)) 直通；[2^(N-1), 2^N) 平移到负半轴
+    let signed = dom.starts_with('i') || dom == "isize";
+    if signed && m > hi {
+        Some(m - span)
+    } else {
+        Some(m)
+    }
+}
+
 /// 绑定来源（S7 报告文案 / 豁免策略使用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -1184,6 +1210,8 @@ impl TypeChecker {
     }
 
     /// v0.2.54 S-15：静态可折叠整数值（i128 checked 运算，防检查器自身溢出 panic）
+    /// v0.2.56 S-17：cast 域折叠（truncation-aware）—— 此前不穿 cast，
+    /// `300 as u8 + 300`（折叠后 344 越域）静态漏报；与 dhv-ts intValOf 同构。
     fn expr_int_val(&self, e: &Expr) -> Option<i128> {
         match &e.kind {
             ExprKind::Literal(l) => match &l.kind {
@@ -1193,6 +1221,13 @@ impl TypeChecker {
             ExprKind::Unary { op: UnaryOp::Neg, operand, .. } => self.expr_int_val(operand).map(|v| v.checked_neg()).flatten(),
             ExprKind::Path(p) if p.segments.len() == 1 && !p.leading_colon => {
                 self.symbols.peek_lit_val(&p.segments[0].name)
+            }
+            // v0.2.56 S-17：cast 到整型域 = 显式截断投射（环绕，与 interp
+            // castValue / rust as 同构）；cast 到 float/String/bool/char → None。
+            ExprKind::Cast { expr, ty, .. } => {
+                let dom = domain_of_ty(ty)?;
+                let v = self.expr_int_val(expr)?;
+                wrap_to_domain(v, &dom)
             }
             ExprKind::Binary { op, lhs, rhs, .. } => {
                 use BinaryOp::*;

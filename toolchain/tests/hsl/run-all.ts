@@ -215,7 +215,10 @@ let caseCounter = 0;
 function checkSrc(src: string): string {
   const p = path.join(TMP, `case-${caseCounter++}.hsl`);
   fs.writeFileSync(p, src, 'utf-8');
-  return run(['check', p]).stdout;
+  // v0.2.56：合并 stderr —— 词法层错误（E-0，如 L-12 unicode 越域）输出到
+  // stderr，此前只取 stdout 会漏（失败用例看不到错误详情）
+  const r = run(['check', p]);
+  return r.stdout + r.stderr;
 }
 
 test('检查规则', 'S-6 穷尽性：AgentLoop 内 _ 通配兜底报错', () => {
@@ -3480,6 +3483,41 @@ project {
   const javaFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.java')).map((f) => f);
   assert(javaFiles.length > 0, `应生成 .java 文件：${fs.readdirSync(dir).join(', ')}`);
   execFileSync(JAVAC, ['-d', dir, ...javaFiles], { cwd: dir, timeout: 120_000, stdio: 'pipe' });
+});
+
+// ---- v0.2.56 L-12 / L-13 / L-14 / S-17（hsl-fuzz 第六轮锁定） ----
+test('检查规则', 'L-12 unicode 转义码点越域：\\u{110000} 报错（pest 域收紧镜像）', () => {
+  const out = checkSrc(`fn main() { let s = "\\u{110000}"; println!("{}", s); }`);
+  assert(out.includes('error'), `\`\\u{110000}\` 应被拒绝（0x10FFFF 上限）：${out.slice(0, 200)}`);
+});
+test('检查规则', 'L-12 unicode 转义下划线：\\u{_4_1_} 报错（双端口径统一为严格式）', () => {
+  const out = checkSrc(`fn main() { let s = "\\u{_4_1_}"; println!("{}", s); }`);
+  assert(out.includes('error'), `\`\\u{_4_1_}\` 应被拒绝（不含下划线）：${out.slice(0, 200)}`);
+});
+test('检查规则', 'L-12 unicode 合法边界：\\u{41}bc / \\u{10FFFF} / \\u{0} 零误报', () => {
+  const out = checkSrc(`fn main() { let s = "\\u{41}bc\\u{10FFFF}\\u{0}"; println!("{}", s); }`);
+  assert(out.includes('0 error'), `合法 unicode 族不应报错：${out.slice(0, 200)}`);
+});
+test('检查规则', 'L-13 float 后缀字面量：1f32 值 = 1.0（此前 dhv 静默归 0 —— 值级对拍实锤）', () => {
+  const out = checkSrc(`fn main() { let a: f32 = 1f32; let b = 2.5f64; println!("{} {}", a, b); }`);
+  assert(out.includes('0 error'), `1f32/2.5f64 合法族不应报错：${out.slice(0, 200)}`);
+});
+test('检查规则', 'L-14 1f32 kind = float（此前 ts 端 int token + f32 后缀漂移）', () => {
+  // 词法层直测：kind 修正后 1f32 的 litTypeOf 应为 float（赋 f64 注解不触发 S1）
+  const out = checkSrc(`fn main() { let x: f64 = 1f32; println!("{}", x); }`);
+  assert(out.includes('0 error'), `1f32 应为 float kind（int 与 f64 混算会触发 S1）：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-17 cast 域折叠漏报：300 as u8 + 300 报错（折叠后 344 越域）', () => {
+  const out = checkSrc(`fn main() { let a: u8 = 300 as u8 + 300; println!("{}", a); }`);
+  assert(out.includes('S-15'), `cast 折叠后越域应触发 S-15（S-17 补漏）：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-17 cast 域折叠零误报：300 as u8 + 200 通过（折叠后 244 域内）', () => {
+  const out = checkSrc(`fn main() { let a: u8 = 300 as u8 + 200; println!("{}", a); }`);
+  assert(out.includes('0 error'), `折叠后域内不应报错（误报门槛）：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-17 有符号 cast 环绕：200 as i8 - 300 报错（-356 越 i8 域）', () => {
+  const out = checkSrc(`fn main() { let b: i8 = 200 as i8 - 300; println!("{}", b); }`);
+  assert(out.includes('S-15'), `有符号 cast 环绕折叠后越域应触发 S-15：${out.slice(0, 200)}`);
 });
 
 // ---------------------------------------------------------------------------

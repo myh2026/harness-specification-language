@@ -1672,7 +1672,9 @@ export class Parser {
       return { t: 'delim', open, close, items };
     }
     this.next();
-    return { t: 'tok', tok: { kind: t.kind, text: t.text, value: t.value, line: t.line, col: t.col } };
+    // v0.2.56：保留 suffix（值级对拍宏 token 需要与 dhv Token::Literal 的
+    // Int{suffix} 对齐 —— 此前 TokenTree 丢弃后缀）
+    return { t: 'tok', tok: { kind: t.kind, text: t.text, value: t.value, suffix: (t as { suffix?: string }).suffix, line: t.line, col: t.col } };
   }
 }
 

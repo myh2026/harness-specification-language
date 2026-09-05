@@ -1,0 +1,13 @@
+// 值域语料 9（第六轮）：浮点族 —— L-13 锁（1f32 曾静默归 0/NaN）
+// 位模式对拍：IEEE754 双精度 16 hex，NaN payload / 符号位全保真
+fn main() {
+  let a = 1f32;
+  let b = 2.5f64;
+  let c = 1e10;
+  let d = 2.5e-3;
+  let e = 1.5e3;
+  let f = 0.1;
+  let g = 3.141592653589793;
+  let h = 1_000.000_5;
+  println!("{} {} {} {} {} {} {} {}", a, b, c, d, e, f, g, h);
+}

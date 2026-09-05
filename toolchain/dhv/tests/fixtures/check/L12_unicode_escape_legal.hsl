@@ -1,0 +1,12 @@
+// v0.2.56 L-12 合法族：unicode 转义边界 + 转义族零误报
+fn main() {
+  let a = "\u{41}bc";
+  let b = "\u{10FFFF}";
+  let c = "\u{0FFFFF}";
+  let d = "\u{0}";
+  let e = "tab\tnew\nhex\x41";
+  let f = 1f32;
+  let g = 2.5f64;
+  let h = 1.5e3;
+  println!("{} {} {} {} {} {} {} {}", a, b, c, d, e, f, g, h);
+}
