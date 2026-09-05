@@ -1,0 +1,9 @@
+// 期望 G8：同 (from, to, 守卫) 的边重复声明 —— 拓扑统计翻倍污染。
+enum Ev { Tick }
+graph G {
+    node a: i64 = 1;
+    node b: i64 = 2;
+    edge a -> b on Ev::Tick;
+    edge a -> b on Ev::Tick;
+    loop { break; }
+}

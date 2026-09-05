@@ -1,0 +1,7 @@
+// 期望 S13：整数字面量 300 超出 i8 域（跨后端漂移拦截）。
+// 锁定：hsl-fuzz 第二轮 —— dhv/dhv-ts 双端 check 放行 + rustc 真机拒绝的
+// 语义漂移（v0.2.53 静态拦截）。
+export fn f() -> i64 {
+    let x: i8 = 300;
+    x as i64
+}

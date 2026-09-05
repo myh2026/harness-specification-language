@@ -291,6 +291,10 @@ function spanOf(item: A.Item): A.Span {
 }
 
 function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], file: string): void {
+  if (item.kind === 'const') {
+    // v0.2.53 S-13：const 的整型域校验（与 let 同规则；const 必有值）
+    if (item.ty) checkIntLiteralRange(item.ty, item.value, diags, file);
+  }
   if (item.kind === 'fn' && item.fn.body) {
     // v0.2.51：函数参数进入作用域（E-2 调用检查需要；param 标记豁免 S-7）
     const params = item.fn.params.flatMap((p) => patternNames(p.pat));
@@ -391,6 +395,29 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   for (const n of nodeNames) {
     if (!touched.has(n)) diags.push(warn('G-4', `节点 "${n}" 没有任何 edge（孤岛节点；若为插件注入位请加注释说明）`, g.span, file));
   }
+  // G-8（v0.2.53）：重复边声明 —— 同 (from, to, 守卫指纹) 二次声明报错。
+  // 实证：同一条 edge 复制两遍静默通过，拓扑统计（边数/覆盖率分母/变异基线）
+  // 直接翻倍污染（Gauntlet 场景实测）。守卫指纹：pattern 递归序列化；expr 守卫
+  // 用源码位置（同位置 + 同端点 ≡ 复制粘贴）—— 保守口径，不误报合法的
+  // 「同向多守卫」并行边（Vigil 惯用法）。
+  const edgeKeys = new Map<string, A.Span>();
+  for (const gs of g.body) {
+    if (gs.t !== 'edge') continue;
+    for (let i = 0; i + 1 < gs.decl.endpoints.length; i++) {
+      const guardFp = gs.decl.guardPattern
+        ? patternFingerprint(gs.decl.guardPattern)
+        : gs.decl.guardExpr
+          ? `expr@${gs.decl.guardExpr.span[0]}:${gs.decl.guardExpr.span[1]}`
+          : 'unguarded';
+      const key = `${gs.decl.endpoints[i]}->${gs.decl.endpoints[i + 1]}|${guardFp}`;
+      const prev = edgeKeys.get(key);
+      if (prev) {
+        diags.push(err('G-8', `重复边声明：${gs.decl.endpoints[i]} -> ${gs.decl.endpoints[i + 1]}${gs.decl.guardPattern ? ' on ' + patternDisplay(gs.decl.guardPattern) : ''}（拓扑统计将翻倍污染；同向多守卫请用不同 Guard 变体）`, gs.decl.span, file));
+      } else {
+        edgeKeys.set(key, gs.decl.span);
+      }
+    }
+  }
   // graph 体内的 match/赋值等检查（含 AgentLoop 内 _ 检查）
   // v0.2.51：graph 参数进入作用域（param 标记豁免 S-7，E-2 可见）
   const gscope: Scope = { vars: new Map(), used: new Set() };
@@ -468,6 +495,13 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
       
       for (const n of patternNames(st.pat)) declareVar(scope, n, st.mut, diags, st.span, file);
       if (st.init) checkExpr(st.init, scope, enums, diags, file, inAgentLoop);
+      // v0.2.53 S-13：整型注解的字面量域校验。
+      // rustc 真机对拍实证：`let x: i8 = 300` 在 check 双端放行、interp 打印 300、
+      // emit rust 后 rustc 报 literal out of range —— 跨后端语义漂移（python/js
+      // 放行）。静态拦截：注解为 12 种整型之一且 init 为（可带负号的）整数字面量
+      // 时，值必须落在注解类型域内。非字面量/运行期动态值不判（BigInt 任意精度
+      // 为既定设计，见 guide 已知限制 #48）；显式转换请用 as（S-1 零隐式转换）。
+      if (st.ty && st.init) checkIntLiteralRange(st.ty, st.init, diags, file);
       if (st.elseBlock) {
         const elseScope: Scope = { vars: new Map(), used: new Set(), parent: scope };
         checkStmts(st.elseBlock, elseScope, enums, diags, file, inAgentLoop);
@@ -489,6 +523,58 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
 
 type Scope2 = Scope;
 void ({} as Scope2);
+
+// ---- v0.2.53 S-13：整型域字面量校验 ----
+const INT_LIMITS: Record<string, [bigint, bigint]> = {
+  i8: [-128n, 127n],
+  i16: [-32768n, 32767n],
+  i32: [-2147483648n, 2147483647n],
+  i64: [-9223372036854775808n, 9223372036854775807n],
+  i128: [-(2n ** 127n), 2n ** 127n - 1n],
+  isize: [-9223372036854775808n, 9223372036854775807n],
+  u8: [0n, 255n],
+  u16: [0n, 65535n],
+  u32: [0n, 4294967295n],
+  u64: [0n, 18446744073709551615n],
+  u128: [0n, 2n ** 128n - 1n],
+  usize: [0n, 18446744073709551615n],
+};
+
+function checkIntLiteralRange(ty: A.HType, init: A.Expr, diags: Diag[], file: string): void {
+  if (ty.kind !== 'path' || ty.segs.length !== 1) return;
+  const limits = INT_LIMITS[ty.segs[0]!];
+  if (!limits) return;
+  // 展开一元负号（u* 域外的负值同样在此拦截）
+  let expr: A.Expr = init;
+  let neg = false;
+  if (expr.kind === 'unary' && expr.op === '-') { neg = true; expr = expr.operand; }
+  if (expr.kind !== 'lit' || expr.lit.t !== 'int') return;
+  let v = BigInt(expr.lit.v);
+  if (neg) v = -v;
+  if (v < limits[0] || v > limits[1]) {
+    diags.push(err('S-13', `整数字面量 ${v} 超出 ${ty.segs[0]} 域 [${limits[0]}, ${limits[1]}]（rustc 后端将拒绝编译，python/js 后端静默放行 —— 跨后端漂移；显式截断请用 as）`, init.span, file));
+  }
+}
+
+// ---- v0.2.53 G-8：守卫指纹（递归序列化，足够判等） ----
+function patternFingerprint(p: A.Pattern): string {
+  switch (p.kind) {
+    case 'wildcard': return '_';
+    case 'literal': return `lit:${typeof p.value === 'bigint' ? p.value.toString() : JSON.stringify(p.value)}`;
+    case 'binding': return `bind:${p.name}${p.sub ? ':' + patternFingerprint(p.sub) : ''}`;
+    case 'path': return `path:${p.segs.join('::')}${p.sub ? ':' + patternFingerprint(p.sub) : ''}`;
+    case 'tuple': return `tup:[${p.items.map(patternFingerprint).join(',')}]${p.rest ? '+rest' : ''}`;
+    case 'struct': return `st:${p.segs.join('::')}{${p.fields.map((f) => `${f.name}=${patternFingerprint(f.pat)}`).join(',')}}${p.rest ? '+rest' : ''}`;
+    case 'or': return `or(${p.alts.map(patternFingerprint).join('|')})`;
+    case 'range': return `rng:${patternFingerprint(p.lo)}..${p.inclusive ? '=' : ''}${patternFingerprint(p.hi)}`;
+    default: return 'other';
+  }
+}
+
+function patternDisplay(p: A.Pattern): string {
+  if (p.kind === 'path') return p.segs.join('::');
+  return p.kind;
+}
 
 function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
   switch (e.kind) {

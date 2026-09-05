@@ -1387,6 +1387,14 @@ export class Body {
     if (name === 'format') return this.formatString(macroFmtString(groups), groups.slice(1).map((g) => this.tokensToExpr(g)));
     if (name === 'println' || name === 'print' || name === 'eprintln') {
       const text = groups.length === 0 ? this.ctx.strLit('') : this.formatString(macroFmtString(groups), groups.slice(1).map((g) => this.tokensToExpr(g)));
+      // v0.2.53 修复（rustc 真机实测）：rust 的 println!/print!/eprintln! 宏实参
+      // 必须是「格式串 + 位置参数」，不能是 format!(…) 调用 —— 此前生成
+      // println!(format!("…", a))，rustc 报 "format argument must be a string literal"
+      // （所有 println 样本必炸，但被 emit 启发式校验绿灯掩盖）。
+      // 剥掉 format!( … ) 外壳取内芯；其余语言 print/console/fmt 接受任意表达式，不受影响。
+      if (this.lang.id === 'rust' && text.startsWith('format!(') && text.endsWith(')')) {
+        return `${name}!(${text.slice(8, -1)})`;
+      }
       return this.printCall(text, name !== 'print');
     }
     if (name === 'vec') {

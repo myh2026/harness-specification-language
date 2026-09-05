@@ -263,6 +263,35 @@ test('检查规则', 'G-1 graph 缺 AgentLoop', () => {
   const out = checkSrc(`graph G { let x: i64 = 1; }\nfn main() {}`);
   assert(out.includes('G-1'), `无 loop graph 应触发 G-1：${out.slice(0, 200)}`);
 });
+// ---- v0.2.53 S-13 / G-8（hsl-fuzz 第二轮锁定） ----
+test('检查规则', 'S-13 整型域：i8=300 越界报错（跨后端漂移）', () => {
+  const out = checkSrc(`fn main() { let x: i8 = 300; println!("{}", x); }`);
+  assert(out.includes('S-13'), `i8=300 应触发 S-13：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-13 整型域：u8=-1 负值报错', () => {
+  const out = checkSrc(`fn main() { let x: u8 = -1; println!("{}", x); }`);
+  assert(out.includes('S-13'), `u8=-1 应触发 S-13：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-13 整型域：const 形态同判', () => {
+  const out = checkSrc(`const BAD: i16 = 65535;\nfn main() { println!("{}", BAD); }`);
+  assert(out.includes('S-13'), `const i16=65535 应触发 S-13：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-13 整型域：边界值合法（-128/127/i64MAX/0xFF@u8）', () => {
+  const out = checkSrc(`fn main() { let _a: i8 = -128; let _b: i8 = 127; let _c: i64 = 9223372036854775807; let _d: u8 = 255; let _e: u8 = 0xFF; let _f: u64 = 18446744073709551615; println!("ok"); }`);
+  assert(out.includes('0 error'), `边界值不应误报：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-13 整型域：无注解/非字面量不判（BigInt 任意精度既定设计）', () => {
+  const out = checkSrc(`fn main() { let big: i64 = 9223372036854775807; let over = big + 1; println!("{}", over); }`);
+  assert(out.includes('0 error'), `非字面量运算不应触发 S-13：${out.slice(0, 200)}`);
+});
+test('检查规则', 'G-8 重复边：同 (from,to,guard) 二次声明报错', () => {
+  const out = checkSrc(`enum Ev { Tick }\ngraph G { node a: i64 = 1; node b: i64 = 2; edge a -> b on Ev::Tick; edge a -> b on Ev::Tick; loop { break; } }`);
+  assert(out.includes('G-8'), `重复边应触发 G-8：${out.slice(0, 250)}`);
+});
+test('检查规则', 'G-8 合法：同向不同守卫（Vigil 惯用法）不误报', () => {
+  const out = checkSrc(`enum Ev { Tick, Tock }\ngraph G { node a: i64 = 1; node b: i64 = 2; edge a -> b on Ev::Tick; edge a -> b on Ev::Tock; loop { break; } }`);
+  assert(out.includes('0 error'), `同向多守卫不应误报：${out.slice(0, 250)}`);
+});
 
 // ---------------------------------------------------------------------------
 // 3. 38 后端 emit + sync 闭环

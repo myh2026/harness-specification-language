@@ -465,6 +465,8 @@ impl TypeChecker {
             Item::Const(c) => {
                 self.walk_type(&c.ty);
                 self.walk_expr(&c.value);
+                // v0.2.53 S-13：const 整型域字面量校验（与 let 同规则；双编译器一致）
+                self.check_int_literal_range(&c.ty, &c.value);
             }
             Item::TypeAlias(a) => {
                 self.walk_type(&a.ty);
@@ -559,6 +561,11 @@ impl TypeChecker {
         // Pass B: 边与语句
         let mut edge_nodes: HashSet<String> = HashSet::new();
         let mut edge_list: Vec<(String, String, bool)> = Vec::new(); // (from, to, guarded) — G-3 用
+        // G-8（v0.2.53）：重复边声明判重 —— 同 (from, to, 守卫指纹) 二次声明报错。
+        // 实证：同一条 edge 复制两遍静默通过，拓扑统计（边数/覆盖率分母/变异基线）
+        // 直接翻倍污染。守卫指纹：pattern 用 Debug 序列化；expr 守卫用源码位置
+        // （同位置 + 同端点 ≡ 复制粘贴）—— 保守口径，不误报合法的同向多守卫并行边。
+        let mut edge_seen: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
         for stmt in &graph.body {
             match stmt {
                 GraphStmt::Edge(edge) => {
@@ -566,6 +573,24 @@ impl TypeChecker {
                     for i in 0..edge.endpoints.len().saturating_sub(1) {
                         let from = edge.endpoints[i].last().name.clone();
                         let to = edge.endpoints[i + 1].last().name.clone();
+                        let guard_fp = match &edge.on {
+                            Some(EdgeGuard::Pattern(p)) => format!("pat:{}", pattern_fingerprint(&p.kind)),
+                            Some(EdgeGuard::Expr(e)) => format!("expr@{}:{}", e.span.start, e.span.end),
+                            None => "unguarded".to_string(),
+                        };
+                        let key = format!("{from}->{to}|{guard_fp}");
+                        if edge_seen.contains_key(&key) {
+                            self.diags.push(
+                                Diagnostic::error(
+                                    DiagCode::Topology("G8"),
+                                    format!("重复边声明：{from} -> {to}（拓扑统计将翻倍污染；同向多守卫请用不同 Guard 变体）"),
+                                    edge.span,
+                                )
+                                .note("同 (from, to, 守卫) 的边重复声明会使拓扑统计/覆盖率分母翻倍"),
+                            );
+                        } else {
+                            edge_seen.insert(key, edge.span);
+                        }
                         edge_list.push((from, to, guarded));
                     }
                     for ep in &edge.endpoints {
@@ -941,12 +966,59 @@ impl TypeChecker {
     // 语句 / 表达式遍历（S 系列检查主体）
     // ------------------------------------------------------------------
 
+    /// v0.2.53 S-13：整型域字面量校验。
+    /// rustc 真机对拍实证：`let x: i8 = 300` 在 check 双端放行、emit rust 后
+    /// rustc 报 literal out of range —— 跨后端语义漂移（python/js 静默放行）。
+    /// 静态拦截：注解为 12 种整型之一且 init 为（可带负号的）整数字面量时，
+    /// 值必须落在注解类型域内。非字面量不判（BigInt 任意精度为既定设计）。
+    fn check_int_literal_range(&mut self, ty: &Type, init: &Expr) {
+        let TypeKind::Path(pt) = &ty.kind else { return };
+        if pt.path.leading_colon || pt.path.segments.len() != 1 || !pt.generic_args.is_empty() {
+            return;
+        }
+        let name = &pt.path.segments[0].name;
+        let (lo, hi): (i128, i128) = match name.as_str() {
+            "i8" => (-128, 127),
+            "i16" => (-32768, 32767),
+            "i32" => (-2147483648, 2147483647),
+            "i64" | "isize" => (i64::MIN as i128, i64::MAX as i128),
+            "i128" => (i128::MIN, i128::MAX),
+            "u8" => (0, 255),
+            "u16" => (0, 65535),
+            "u32" => (0, 4294967295),
+            "u64" | "usize" => (0, u64::MAX as i128),
+            "u128" => (0, i128::MAX), // i128 上界即为 u128 域的保守子集判定（超界必非法）
+            _ => return,
+        };
+        // 展开一元负号（u* 域外负值同样在此拦截）
+        let (neg, inner): (bool, &Expr) = match &init.kind {
+            ExprKind::Unary { op: UnaryOp::Neg, operand } => (true, &**operand),
+            _ => (false, init),
+        };
+        let ExprKind::Literal(lit) = &inner.kind else { return };
+        let LiteralKind::Int { value, .. } = &lit.kind else { return };
+        let v: i128 = if neg { -(*value as i128) } else { *value as i128 };
+        if v < lo || v > hi {
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::Strictness("S13"),
+                    format!("整数字面量 {v} 超出 {name} 域 [{lo}, {hi}]（rustc 后端将拒绝编译，python/js 后端静默放行 —— 跨后端漂移；显式截断请用 as）"),
+                    init.span,
+                ),
+            );
+        }
+    }
+
     fn check_let(&mut self, l: &LetStmt) {
         if let Some(ty) = &l.ty {
             self.walk_type(ty);
         }
         if let Some(init) = &l.init {
             self.walk_expr(init);
+        }
+        // v0.2.53 S-13：整型域字面量校验（跨后端漂移拦截，与 dhv-ts 同规则）
+        if let (Some(ty), Some(init)) = (&l.ty, &l.init) {
+            self.check_int_literal_range(ty, init);
         }
         if let Some(els) = &l.else_block {
             self.walk_block_inner(els);
@@ -1569,4 +1641,61 @@ fn item_kind(item: &Item) -> Option<&'static str> {
 /// 规则 kind 归一：block / static 同义（StaticResource）
 fn normalize_kind(kind: &str) -> String {
     if kind == "static" { "block".to_string() } else { kind.to_string() }
+}
+
+// ============================================================================
+// v0.2.53 G-8 辅助：守卫模式语义指纹（只取语义字段，剥除 span ——
+// 同语义不同位置的 pattern 必须得到相同指纹，Debug 序列化含 span 不可用）
+// ============================================================================
+fn pattern_fingerprint(p: &PatternKind) -> String {
+    match p {
+        PatternKind::Literal(l) => match &l.kind {
+            LiteralKind::Int { value, .. } => format!("lit:{value}"),
+            LiteralKind::Float { value, .. } => format!("litf:{value}"),
+            LiteralKind::Str { value, .. } => format!("lits:{value}"),
+            LiteralKind::Char(c) => format!("litc:{c}"),
+            LiteralKind::Bool(b) => format!("litb:{b}"),
+        },
+        PatternKind::Ident { name, sub, .. } => {
+            format!("bind:{}", name.name.clone()
+                + &sub.as_ref().map(|s| format!(":{}", pattern_fingerprint(&s.kind))).unwrap_or_default())
+        }
+        PatternKind::Wildcard => "_".to_string(),
+        PatternKind::Rest => "..".to_string(),
+        PatternKind::Range { lo, hi, inclusive } => format!(
+            "rng:{}..{}{}",
+            pattern_fingerprint(&lo.kind),
+            if *inclusive { "=" } else { "" },
+            pattern_fingerprint(&hi.kind)
+        ),
+        PatternKind::Struct { path, fields, rest } => format!(
+            "st:{}{{{}}}{}",
+            path.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("::"),
+            fields.iter().map(|f| format!(
+                "{}={}",
+                f.name.name,
+                f.pattern.as_ref().map(|p| pattern_fingerprint(&p.kind)).unwrap_or_else(|| "shorthand".into())
+            )).collect::<Vec<_>>().join(","),
+            if *rest { "+rest" } else { "" }
+        ),
+        PatternKind::TupleStruct { path, elems, rest_at } => format!(
+            "tup:{}[{}]{}",
+            path.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("::"),
+            elems.iter().map(|e| pattern_fingerprint(&e.kind)).collect::<Vec<_>>().join(","),
+            rest_at.map(|i| format!("+r{i}")).unwrap_or_default()
+        ),
+        PatternKind::Tuple { elems, rest_at } => format!(
+            "tp:[{}]{}",
+            elems.iter().map(|e| pattern_fingerprint(&e.kind)).collect::<Vec<_>>().join(","),
+            rest_at.map(|i| format!("+r{i}")).unwrap_or_default()
+        ),
+        PatternKind::Path(path) => format!(
+            "path:{}",
+            path.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("::")
+        ),
+        PatternKind::Or(alts) => format!(
+            "or({})",
+            alts.iter().map(|a| pattern_fingerprint(&a.kind)).collect::<Vec<_>>().join("|")
+        ),
+    }
 }

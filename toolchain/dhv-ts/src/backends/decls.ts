@@ -1408,10 +1408,18 @@ export function fnDecl(p: P, fn: A.FnDef, pi: ProjectedItem, isMethod: boolean, 
       break;
     }
     case 'rust': {
-      out.push(`${head}${ret} {`);
+      // v0.2.53 修复（rustc 真机实测）：Rust 的 fn main 签名受 Termination trait 约束
+      // （i64 不实现 —— 合法集仅 ()/bool/i32/u8-u32/ExitCode/Result 等）。
+      // HSL 入口约定 fn main() -> i64（R-1，无参）投 rust 时改名 hsl_main +
+      // 生成进程级 wrapper（exit code = 返回值截断 i32，语义与 interp run 对齐）。
+      // 带参数的 main 不属入口形态（R-1 之外），保持原样不触发本规则。
+      const isEntry = !isMethod && fn.name === 'main' && !!fn.ret && fn.params.length === 0;
+      const head2 = isEntry ? head.replace(/fn main\(/, 'fn hsl_main(') : head;
+      out.push(`${head2}${ret} {`);
       out.push(...p.fence(pi.item, fenceName, body, p.ind));
       if (body === null) out.push(p.unimpl(p.ind, `${fenceName} 未翻译`));
       out.push('}');
+      if (isEntry) out.push(`fn main() { std::process::exit(hsl_main() as i32); }`);
       break;
     }
     case 'go': {

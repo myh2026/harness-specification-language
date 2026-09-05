@@ -1,0 +1,3 @@
+// 期望 S13：const 声明的整型域校验与 let 同规则。
+const BAD: i16 = 65535;
+export fn f() -> i64 { BAD as i64 }
