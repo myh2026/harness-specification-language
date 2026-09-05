@@ -224,6 +224,17 @@ export class Interp {
       }
     }
     // 2. import 绑定（blockres 以标记对象按引用共享）
+    //    L-1 修复（v0.2.53）：import 别名同步注册进全局类型注册表 ——
+    //    此前 evalStructExpr / evalStructExpr 的枚举构造按「名字」查 this.enums，
+    //    别名绑定只进了 env，导致 `import { T as A }` 后 `A::Variant {}` 构造失败、
+    //    而 match 模式位却因 `this.enums.has(a)` 守卫跳过而宽松通过（解析不对称）。
+    const registerTypeAlias = (alias: string, bind: unknown): void => {
+      if (bind && typeof bind === 'object' && '__type' in (bind as object)) {
+        const orig = (bind as { __type: string }).__type;
+        if (this.enums.has(orig)) this.enums.set(alias, this.enums.get(orig)!);
+        if (this.structs.has(orig)) this.structs.set(alias, this.structs.get(orig)!);
+      }
+    };
     for (const [, info] of this.modules) {
       for (const item of info.ast.items) {
         if (item.kind !== 'import') continue;
@@ -238,6 +249,7 @@ export class Interp {
           }
           const bind = srcInfo.env.lookup(name);
           info.env.declare(item.spec.alias ?? name, bind ? bind.value : undefined, false);
+          if (item.spec.alias) registerTypeAlias(item.spec.alias, bind?.value);
         } else {
           for (const it of item.spec.items) {
             if (!srcInfo.exports.has(it.name)) {
@@ -245,6 +257,7 @@ export class Interp {
             }
             const bind = srcInfo.env.lookup(it.name);
             info.env.declare(it.alias ?? it.name, bind ? bind.value : undefined, false);
+            if (it.alias) registerTypeAlias(it.alias, bind?.value);
           }
         }
       }
@@ -959,7 +972,8 @@ export class Interp {
         const variant = enumItem.variants.find((v) => v.name === b);
         if (variant) {
           if (variant.fields) throw new HRuntimeError(`变体 ${a}::${b} 携带数据，需用构造表达式`);
-          return enumOf(a, b);
+          // L-1：族名取注册表原名（a 可能是 import 别名）
+          return enumOf(enumItem.name, b);
         }
       }
       // 两段常量路径：如 Kind::Fatal（const 命名空间）—— 查 env
@@ -1002,7 +1016,8 @@ export class Interp {
         if (enumItem && enumItem.kind === 'enum') {
           const variant = enumItem.variants.find((v) => v.name === b);
           if (variant) {
-            return enumOf(a, b, { tuple: args });
+            // L-1：族名取注册表原名（a 可能是 import 别名）
+            return enumOf(enumItem.name, b, { tuple: args });
           }
         }
         // graph 调用约定：GraphName::run(args)（BNF v1.3）
@@ -1168,7 +1183,8 @@ export class Interp {
             if (!(fd.name in named)) throw new HRuntimeError(`变体 ${a}::${b} 缺少字段 "${fd.name}"`);
           }
         }
-        return enumOf(a, b, Object.keys(named).length > 0 ? { named } : undefined);
+        // L-1：族名取注册表 item 原名（a 可能是 import 别名，值必须归一到原名族）
+        return enumOf(enumItem.name, b, Object.keys(named).length > 0 ? { named } : undefined);
       }
     }
     // 结构体
@@ -1319,7 +1335,9 @@ export class Interp {
             if (!isEnum(val) || val.__enum !== a || val.variant !== b) return false;
           } else {
             if (!isEnum(val) || val.variant !== b) return false;
-            if (this.enums.has(a) && val.__enum !== a) return false;
+            // L-1：经注册表解析枚举族名（别名条目映射到原名 item）
+            const ei = this.enums.get(a);
+            if (ei && ei.kind === 'enum' && val.__enum !== ei.name) return false;
           }
           if (pat.sub?.kind === 'tuple') {
             const items = pat.sub.items;
@@ -1357,7 +1375,11 @@ export class Interp {
           if (val.variant !== b) return false;
           if (a === 'Option' || a === 'Result') {
             if (val.__enum !== a) return false;
-          } else if (this.enums.has(a) && val.__enum !== a) return false;
+          } else {
+            // L-1：经注册表解析枚举族名（别名条目映射到原名 item）
+            const ei = this.enums.get(a);
+            if (ei && ei.kind === 'enum' && val.__enum !== ei.name) return false;
+          }
           const named = val.payload?.named ?? {};
           for (const f of pat.fields) {
             const v = named[f.name];

@@ -2764,6 +2764,85 @@ test('CLI', 'targets 命令输出 38 后端', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5.5 v0.2.53 回归：import 别名（L-1）
+// ---------------------------------------------------------------------------
+// 实录：`import { Triage as TV } from ...` 后——
+//   构造 `TV::Variant { .. }` 报「无法解析的结构体字面量」（evalStructExpr 按
+//   原名查 this.enums）；match `TV::Variant { .. }` 却因 `enums.has(a)` 守卫
+//   跳过而宽松通过 —— 构造位与模式位解析不对称。
+// 修复：link 期把别名注册进全局类型注册表（enum + struct），模式位族名经
+//   注册表解析（别名条目映射回原名 item）。
+test('回归-L1', 'import 别名：枚举构造 + match 模式 + 结构体构造三通道一致', () => {
+  const dir = path.join(TMP, 'alias-l1');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'vocab.hsl'),
+    `export enum Shape { Circle { radius: i64 }, Square { side: i64 } }
+export struct Box { label: String }
+`,
+  );
+  fs.writeFileSync(
+    path.join(dir, 'main.hsl'),
+    `import { Shape as S, Box as B } from "./vocab.hsl";
+
+fn describe(s: S) -> String {
+    match s {
+        S::Circle { radius } => format!("circle r={}", radius),
+        S::Square { side } => format!("square s={}", side),
+    }
+}
+
+export fn main() -> i64 {
+    let c = S::Circle { radius: 3 };
+    let q = S::Square { side: 4 };
+    let b = B { label: String::from("ok") };
+    println!("{}", describe(c));
+    println!("{}", describe(q));
+    println!("{}", b.label);
+    0
+}
+`,
+  );
+  const r = run(['run', path.join(dir, 'main.hsl'), '--quiet']);
+  assertEq(r.code, 0, `别名构造应通过（exit=${r.code}）：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('circle r=3'), `别名 match 应命中：${r.stdout}`);
+  assert(r.stdout.includes('square s=4'), `别名 match 第二分支：${r.stdout}`);
+  assert(r.stdout.includes('ok'), `结构体别名构造应通过：${r.stdout}`);
+});
+
+test('回归-L1', 'import 别名：族名校验仍然严格（别名不产生类型混淆）', () => {
+  const dir = path.join(TMP, 'alias-l1-strict');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'vocab.hsl'),
+    `export enum Shape { Dot, Circle { radius: i64 } }
+export enum Color { Dot }
+`,
+  );
+  fs.writeFileSync(
+    path.join(dir, 'main.hsl'),
+    `import { Shape as S, Color as C } from "./vocab.hsl";
+
+export fn main() -> i64 {
+    let d = S::Dot;
+    // 错族：Shape 值 vs Color 别名模式（两族同名单元变体 Dot）
+    // 修复前：族检查对未注册首段静默跳过 → 变体名撞车误匹配；
+    // 修复后：族名经注册表解析 → 不匹配，落到正确分支
+    match d {
+        C::Dot => { println!("WRONG-FAMILY-MATCHED"); },
+        S::Dot => { println!("right-family"); },
+        S::Circle { radius: _ } => { println!("never"); },
+    }
+    0
+}
+`,
+  );
+  const r = run(['run', path.join(dir, 'main.hsl'), '--quiet']);
+  assertEq(r.code, 0, `运行应通过（exit=${r.code}）：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('right-family') && !r.stdout.includes('WRONG-FAMILY'), `族名校验应严格：${r.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
 // 6. 压力测试
 // ---------------------------------------------------------------------------
 let stressCounter = 0;

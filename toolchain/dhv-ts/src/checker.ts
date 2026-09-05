@@ -47,12 +47,41 @@ let visibleCallables: Set<string> = new Set();
 // 单段调用白名单：预导入构造器（两段路径形式不在本检查范围）
 const CALL_WHITELIST = new Set(['Ok', 'Err', 'Some', 'None']);
 
+// v0.2.53 L-2：import 别名 → 枚举原名映射（S-6 穷尽性对别名臂生效）。
+// 修复盲区：此前 `import { Shape as S }` 后 match `S::Circle` 臂因首段 'S'
+// 不在 enums 注册表而被穷尽性检查忽略 —— 别名臂完全绕过 S-6。
+let enumAlias: Map<string, string> = new Map();
+
 export function checkProgram(program: LoadedProgram): Diag[] {
   const diags: Diag[] = [];
   const enums = new Map<string, string[]>(); // name -> variants
   for (const [, ast] of program.files) {
     for (const item of ast.items) {
       if (item.kind === 'enum') enums.set(item.name, item.variants.map((v) => v.name));
+    }
+  }
+
+  // L-2：构建别名 → 原名映射（仅枚举；struct 别名不参与穷尽性）
+  enumAlias = new Map<string, string>();
+  for (const [file, ast] of program.files) {
+    for (const item of ast.items) {
+      if (item.kind !== 'import') continue;
+      const entries =
+        item.spec.t === 'single'
+          ? [{ name: item.spec.name, alias: item.spec.alias }]
+          : item.spec.t === 'items'
+            ? item.spec.items.map((it) => ({ name: it.name, alias: it.alias }))
+            : [];
+      const srcPath = path.resolve(path.dirname(file), item.path);
+      const srcAst = program.files.get(srcPath);
+      if (!srcAst) continue; // 标准库虚拟模块 / 不可解析路径（M3/L-0 由别处报）
+      for (const e of entries) {
+        if (!e.alias) continue;
+        const hit = srcAst.items.find(
+          (it) => it.kind === 'enum' && (it as { name?: string }).name === e.name,
+        );
+        if (hit) enumAlias.set(e.alias, e.name);
+      }
     }
   }
 
@@ -669,9 +698,11 @@ function checkExhaustiveness(e: A.Expr & { kind: 'match' }, enums: Map<string, s
     }
     totalEnumArms++;
     for (const info of infos) {
-      if (info.enumName && enums.has(info.enumName)) {
-        if (!enumArms.has(info.enumName)) enumArms.set(info.enumName, new Set());
-        enumArms.get(info.enumName)!.add(info.variant);
+      // L-2：别名首段解析回枚举原名（S-6 对别名臂生效）
+      const resolved = (info.enumName && enumAlias.get(info.enumName)) || info.enumName;
+      if (resolved && enums.has(resolved)) {
+        if (!enumArms.has(resolved)) enumArms.set(resolved, new Set());
+        enumArms.get(resolved)!.add(info.variant);
       }
     }
   }
