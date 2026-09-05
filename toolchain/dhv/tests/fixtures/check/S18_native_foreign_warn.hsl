@@ -1,0 +1,30 @@
+// S-18 预警对等锁定（#L-22）：let 注解提及 struct/enum 族 + native 无 $host.make
+// → 双端都必须产出 S-18 警告（退出码仍为 0 —— 警告级）
+struct Entity {
+    kind: String,
+    value: String,
+    confidence: f64,
+}
+
+enum ExtractEvent {
+    Entities { entities: Vec<Entity> },
+    Malformed { note: String },
+}
+
+fn probe(a: String) -> i64 {
+    let bad: Vec<Entity> = native typescript {
+        return [{ kind: "PER", value: "x", confidence: 1.0 }];
+    };
+    let ev: ExtractEvent = native typescript {
+        return null;
+    };
+    match ev {
+        ExtractEvent::Entities { entities } => return entities.len() + bad.len(),
+        ExtractEvent::Malformed { note } => return note.len() + bad.len() + a.len(),
+    }
+}
+
+fn main() -> i64 {
+    let parts: Vec<String> = native typescript { return ["flat"]; };
+    return parts.len() + probe(String::from("x"));
+}

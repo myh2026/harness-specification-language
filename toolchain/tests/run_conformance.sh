@@ -56,7 +56,7 @@ for ex in examples/nova/nova.hsl examples/dsh/dsh.hsl \
   record "$ex" pass "$(conclusion_dhv "$ex")" "$(conclusion_ts "$ex")"
 done
 
-echo "== 2/5 单文件 fixtures（parse|check → pass；errors → fail）=="
+echo "== 2/6 单文件 fixtures（parse|check → pass；errors → fail）=="
 for f in "$FIX"/parse/*.hsl "$FIX"/check/*.hsl; do
   record "$(basename "$f")" pass "$(conclusion_dhv "$f")" "$(conclusion_ts "$f")"
 done
@@ -64,7 +64,7 @@ for f in "$FIX"/errors/*.hsl; do
   record "$(basename "$f")" fail "$(conclusion_dhv "$f")" "$(conclusion_ts "$f")"
 done
 
-echo "== 3/5 多模块工程（pass_* → pass；fail_* → fail）=="
+echo "== 3/6 多模块工程（pass_* → pass；fail_* → fail）=="
 for d in "$FIX"/modules/*/; do
   [[ -f "${d}root.hsl" ]] || continue
   name="$(basename "$d")"
@@ -78,7 +78,7 @@ done
 
 # ---- v0.2.54 值级一致性（L-11 教训）：逐字面量比对解析值 ----
 # 结论对拍看不见 parse 层静默损坏（dhv 曾把 250u8 解析为 0 且 check 双端全绿）。
-echo "== 4/5 值级一致性（fixtures/values 逐字面量比对）=="
+echo "== 4/6 值级一致性（fixtures/values 逐字面量比对）=="
 if VALUE_OUT=$(bun tests/run_value_conformance.ts 2>&1); then
   VALUE_PASS=$(printf '%s' "$VALUE_OUT" | grep -oE '值级一致性: [0-9]+ 通过' | grep -oE '[0-9]+')
   echo "  ✓ values/ 语料 $VALUE_PASS 个文件值级全一致"
@@ -93,7 +93,7 @@ fi
 # 语法校验绿灯看不见「生成物运行成功但行为为空」（fn main 只定义不调用，
 # 零输出零副作用 exit 0）。本段把第五轮值级对拍延伸到运行行为层：
 # interp run ↔ emit→python3/bun 真实运行，emit:: 标记行逐行全等。
-echo "== 5/5 行为级一致性（fixtures/emit 生成物真实运行比对）=="
+echo "== 5/6 行为级一致性（fixtures/emit 生成物真实运行比对）=="
 if EMIT_OUT=$(bun tests/run_emit_conformance.ts 2>&1); then
   EMIT_PASS=$(printf '%s' "$EMIT_OUT" | grep -oE '行为级对拍: [0-9]+ 通过' | grep -oE '[0-9]+')
   EMIT_RUNS=$(printf '%s' "$EMIT_OUT" | grep -oE '[0-9]+ 个后端真实运行' | grep -oE '^[0-9]+')
@@ -105,6 +105,47 @@ else
   printf '%s\n' "$EMIT_OUT" | sed 's/^/    /'
 fi
 
+# ---- v0.2.56 S-18 预警对等（#L-22 native 值模型断层）----
+# 退出码对拍看不见「警告是否产出」（警告不改变结论）。本段直接比对双端的
+# S-18 预警出现性：warn fixture 双端都必须告警且退出 0；legal fixture
+# （$host.make 通道在体）双端都必须零告警。注意 dhv 渲染 S-S18 / dhv-ts
+# 渲染 S-18，各 grep 各的形态。
+echo "== 6/6 S-18 预警对等（#L-22：native 值模型断层，警告级） =="
+S18_WARN_FIX="$FIX/check/S18_native_foreign_warn.hsl"
+S18_LEGAL_FIX="$FIX/check/S18_host_make_legal.hsl"
+s18_case() { # file expect_warn(yes|no)
+  local f="$1" expect="$2"
+  local out_dhv out_ts rc_dhv rc_ts w_dhv w_ts
+  out_dhv=$("$DHV" check "$f" 2>&1); rc_dhv=$?
+  out_ts=$("${DHV_TS[@]}" check "$f" 2>&1); rc_ts=$?
+  w_dhv=$(printf '%s' "$out_dhv" | grep -c 'WARNING\[S-S18\]' || true)
+  w_ts=$(printf '%s' "$out_ts" | grep -c 'warning\[S-18\]' || true)
+  if [[ $rc_dhv -ne 0 || $rc_ts -ne 0 ]]; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    DISAGREEMENTS+=("S-18 parity: $(basename "$f") 退出码非零 dhv=$rc_dhv ts=$rc_ts")
+    return
+  fi
+  if [[ "$expect" == yes ]]; then
+    if (( w_dhv >= 1 && w_ts >= 1 )); then
+      PASS_COUNT=$((PASS_COUNT + 1))
+      echo "  ✓ S-18 双端告警对等: $(basename "$f")（dhv=${w_dhv} ts=${w_ts} 条）"
+    else
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      DISAGREEMENTS+=("S-18 预警缺失: $f dhv=${w_dhv} ts=${w_ts} 条（期望双端 ≥1）")
+    fi
+  else
+    if (( w_dhv == 0 && w_ts == 0 )); then
+      PASS_COUNT=$((PASS_COUNT + 1))
+      echo "  ✓ S-18 零误报对等: $(basename "$f")（双端 0 条）"
+    else
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      DISAGREEMENTS+=("S-18 误报: $f dhv=${w_dhv} ts=${w_ts} 条（期望双端 0）")
+    fi
+  fi
+}
+s18_case "$S18_WARN_FIX" yes
+s18_case "$S18_LEGAL_FIX" no
+
 echo
 echo "== 结果 =="
 echo "通过: $PASS_COUNT  失败: $FAIL_COUNT"
@@ -112,4 +153,4 @@ if (( FAIL_COUNT > 0 )); then
   printf '%s\n' "${DISAGREEMENTS[@]}"
   exit 1
 fi
-echo "双编译器一致性: 全部一致 ✓（含值级 + 行为级）"
+echo "双编译器一致性: 全部一致 ✓（含值级 + 行为级 + S-18 预警对等）"

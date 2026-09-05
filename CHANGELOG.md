@@ -2,6 +2,14 @@
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。
 
+## [0.2.56] (2026-09-05)
+
+**#L-22 native 值模型断层修复批次**（来源：Curator SUT 泛化实验实录 `entities.clone()` 运行期 panic「foreign 没有方法 clone」；先证据链后修复，158 用例回归全绿）：
+
+- **`$host.make` 结构体/枚举变体构造通道**（interp.linkProgram 幂等注入 hostApi，校验与结构体字面量同规则）：native 块返回的 plain object 不带 `__struct`/`__enum` 运行时标记 → foreign 值（字段直通可用，clone/方法/模式派发全失效）。此前唯一出路是「native 拍平字符串 + HSL 侧 split_once 逐字段重建」定式（Curator ~40 行协议代码 + 值不得含 `~`/`|` 的协议保留字约束）。现 `$host.make("Entity", {...})` 直接产出带标记合法值；命名字段变体 `$host.make("Status::Pair", {a, b})`；元组变体走数组 payload；单元变体无 payload；prelude 族（Result::Ok/Err、Option::Some/None）显式镜像。字段完备性/多余性/元组长度校验失败可观测报错。SUT 侧验证：Curator parse_extract 以 $host.make 重写（拍平协议全删），15/15 场景黄金输出逐字节等价。
+- **S-18 native 值模型断层预警**（dhv-ts checker + dhv typecheck.rs 双端同口径，conformance 第 6 段「预警对等」锁定 —— 退出码对拍看不见警告是否产出）：`let <含 struct/enum 族名注解> = native <...>` 且体无 `$host.make` → 警告（foreign 值：字段直通可用，clone/方法/模式派发失效）。只判同现场 let 注解 + 初始化器（零误报面窄）；String/数值注解的合法拍平协议不触发。
+- **锁定用例**：run-all 149→158（$host.make 结构体/命名字段/元组/单元变体/错误路径 ×5 + S-18 触发 ×2 + 零误报 ×2）；conformance 62→66（check fixtures +2 + S-18 预警对等 ×2）；dhv cargo test 15/15；dsh/nova/backends-demo/Vigil/Curator 零回归。
+
 ## [0.2.52] (2026-09-02)
 
 **静态产物真校验批次**（来源：为「38 后端全测」巡检建立产物级断言时触发，先最小化复现再修复，111 用例回归全绿）：

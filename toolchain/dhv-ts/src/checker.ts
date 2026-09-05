@@ -52,12 +52,21 @@ const CALL_WHITELIST = new Set(['Ok', 'Err', 'Some', 'None']);
 // 不在 enums 注册表而被穷尽性检查忽略 —— 别名臂完全绕过 S-6。
 let enumAlias: Map<string, string> = new Map();
 
+// v0.2.56 S-18（#L-22）：已知结构体名（值模型断层预警用）。
+// 语义：native 块返回的 plain object 不带 __struct/__enum 运行时标记 →
+// foreign 值 —— 字段直通可用，但 .clone()/方法/模式派发全失效（Curator
+// 实录运行期 panic「foreign 没有方法 clone」）。结构体字面量注解（let :
+// Vec<Entity> = native）是静态可判定的断层现场 —— 提前警告。
+let knownStructs: Set<string> = new Set();
+
 export function checkProgram(program: LoadedProgram): Diag[] {
   const diags: Diag[] = [];
   const enums = new Map<string, string[]>(); // name -> variants
+  knownStructs = new Set<string>();
   for (const [, ast] of program.files) {
     for (const item of ast.items) {
       if (item.kind === 'enum') enums.set(item.name, item.variants.map((v) => v.name));
+      if (item.kind === 'struct') knownStructs.add(item.name);
     }
   }
 
@@ -536,6 +545,14 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
           }
         }
       }
+      // v0.2.56 S-18（#L-22）：native 值模型断层预警 ——
+      // let 注解提及结构体/枚举族 + init 是 native 块 + 体无 $host.make
+      // → 运行期必得 foreign 值（字段直通可用，clone/方法/模式派发失效）。
+      // 口径：仅判「注解 + 初始化器」同现场（静态可判定、零误报面窄）；
+      // fn 返回值经变量中转的场景不判（S-14 v3 的追踪不覆盖运行期值标记）。
+      if (st.ty && st.init && st.init.kind === 'native') {
+        checkNativeValueModel(st.ty, st.init.body, st.span, enums, diags, file);
+      }
       if (st.elseBlock) {
         const elseScope: Scope = { vars: new Map(), used: new Set(), parent: scope };
         checkStmts(st.elseBlock, elseScope, enums, diags, file, inAgentLoop);
@@ -557,6 +574,61 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
 
 type Scope2 = Scope;
 void ({} as Scope2);
+
+// ---- v0.2.56 S-18（#L-22）：native 值模型断层预警 ----
+
+/** 类型提及结构体/枚举族名（穿泛型实参/引用/元组；返回首个命中名） */
+function typeMentionsStructOrEnum(ty: A.HType, enums: Map<string, string[]>): string | null {
+  switch (ty.kind) {
+    case 'path': {
+      const head = ty.segs[0]!;
+      if (knownStructs.has(head) || enums.has(head) || enumAlias.has(head)) return head;
+      for (const a of ty.args ?? []) {
+        const hit = typeMentionsStructOrEnum(a, enums);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    case 'ref':
+    case 'paren':
+      return typeMentionsStructOrEnum(ty.inner, enums);
+    case 'tuple':
+    case 'array':
+    case 'slice': {
+      const items = ty.kind === 'tuple' ? ty.items : [ty.kind === 'array' ? ty.elem : ty.elem];
+      for (const it of items) {
+        const hit = typeMentionsStructOrEnum(it, enums);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    case 'fnptr': {
+      for (const p of ty.params) {
+        const hit = typeMentionsStructOrEnum(p, enums);
+        if (hit) return hit;
+      }
+      if (ty.ret) return typeMentionsStructOrEnum(ty.ret, enums);
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** S-18 判定：注解类型提及 struct/enum 族 + native 体无 $host.make → 警告 */
+function checkNativeValueModel(ty: A.HType, nativeBody: string, span: A.Span, enums: Map<string, string[]>, diags: Diag[], file: string): void {
+  if (nativeBody.includes('$host.make')) return; // 官方构造通道已使用
+  const hit = typeMentionsStructOrEnum(ty, enums);
+  if (!hit) return;
+  diags.push(
+    warn(
+      'S-18',
+      `native 块产物进入含结构体/枚举族 "${hit}" 的注解绑定，但 native 返回的 plain object 不带运行时 __struct/__enum 标记（foreign 值：字段直通可用，.clone()/方法/模式派发失效，#L-22）。修复取向：native 体内用 $host.make("${hit}", {...}) 构造带标记的合法值，或收窄为 I/O 拍平协议（字符串进、HSL 侧重建）`,
+      span,
+      file,
+    ),
+  );
+}
 
 // ---- v0.2.53 S-13：整型域字面量校验 ----
 const INT_LIMITS: Record<string, [bigint, bigint]> = {

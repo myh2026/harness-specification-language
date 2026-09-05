@@ -271,6 +271,9 @@ pub struct TypeChecker {
     static_resources: HashSet<String>,
     /// 依赖模块导出项（名, 类型串）：§2.15 rules 跨模块展开（linker 注入）
     module_items: Vec<(String, String)>,
+    /// v0.2.56 S-18（#L-22）：已知结构体名（值模型断层预警用 —— native
+    /// 返回的 plain object 不带 __struct/__enum 运行时标记 → foreign 值）
+    structs: HashSet<String>,
     /// M3: 模块导出名集合（模块显示路径 → 导出项名集合）
     module_exports: HashMap<String, HashSet<String>>,
     /// 命名 import 符号（S7 追踪）
@@ -288,6 +291,7 @@ impl TypeChecker {
             enums: HashMap::new(),
             static_resources: HashSet::new(),
             module_items: Vec::new(),
+            structs: HashSet::new(),
             module_exports: HashMap::new(),
             imports: Vec::new(),
             in_agent_loop: 0,
@@ -440,7 +444,10 @@ impl TypeChecker {
                 self.module_items.push((r.name.name.clone(), "block".to_string()));
             }
             Item::Fn(fn_) => self.module_items.push((fn_.name.name.clone(), "fn".to_string())),
-            Item::Struct(st) => self.module_items.push((st.name.name.clone(), "struct".to_string())),
+            Item::Struct(st) => {
+                self.structs.insert(st.name.name.clone());
+                self.module_items.push((st.name.name.clone(), "struct".to_string()));
+            }
             Item::Trait(t) => self.module_items.push((t.name.name.clone(), "trait".to_string())),
             Item::Const(c) => self.module_items.push((c.name.name.clone(), "const".to_string())),
             Item::TypeAlias(a) => self.module_items.push((a.name.name.clone(), "type".to_string())),
@@ -513,6 +520,13 @@ impl TypeChecker {
                 let variants: Vec<String> =
                     e.variants.iter().map(|v| v.name.name.clone()).collect();
                 self.enums.insert(e.name.name.clone(), variants);
+            }
+            // v0.2.56 S-18：根文件（与依赖模块体级检查）的 struct 注册 ——
+            // harvest_module 只覆盖依赖闭包（不含根），collect_item 才是每文件
+            // 必经的收集点（与 dhv-ts checkProgram 全文件收集对齐）。
+            Item::Struct(s) => {
+                self.declared_items.push(s.name.name.clone());
+                self.structs.insert(s.name.name.clone());
             }
             Item::Import(imp) => {
                 // `A as B` → B 入表；S7 追踪别名
@@ -1405,6 +1419,63 @@ impl TypeChecker {
                     }
                 }
             }
+        }
+        // v0.2.56 S-18（#L-22）：native 值模型断层预警 ——
+        // let 注解提及结构体/枚举族 + init 是 native 块 + 体无 $host.make
+        // → 运行期必得 foreign 值（字段直通可用，clone/方法/模式派发失效，
+        // Curator 实录运行期 panic）。与 dhv-ts checker 同口径（对拍锁定）。
+        if let (Some(ty), Some(init)) = (&l.ty, &l.init) {
+            if let ExprKind::Native(nb) = &init.kind {
+                if !nb.code.contains("$host.make") {
+                    if let Some(name) = self.type_mentions_struct_or_enum(ty) {
+                        self.diags.push(
+                            Diagnostic::warning(
+                                DiagCode::Strictness("S18"),
+                                format!(
+                                    "native 块产物进入含结构体/枚举族 `{name}` 的注解绑定，但 native 返回的 plain object 不带运行时 __struct/__enum 标记（foreign 值：字段直通可用，.clone()/方法/模式派发失效，#L-22）。修复取向：native 体内用 $host.make(\"{name}\", {{...}}) 构造带标记的合法值，或收窄为 I/O 拍平协议（字符串进、HSL 侧重建）"
+                                ),
+                                l.span,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// v0.2.56 S-18：类型提及结构体/枚举族名（穿泛型实参/引用/元组；返回首个命中）。
+    /// 只判头段名（`Vec<Entity>` 看 `Vec` 与泛型实参 `Entity` 两层）。
+    fn type_mentions_struct_or_enum(&self, ty: &Type) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Path(pt) => {
+                if let Some(head) = pt.path.segments.first() {
+                    if self.structs.contains(&head.name) || self.enums.contains_key(&head.name) {
+                        return Some(head.name.clone());
+                    }
+                }
+                for arg in &pt.generic_args {
+                    if let GenericArg::Type(inner) = arg {
+                        if let Some(hit) = self.type_mentions_struct_or_enum(inner) {
+                            return Some(hit);
+                        }
+                    }
+                }
+                None
+            }
+            TypeKind::Ref { inner, .. }
+            | TypeKind::Slice(inner)
+            | TypeKind::Paren(inner) => self.type_mentions_struct_or_enum(inner),
+            TypeKind::Tuple(elems) => elems.iter().find_map(|t| self.type_mentions_struct_or_enum(t)),
+            TypeKind::Array { elem, .. } => self.type_mentions_struct_or_enum(elem),
+            TypeKind::FnPtr { params, ret } => {
+                for p in params {
+                    if let Some(hit) = self.type_mentions_struct_or_enum(p) {
+                        return Some(hit);
+                    }
+                }
+                ret.as_ref().and_then(|r| self.type_mentions_struct_or_enum(r))
+            }
+            _ => None,
         }
     }
 

@@ -11,6 +11,12 @@
 //   $host.artifacts 运行产物写出（不受工作区监狱限制，写入 --out 目录）
 //   $host.events    事件总线（G6：microkernel 观测等价物）
 //   $host.fixture   确定性模型剧本（ScriptedModel 的驱动装置）
+//   $host.make      结构体/枚举变体构造通道（#L-22 修复 v0.2.56：
+//                   native 返回的 plain object 是 foreign 值 —— 字段直通
+//                   可用，clone/方法/模式派发全失效；$host.make("Entity",
+//                   {...}) 产出带 __struct/__enum 运行时标记的合法值。
+//                   实现位于 interp.linkProgram（需结构体注册表），此处
+//                   仅登记 ABI 面）
 //   $host.log       轨迹日志（stderr）
 // ============================================================================
 

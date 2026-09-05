@@ -1,0 +1,19 @@
+// S-18 零误报锁定（#L-22）：native 体内使用 $host.make 官方构造通道
+// → 双端 pass 且都不得产出 S-18 警告
+struct Entity {
+    kind: String,
+    value: String,
+    confidence: f64,
+}
+
+fn probe() -> i64 {
+    let good: Vec<Entity> = native typescript {
+        const raw = $host.json.parse("{\"entities\":[]}");
+        return raw.entities.map((e) => $host.make("Entity", { kind: e.kind, value: e.value, confidence: e.confidence }));
+    };
+    return good.len();
+}
+
+fn main() -> i64 {
+    return probe();
+}

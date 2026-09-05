@@ -3622,6 +3622,139 @@ test('检查规则', 'S-17 有符号 cast 环绕：200 as i8 - 300 报错（-356
   assert(out.includes('S-15'), `有符号 cast 环绕折叠后越域应触发 S-15：${out.slice(0, 200)}`);
 });
 
+// ---- v0.2.56 第九轮锁定（#L-22 $host.make 构造通道 + S-18 值模型断层预警）----
+function l22Src(body: string): string {
+  return `struct Entity {
+    kind: String,
+    value: String,
+    confidence: f64,
+}
+enum Status {
+    Ok,
+    Warn { code: u32 },
+    Pair { a: i64, b: i64 },
+    Boxed(i64, i64),
+}
+${body}`;
+}
+test('运行期', '#L-22 $host.make 结构体：clone/字段读取/长度（此前 foreign panic）', () => {
+  const src = l22Src(`fn main() -> i64 {
+    let es: Vec<Entity> = native typescript {
+        const raw = $host.json.parse("{\\"entities\\":[{\\"kind\\":\\"PER\\",\\"value\\":\\"Ada\\",\\"confidence\\":0.9},{\\"kind\\":\\"ORG\\",\\"value\\":\\"Acme\\",\\"confidence\\":0.75}]}");
+        return raw.entities.map((e) => $host.make("Entity", { kind: e.kind, value: e.value, confidence: e.confidence }));
+    };
+    let e0 = es[0].clone();
+    println!("make::len={} kind={} conf={}", es.len(), e0.kind, e0.confidence);
+    return 0;
+}`);
+  fs.writeFileSync(path.join(TMP, 'l22a.hsl'), src);
+  const r = run(['run', path.join(TMP, 'l22a.hsl'), '--quiet']);
+  assertEq(r.code, 0, `运行应成功：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('make::len=2'), `Vec 长度：${r.stdout}`);
+  assert(r.stdout.includes('kind=PER'), `字段读取：${r.stdout}`);
+  assert(r.stdout.includes('conf=0.9'), `f64 字段：${r.stdout}`);
+});
+test('运行期', '#L-22 $host.make 命名字段变体：match 派发 + 字段解构', () => {
+  const src = l22Src(`fn main() -> i64 {
+    let s: Status = native typescript {
+        return $host.make("Status::Pair", { a: 10, b: 32 });
+    };
+    match s {
+        Status::Pair { a, b } => { println!("make::pair={}+{}", a, b); return a + b; },
+        Status::Warn { code } => { return code as i64; },
+        Status::Ok => { return 0; },
+        Status::Boxed(x, y) => { return x * 10 + y; },
+    }
+}`);
+  fs.writeFileSync(path.join(TMP, 'l22b.hsl'), src);
+  const r = run(['run', path.join(TMP, 'l22b.hsl'), '--quiet']);
+  assertEq(r.code, 0, `运行应成功：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('make::pair=10+32'), `match 派发与字段解构：${r.stdout}`);
+});
+test('运行期', '#L-22 $host.make 元组变体：数组 payload 按位（Boxed(8,9) → 89）', () => {
+  const src = l22Src(`fn main() -> i64 {
+    let c: Status = native typescript {
+        return $host.make("Status::Boxed", [8, 9]);
+    };
+    match c {
+        Status::Boxed(a, b) => { println!("make::boxed={}{}", a, b); return a * 10 + b; },
+        Status::Pair { a, b } => { return a + b; },
+        Status::Warn { code } => { return code as i64; },
+        Status::Ok => { return 0; },
+    }
+}`);
+  fs.writeFileSync(path.join(TMP, 'l22c.hsl'), src);
+  const r = run(['run', path.join(TMP, 'l22c.hsl'), '--quiet']);
+  assertEq(r.code, 0, `运行应成功：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('make::boxed=89'), `元组 payload 按位绑定：${r.stdout}`);
+});
+test('运行期', '#L-22 $host.make 单元变体：无 payload（Status::Ok）', () => {
+  const src = l22Src(`fn main() -> i64 {
+    let s: Status = native typescript {
+        return $host.make("Status::Ok");
+    };
+    match s {
+        Status::Ok => { println!("make::unit"); return 1; },
+        Status::Warn { code } => { return code as i64; },
+        Status::Pair { a, b } => { return a + b; },
+        Status::Boxed(x, y) => { return x * 10 + y; },
+    }
+}`);
+  fs.writeFileSync(path.join(TMP, 'l22d.hsl'), src);
+  const r = run(['run', path.join(TMP, 'l22d.hsl'), '--quiet']);
+  assertEq(r.code, 0, `运行应成功：${r.stdout}${r.stderr}`);
+  assert(r.stdout.includes('make::unit'), `单元变体构造：${r.stdout}`);
+});
+test('运行期', '#L-22 $host.make 错误路径：缺字段/未知类型（可观测不静默）', () => {
+  const bad1 = l22Src(`fn main() -> i64 {
+    let v: Status = native typescript { return $host.make("Status::Pair", { a: 1 }); };
+    return 0;
+}`);
+  fs.writeFileSync(path.join(TMP, 'l22e1.hsl'), bad1);
+  const r1 = run(['run', path.join(TMP, 'l22e1.hsl'), '--quiet']);
+  assert(r1.code !== 0 && (r1.stdout + r1.stderr).includes('缺少字段'), `缺字段应可观测报错：${(r1.stdout + r1.stderr).slice(0, 200)}`);
+  const bad2 = `fn main() -> i64 {
+    let v = native typescript { return $host.make("Nope", {}); };
+    return 0;
+}`;
+  fs.writeFileSync(path.join(TMP, 'l22e2.hsl'), bad2);
+  const r2 = run(['run', path.join(TMP, 'l22e2.hsl'), '--quiet']);
+  assert(r2.code !== 0 && (r2.stdout + r2.stderr).includes('未知结构体'), `未知类型应可观测报错：${(r2.stdout + r2.stderr).slice(0, 200)}`);
+});
+test('检查规则', 'S-18 native 值模型断层：let 注解提及 struct + 无 $host.make → 警告', () => {
+  const out = checkSrc(l22Src(`fn probe() -> i64 {
+    let bad: Vec<Entity> = native typescript { return [{ kind: "PER", value: "x", confidence: 1.0 }]; };
+    return bad.len();
+}
+fn main() -> i64 { return 0; }`));
+  assert(out.includes('S-18'), `foreign 值模型断层应触发 S-18：${out.slice(0, 300)}`);
+});
+test('检查规则', 'S-18 枚举族注解同样预警（ExtractEvent 通道）', () => {
+  const out = checkSrc(l22Src(`enum ExtractEvent { Entities { entities: Vec<Entity> }, Malformed { note: String } }
+fn probe() -> i64 {
+    let ev: ExtractEvent = native typescript { return { }; };
+    return 0;
+}
+fn main() -> i64 { return 0; }`));
+  assert(out.includes('S-18'), `枚举族注解应触发 S-18：${out.slice(0, 300)}`);
+});
+test('检查规则', 'S-18 零误报：$host.make 在体 → 静默', () => {
+  const out = checkSrc(l22Src(`fn probe() -> i64 {
+    let good: Vec<Entity> = native typescript { return [].map((e) => $host.make("Entity", e)); };
+    return good.len();
+}
+fn main() -> i64 { return 0; }`));
+  assert(!out.includes('S-18'), `$host.make 通道使用时不应告警：${out.slice(0, 300)}`);
+});
+test('检查规则', 'S-18 零误报：String/数值注解不触发（Curator 拍平协议合法）', () => {
+  const out = checkSrc(`fn probe() -> i64 {
+    let parts: Vec<String> = native typescript { return ["flat", "protocol"]; };
+    return parts.len();
+}
+fn main() -> i64 { return 0; }`);
+  assert(!out.includes('S-18'), `拍平协议（Vec<String>）不应告警：${out.slice(0, 300)}`);
+});
+
 // ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------

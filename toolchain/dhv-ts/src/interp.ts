@@ -279,6 +279,105 @@ export class Interp {
         }
       }
     }
+    // 4. #L-22 修复（v0.2.56）：$host.make 结构体/变体构造通道。
+    //    native 块返回的 plain object 不带 __struct/__enum 运行时标记 →
+    //    foreign 值（字段直通可用，clone/方法/模式派发全失效 —— Curator
+    //    实录「foreign 没有方法 clone」运行期 panic）。此前唯一出路是
+    //    「native 拍平字符串 + HSL 侧 split_once 逐字段重建」的 12 行定式。
+    //    此通道把构造权交回 native 侧：$host.make("Entity", {...}) 直接
+    //    产出带标记的合法 HSL 值（校验字段完备性/多余性，与结构体字面量
+    //    同规则）；$host.make("ExtractEvent::EntitiesExtracted", {...})
+    //    构造枚举变体。别名已注册（L-1 同步进 this.structs/enums）。
+    //    仅注入一次（幂等）；hostApi 缺失（hostless 模式）时跳过。
+    if (this.hostApi && typeof this.hostApi === 'object' && !('make' in (this.hostApi as object))) {
+      (this.hostApi as Record<string, unknown>).make = (name: string, payload?: unknown): unknown =>
+        this.hostMake(name, payload);
+    }
+  }
+
+  /** #L-22：$host.make 构造实现 —— 结构体 / 枚举变体（带字段校验） */
+  private hostMake(name: string, payload?: unknown): unknown {
+    if (typeof name !== 'string') throw new HRuntimeError('$host.make：第一个参数必须是类型名字符串（如 "Entity" / "Status::Ok"）');
+    if (name.includes('::')) {
+      // ---- 枚举变体：Family::Variant ----
+      const idx = name.indexOf('::');
+      const family = name.slice(0, idx);
+      const variant = name.slice(idx + 2);
+      // prelude 族（Option/Result 不入 this.enums 注册表 —— 内建构造器
+      // 通道，见 evalPath；$host.make 需显式镜像同款值形态）
+      if (family === 'Option' || family === 'Result') {
+        const want = family === 'Option' ? ['Some', 'None'] : ['Ok', 'Err'];
+        if (!want.includes(variant)) {
+          throw new HRuntimeError(`$host.make：prelude 枚举 ${family} 的变体是 ${want.join('/')}（got "${variant}"）`);
+        }
+        if (variant === 'None') return noneV();
+        const v = Array.isArray(payload) ? payload[0] : payload;
+        if (v === undefined) throw new HRuntimeError(`$host.make：${family}::${variant} 需要 1 个载荷值（元组形式 [v] 或单值）`);
+        return family === 'Option' ? someV(v) : variant === 'Ok' ? okV(v) : errV(v);
+      }
+      const enumItem = this.enums.get(family);
+      if (!enumItem || enumItem.kind !== 'enum') {
+        throw new HRuntimeError(`$host.make：未知枚举族 "${family}"（已知族：${[...this.enums.keys()].slice(0, 8).join('、')}…）`);
+      }
+      const vd = enumItem.variants.find((v) => v.name === variant);
+      if (!vd) {
+        throw new HRuntimeError(`$host.make：枚举 ${family} 没有变体 "${variant}"（已知变体：${enumItem.variants.map((v) => v.name).join('、')}）`);
+      }
+      if (payload === undefined || payload === null) {
+        if (vd.fields) throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 携带字段，需要提供 payload`);
+        return enumOf(enumItem.name, variant);
+      }
+      if (Array.isArray(payload)) {
+        // 元组变体：payload = 数组（按位）
+        if (!vd.fields || !('tuple' in vd.fields)) {
+          throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 不是元组变体（got 数组 payload）`);
+        }
+        if (payload.length !== vd.fields.tuple.length) {
+          throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 需要 ${vd.fields.tuple.length} 个元组字段，got ${payload.length}`);
+        }
+        return enumOf(enumItem.name, variant, { tuple: [...payload] });
+      }
+      if (typeof payload === 'object') {
+        if (!vd.fields || !('named' in vd.fields)) {
+          throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 不是命名字段变体（got 对象 payload）`);
+        }
+        const named: Record<string, unknown> = {};
+        for (const fd of vd.fields.named) {
+          if (!(fd.name in (payload as Record<string, unknown>))) {
+            throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 缺少字段 "${fd.name}"`);
+          }
+        }
+        for (const [k, v] of Object.entries(payload as Record<string, unknown>)) {
+          if (!vd.fields.named.some((fd) => fd.name === k)) {
+            throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 没有字段 "${k}"（多余字段）`);
+          }
+          named[k] = v;
+        }
+        return enumOf(enumItem.name, variant, { named });
+      }
+      throw new HRuntimeError(`$host.make：变体 ${family}::${variant} 的 payload 必须是对象（命名字段）或数组（元组）`);
+    }
+    // ---- 结构体 ----
+    const structItem = this.structs.get(name);
+    if (!structItem || structItem.kind !== 'struct') {
+      throw new HRuntimeError(`$host.make：未知结构体 "${name}"（可用 this.structs 中注册的名字；枚举变体请用 "Family::Variant"）`);
+    }
+    if (payload === undefined || payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new HRuntimeError(`$host.make：结构体 ${name} 需要对象形式的字段 payload（got ${Array.isArray(payload) ? '数组' : String(payload)}）`);
+    }
+    const out: Record<string, unknown> = { __struct: structItem.name };
+    for (const fd of structItem.fields) {
+      if (!(fd.name in (payload as Record<string, unknown>))) {
+        throw new HRuntimeError(`$host.make：结构体 ${name} 缺少字段 "${fd.name}"（已知字段：${structItem.fields.map((f) => f.name).join('、')}）`);
+      }
+    }
+    for (const [k, v] of Object.entries(payload as Record<string, unknown>)) {
+      if (!structItem.fields.some((fd) => fd.name === k)) {
+        throw new HRuntimeError(`$host.make：结构体 ${name} 没有字段 "${k}"（多余字段）`);
+      }
+      out[k] = v;
+    }
+    return out;
   }
 
   private resolveImport(pathStr: string, fromFile: string): ModuleInfo | undefined {
