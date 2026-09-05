@@ -502,14 +502,48 @@ export class Lexer {
   scanRawBody(kind: string): string {
     // kind = 'native:<lang>' 或 'block'
     const lang = kind.startsWith('native:') ? kind.slice('native:'.length) : '';
+    const ts = lang === 'typescript' || lang === 'javascript';
     let depth = 1;
     let out = '';
+    // BUGFIX(2025-09): 正则字面量感知。此前扫描器对 TS 正则盲——
+    // /href="([^"]+)"/ 中的引号被误配对为字符串边界，级联吞掉 '}'，
+    // 大括号深度计数失效 → 「原始代码区未闭合」假错误。
+    // 启发式（与 JS 词法约定一致）：'/' 前的最后一个非空白字符若为
+    // 表达式语境字符（= ( [ , ! & | ? : ; { + - * % < > ~ ^ 或区块起始），
+    // 则 '/' 起始正则字面量，扫描至未转义的 '/'（字符类 [...] 内的 '/' 除外）。
+    let lastMeaningful = '';
     while (this.pos < this.src.length) {
       if (lang) {
         const skipped = this.skipLangStringOrComment(lang);
-        if (skipped !== null) { out += skipped; continue; }
+        if (skipped !== null) {
+          out += skipped;
+          const trimmed = skipped.trim();
+          if (trimmed.length > 0) lastMeaningful = trimmed[trimmed.length - 1]!;
+          continue;
+        }
       }
       const c = this.peek();
+      if (ts && c === '/' && this.isRegexStart(lastMeaningful)) {
+        const startPos = this.pos;
+        this.advance(); // 消费开头 '/'
+        let inClass = false;
+        while (this.pos < this.src.length) {
+          const ch = this.peek();
+          if (ch === '\\') { this.advance(); this.advance(); continue; }
+          if (ch === '[') { inClass = true; }
+          else if (ch === ']') { inClass = false; }
+          else if (ch === '/' && inClass == false) { this.advance(); break; }
+          else if (ch === '\n') { break; } // 跨行 → 不是正则，回退按普通字符
+          this.advance();
+        }
+        // 消费标志位（g/i/m/s/u/y/d/v）
+        while (this.pos < this.src.length && /[a-zA-Z]/.test(this.peek())) { this.advance(); }
+        const seg = this.src.slice(startPos, this.pos);
+        out += seg;
+        lastMeaningful = '/';
+        continue;
+      }
+      if (c.trim() !== '') { lastMeaningful = c; }
       if (c === '{') { depth++; out += this.advance(); continue; }
       if (c === '}') {
         depth--;
@@ -520,6 +554,13 @@ export class Lexer {
       out += this.advance();
     }
     throw new LexError('原始代码区未闭合', this.line, this.col);
+  }
+
+  /// '/' 是否处于正则起始语境（JS 词法启发式）。
+  private isRegexStart(last: string): boolean {
+    if (last === '') return true;
+    if (/[A-Za-z0-9_$)\]'"`]/.test(last)) return false; // 值后 → 除法
+    return true; // 运算符/分隔符后 → 正则
   }
 
   // ==========================================================================
