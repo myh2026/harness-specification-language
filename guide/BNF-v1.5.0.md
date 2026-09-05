@@ -1,4 +1,4 @@
-# HSL 语言规范 —— BNF 文法（正式版 v1.4.10）
+# HSL 语言规范 —— BNF 文法（正式版 v1.5.0）
 
 > **HSL — Harness Specification Language**
 > 一门为编写 AI Agent harness 而生的编译型语言。本文件是 HSL 的**规范语法定义**，
@@ -649,15 +649,47 @@ LangIdent        ::= Identifier                             (* rust | python | t
 ### 3.4 project：物理投射声明
 
 ```bnf
-ProjectBlock     ::= "project" "{" ProjectionItem* "}"
+ProjectBlock     ::= "project" "{" (ProjectionItem | RulesBlock)* "}"
 ProjectionItem   ::= ProjectionTarget "->" StringLiteral ":" LangIdent ","?
 ProjectionTarget ::= PathInExpr                             (* 指向本文件定义的逻辑项 *)
+
+(* —— v1.5 新增：投射规则组 —— *)
+RulesBlock       ::= "rules" "{" RulesItem* "}"
+RulesItem        ::= ItemKind "->" PathTemplate ":" LangIdent ","?
+ItemKind         ::= "graph" | "fn" | "struct" | "enum" | "trait"
+                  |  "const" | "type" | "block" | "static"
+PathTemplate     ::= StringLiteral                           (* 唯一占位符 {name} *)
 ```
 
 - `逻辑项 → 物理文件 : 目标语言`；
 - 静态约束（§5.4）：同一物理路径不得被两个投射项占据；目标项必须存在且可见；
   `block/static` 只能投射到 yaml/markdown/json/toml 等静态后端；
   函数/impl/graph 可投射到 rust/python/typescript。
+
+**v1.5 投射规则组语义（R1-R6）**：为免逐项手写映射，`rules` 按项类型批量投射：
+
+- **R1（遮蔽原则）**：显式单项映射优先；未显式映射的命名项按其类型匹配唯一规则展开，`{name}` 替换为项名。
+- **R2（占位符白名单）**：路径模板 v1 仅支持 `{name}`；其他占位符 → 诊断 **P5**。
+- **R3（唯一性）**：同一规则类型只允许声明一条；重复 → **P5**。
+- **R4（类型注册）**：规则类型限 `graph/fn/struct/enum/trait/const/type/block/static`（block 与 static 同义，均指 StaticResourceDef）；未知类型 → **P5**。
+- **R5（展开池）**：展开池 = 本文件命名项 + import 依赖模块的导出命名项；`impl`（匿名）、import、宏调用不参与。
+- **R6（一致性）**：展开项与显式项同等参与 P2（路径唯一）/ P4（后端层级）校验。
+
+示例：
+
+```hsl
+project {
+    Nova -> "src/main.rs" : rust,          // 显式映射（优先）
+
+    rules {
+        struct -> "src/types/{name}.rs"  : rust,
+        enum   -> "src/types/{name}.rs"  : rust,
+        fn     -> "src/logic/{name}.rs"  : rust,
+        graph  -> "src/graphs/{name}.rs" : rust,
+        block  -> "config/{name}.yml"    : yaml,
+    }
+}
+```
 
 ### 3.5 scale：尺度声明
 
@@ -801,6 +833,10 @@ PostfixOp                 ::= (见 §2.11.3)
 PrimaryExpression         ::= (见 §2.11.4)
 ProjectBlock              ::= (见 §3.4)
 ProjectionItem            ::= (见 §3.4)
+RulesBlock                ::= (见 §3.4)
+RulesItem                 ::= (见 §3.4)
+ItemKind                  ::= (见 §3.4)
+PathTemplate              ::= (见 §3.4)
 ProjectionTarget          ::= (见 §3.4)
 RangeExpr                 ::= (见 §2.11.3)
 RangePattern              ::= (见 §2.10)
@@ -1176,6 +1212,18 @@ project {
 
 | 版本 | 日期 | 变更 |
 |:---|:---|:---|
+| v1.5.0 | 2026-08 | **工程化扩展版**（dhv Rust 编译器与 dhv-ts 参考解释器双端对齐实现）。全部为**增量扩展 + 修正性澄清**，不破坏 v1.4 语法：
+
+  1. **§3.4 投射规则组（rules）正式化**：`rules { kind -> "path/{name}.ext" : lang }` 按项类型批量投射，显式映射优先（R1）；占位符白名单（R2）、类型唯一（R3）、类型注册（R4）、展开池（R5）、诊断一致性（R6）；新增诊断系列 **P5**。
+  2. **§2.11.7 无结构体字面量语境成文**：if/while 条件、if let/while let 的 `=` 右侧、match 待匹配对象、for 迭代对象中禁用结构体字面量（Rust 规则）。此前 PEG 的贪婪匹配使 `if x < lo { 1 }` 中 `lo { 1 }` 被解析为元组结构体字面量吞掉 if 块——dhv 实现已按本规则重构（ns_* 阶梯），并与 dhv-ts `parseExprNoStruct` 行为对齐；结构体字面量字段形态与 dhv-ts `looksLikeStructLiteral` 启发式对齐（移除裸整数字段）。
+  3. **方法泛型 turbofish 正式化**：MethodCall ::= identifier ("::" GenericArgs)? "(" CallArgs? ")" —— `.collect::<Vec<String>>()` / `.parse::<f64>()` 为合法形态。
+  4. **export / impl 前导属性正式化**：`OuterAttributes` 允许出现在 `export` 与 `impl` 之前（`#[derive(..)] export struct X`、`#[cfg(lang: rust)] impl Trait for Type`）；导出项属性归并到内部项。
+  5. **§1.9 词法澄清（native 原子性）**：pest 的全局 `COMMENT` 规则同样参与隐式空白注入，非原子规则内字符串中的 `//`、`/*` 会被误判为注释（`base_url="https://api..."` 类代码崩坏）。native_string / native_text / native_body 必须为原子（`@`/`$`）规则；实现者注意。
+  6. **词法形状前瞻澄清**：`block` / `static` 关键字仅在 `block NAME {` / `static NAME {` 形态进入原始资源区模式；`rules { block -> ... }` 中的规则类型不触发（dhv-ts lexer 形状前瞻）。
+  7. **模块链接器（dhv）**：dhv check 引入最小链接器（BFS + 环检测），import 依赖模块的导出 enum / 静态资源进入跨模块注册表——S6 穷尽性校验与 P4 静态资源判定跨模块可见；新增诊断 **M2**（模块加载失败）。
+  8. **S6 触发条件澄清**：AgentLoop 内 `_` 通配兜底仅对**已注册用户枚举**的 match 禁止；Option/Result/字符串字面量匹配的 `_` 兜底合法（与 dhv-ts enumArms 门控一致）。
+  9. **check ≠ emit**：check 命令不驱动代码生成（dhv-ts 既有行为成文）；codegen 能力缺口不阻塞校验。
+  10. **~~已知限制~~（v0.2.14 已关闭）**：值语境 range（`let r = a..b;` 作为一等值）由 dhv 完整实现（v0.2.12）；dhv-ts 于 v0.2.14 补齐值语境 range 支持（解析 + 校验 + 解释 + 代码生成），BNF v1.5 已知限制 #10 正式关闭。|
 | v1.0 | 2025-06 | 首个正式版：全量 BNF + 静态语义 + pest 映射约定。由总纲文档直接推导，P0 pest 文法以本文件为准对齐重写。 |
 | v1.2 | 2025-08 | 词法歧义消解规则（L1-L5）与原始代码区词法模式（§1.9 模式 A/B）成文；文法验收基准明确为 32 组样例。 |
 | v1.3 | 2025-08 | **参考实现驱动修订**（dhv-ts 解释器实现 NOVA/DSH 两个真实项目过程中发现的规范缺口，全部为澄清性/修正性变更，不破坏 v1.2 语法）：

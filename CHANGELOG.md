@@ -9,6 +9,7 @@
 - **`$host.make` 结构体/枚举变体构造通道**（interp.linkProgram 幂等注入 hostApi，校验与结构体字面量同规则）：native 块返回的 plain object 不带 `__struct`/`__enum` 运行时标记 → foreign 值（字段直通可用，clone/方法/模式派发全失效）。此前唯一出路是「native 拍平字符串 + HSL 侧 split_once 逐字段重建」定式（Curator ~40 行协议代码 + 值不得含 `~`/`|` 的协议保留字约束）。现 `$host.make("Entity", {...})` 直接产出带标记合法值；命名字段变体 `$host.make("Status::Pair", {a, b})`；元组变体走数组 payload；单元变体无 payload；prelude 族（Result::Ok/Err、Option::Some/None）显式镜像。字段完备性/多余性/元组长度校验失败可观测报错。SUT 侧验证：Curator parse_extract 以 $host.make 重写（拍平协议全删），15/15 场景黄金输出逐字节等价。
 - **S-18 native 值模型断层预警**（dhv-ts checker + dhv typecheck.rs 双端同口径，conformance 第 6 段「预警对等」锁定 —— 退出码对拍看不见警告是否产出）：`let <含 struct/enum 族名注解> = native <...>` 且体无 `$host.make` → 警告（foreign 值：字段直通可用，clone/方法/模式派发失效）。只判同现场 let 注解 + 初始化器（零误报面窄）；String/数值注解的合法拍平协议不触发。
 - **锁定用例**：run-all 149→158（$host.make 结构体/命名字段/元组/单元变体/错误路径 ×5 + S-18 触发 ×2 + 零误报 ×2）；conformance 62→66（check fixtures +2 + S-18 预警对等 ×2）；dhv cargo test 15/15；dsh/nova/backends-demo/Vigil/Curator 零回归。
+- **guide BNF 镜像漂移治理**（docs + CI，来源：用户发现 `guide/BNF-v1.4.10.md` 遗留——权威源已演进至 BNF v1.5.0 且全仓无任何引用指向旧镜像，属孤儿过期文件）：删除 `guide/BNF-v1.4.10.md`，新增 `guide/BNF-v1.5.0.md`（与权威源 `toolchain/hsl-spec/BNF.md` 逐字节一致）；新增 `.github/workflows/spec-sync.yml` 守卫（guide/ 有且仅有一份 BNF-v*.md / 与权威源逐字节一致 / 文件名版本号 == 权威源标题版本号，任一违反即红灯），防止双份 BNF 再次静默漂移。README 文档导航补镜像行。
 
 ## [0.2.52] (2026-09-02)
 

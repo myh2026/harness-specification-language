@@ -279,7 +279,8 @@ project {
 | 想了解… | 去这里 |
 |:---|:---|
 | 语言怎么写（教程级，示例全部实测） | [guide/HSL-GUIDE.md](guide/HSL-GUIDE.md) |
-| 语法的正式定义 | [toolchain/hsl-spec/BNF.md](toolchain/hsl-spec/BNF.md) |
+| 语法的正式定义（唯一权威源） | [toolchain/hsl-spec/BNF.md](toolchain/hsl-spec/BNF.md) |
+| 同一份 BNF 的 guide 镜像（CI 守卫自动防漂移） | [guide/BNF-v1.5.0.md](guide/BNF-v1.5.0.md) |
 | 两套实现各自覆盖到什么程度 | [toolchain/hsl-spec/COMPLIANCE.md](toolchain/hsl-spec/COMPLIANCE.md) |
 | Rust 编译器内部结构与路线图 | [toolchain/dhv/README.md](toolchain/dhv/README.md) |
 | 解释器运行方式 / native 逃生舱 / 已知限制 | [toolchain/dhv-ts/README.md](toolchain/dhv-ts/README.md) |

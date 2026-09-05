@@ -1,0 +1,76 @@
+# HSL/DHV spec-sync — guide BNF 镜像与权威 BNF 的一致性守卫
+#
+# 背景：guide/ 曾遗留 BNF-v1.4.10.md 旧版镜像（权威源已演进到 v1.5.0），
+# 造成「仓库里两份 BNF 版本不一致」的困惑。本守卫保证：
+#   1. guide/ 中有且仅有一份 BNF-v*.{VERSION}.md 版本化镜像；
+#   2. 该镜像与唯一权威源 toolchain/hsl-spec/BNF.md 逐字节一致；
+#   3. 镜像文件名中的版本号与权威源标题行中的版本号一致。
+# 任一不满足即失败，防止再次漂移。
+
+name: Spec sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'toolchain/hsl-spec/**'
+      - 'guide/**'
+      - '.github/workflows/spec-sync.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'toolchain/hsl-spec/**'
+      - 'guide/**'
+      - '.github/workflows/spec-sync.yml'
+
+concurrency:
+  group: spec-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spec-sync:
+    name: BNF guide mirror sync check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify guide BNF mirror matches authoritative spec
+        run: |
+          set -euo pipefail
+
+          AUTHORITATIVE="toolchain/hsl-spec/BNF.md"
+          if [ ! -f "$AUTHORITATIVE" ]; then
+            echo "ERROR: authoritative spec $AUTHORITATIVE missing"
+            exit 1
+          fi
+
+          # 1) guide/ 中有且仅有一份版本化 BNF 镜像
+          mapfile -t mirrors < <(ls guide/BNF-v*.md 2>/dev/null || true)
+          if [ "${#mirrors[@]}" -ne 1 ]; then
+            echo "ERROR: guide/ must contain exactly one BNF-v*.md mirror, found ${#mirrors[@]}: ${mirrors[*]:-none}"
+            exit 1
+          fi
+          MIRROR="${mirrors[0]}"
+
+          # 2) 镜像与权威源逐字节一致
+          if ! diff -q "$AUTHORITATIVE" "$MIRROR" > /dev/null; then
+            echo "ERROR: $MIRROR has drifted from $AUTHORITATIVE (they must be byte-identical)"
+            echo "Fix: cp $AUTHORITATIVE $MIRROR (and rename to the new version)"
+            diff -u "$MIRROR" "$AUTHORITATIVE" | head -40 || true
+            exit 1
+          fi
+
+          # 3) 镜像文件名版本号 == 权威源标题行版本号
+          spec_ver=$(head -1 "$AUTHORITATIVE" | grep -oP '(?<=v)\d+\.\d+\.\d+(?=）|\))' | head -1)
+          file_ver=$(basename "$MIRROR" | grep -oP '(?<=BNF-v)\d+\.\d+\.\d+(?=\.md)')
+          if [ -z "$spec_ver" ]; then
+            echo "ERROR: cannot extract version from $AUTHORITATIVE title line"
+            exit 1
+          fi
+          if [ "$spec_ver" != "$file_ver" ]; then
+            echo "ERROR: mirror filename version ($file_ver) != authoritative spec version ($spec_ver)"
+            echo "Fix: git mv $MIRROR guide/BNF-v${spec_ver}.md && cp $AUTHORITATIVE guide/BNF-v${spec_ver}.md"
+            exit 1
+          fi
+
+          echo "OK: $MIRROR == $AUTHORITATIVE (v${spec_ver}, byte-identical)"
