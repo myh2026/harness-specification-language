@@ -53,6 +53,17 @@ export const STRING_METHODS: Record<string, BuiltinMethod> = {
       return nv;
     },
   },
+  // v0.2.57 修复：String::push(char) 缺失（Rust 对等 API）——
+  // `out.push('\n')` / `out.push(' ')` 是 Rust 风格源码的常见写法，
+  // 此前运行期 "String 没有方法 push"。与 push_str 同为 mutating。
+  push: {
+    mutating: true,
+    fn: (r, a, ctx) => {
+      const nv = S(r) + S(a[0]);
+      if (ctx.setRecv) { ctx.setRecv(nv); return undefined; }
+      return nv;
+    },
+  },
   as_str: { fn: (r) => S(r) },
   clone: { fn: (r) => S(r) },
   to_string: { fn: (r) => S(r) },
@@ -142,6 +153,12 @@ export const VEC_METHODS: Record<string, BuiltinMethod> = {
   contains: { fn: (r, a) => (r as unknown[]).some((x) => deepEq(x, a[0])) },
   join: { fn: (r, a) => (r as unknown[]).map(S).join(S(a[0])) },
   iter: { fn: (r) => r },
+  // v0.2.57 修复：iter_mut 缺失于内建方法面 —— checker 接受 `.iter_mut()`（nova
+  // 的 accept/complete_task 即用），但解释器未注册 → 运行期 "Vec 没有方法 iter_mut"
+  // （check 过 / run 崩的静默断层）。语义：返回数组本体；struct 元素是 JS 对象引用，
+  // `for t in v.iter_mut() { t.field = ... }` 的字段写按引用透传（与 interp 的对象
+  // 透明共享模型一致）；primitive 元素的写不透传 —— 解释器透明性已记录的边界。
+  iter_mut: { fn: (r) => r },
   map: {
     fn: async (r, a, ctx) => {
       const out: unknown[] = [];
