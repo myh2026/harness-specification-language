@@ -381,23 +381,30 @@ function writeRunJson(outdir: string, data: Record<string, unknown>): void {
 }
 
 // ---- main ----
-const [,, ...argv] = process.argv;
-try {
-  const args = parseArgs(argv);
-  let code = 0;
-  if (args.cmd === 'check') code = await cmdCheck(args);
-  else if (args.cmd === 'run') code = await cmdRun(args);
-  else if (args.cmd === 'emit') code = await cmdEmit(args);
-  else if (args.cmd === 'targets') code = await cmdTargets();
-  else if (args.cmd === 'sync') code = await cmdSync(args);
-  else if (args.cmd === 'watch') code = await cmdWatch(args);
-  else usage();
-  process.exit(code);
-} catch (err) {
-  if (err instanceof LinkError) {
-    console.error(`error[L-0]: ${err.message}`);
-  } else {
-    console.error(`error[E-0]: ${(err as Error).message}`);
+// cliMain：可编程入口（返回退出码而非 process.exit）——供宿主进程内调用
+// （ORG 单二进制分发的嵌入执行面：嵌套 check / 嵌套 run 的无 bun 兜底）。
+// 命令行直跑仍走 import.meta.main 守卫，行为与旧版完全一致。
+export async function cliMain(cliArgv: string[]): Promise<number> {
+  try {
+    const args = parseArgs(cliArgv);
+    if (args.cmd === 'check') return await cmdCheck(args);
+    if (args.cmd === 'run') return await cmdRun(args);
+    if (args.cmd === 'emit') return await cmdEmit(args);
+    if (args.cmd === 'targets') return await cmdTargets();
+    if (args.cmd === 'sync') return await cmdSync(args);
+    if (args.cmd === 'watch') return await cmdWatch(args);
+    usage();
+    return 2;
+  } catch (err) {
+    if (err instanceof LinkError) {
+      console.error(`error[L-0]: ${err.message}`);
+    } else {
+      console.error(`error[E-0]: ${(err as Error).message}`);
+    }
+    return 1;
   }
-  process.exit(1);
+}
+
+if (import.meta.main) {
+  process.exit(await cliMain(process.argv.slice(2)));
 }

@@ -1,3 +1,19 @@
+# CHANGELOG
+
+## v0.2.12（2026-09-06）—— 嵌入执行面（宿主进程内复用）
+
+ORG（旗舰应用）单二进制分发驱动的三项稳健性升级，CLI 行为零变化：
+
+- `main.ts`：顶层执行重构为 `export async function cliMain(argv): Promise<number>` +
+  `import.meta.main` 守卫。重复调用状态隔离由 `loadProgram` 的 fresh Map 保证。
+- `host.ts`：新增 `$host.dhv.check(file)` / `$host.dhv.run(args)`——进程内嵌套执行面
+  （懒加载 cliMain 规避 main↔host 静态循环；stdout/stderr 捕获后恢复）。无 bun 环境
+  （ORG 单二进制）下 HSL 工厂闸门据此自动降级进程内车道。
+- `version.ts`：嵌入执行下 `import.meta.dir` 指向打包器虚拟 FS，读不到 package.json ——
+  回退 `DHV_VERSION` 环境变量，最终回退 `0.0.0`（单一来源纪律不变，只增稳健性）。
+
+---
+
 # 变更日志（CHANGELOG）
 
 本文件记录工具链版本演进；语言规范级变更另见 [toolchain/hsl-spec/BNF.md §8](toolchain/hsl-spec/BNF.md)。

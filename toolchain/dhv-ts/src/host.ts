@@ -137,6 +137,13 @@ export class Host {
         run: async (cmd: string, o?: { cwd?: string; timeoutMs?: number }) =>
           this.withFaultsAsync('shell.run', () => this.shellRun(cmd, o)),
       },
+      dhv: {
+        // 嵌入执行面：无 bun 环境（如 ORG 单二进制）下嵌套 check / run 的进程内兜底。
+        // 语义与子进程版一致（ fresh loadProgram → 状态隔离；输出合并为 ShellFlat 形态），
+        // 差别仅在于不经过 bash —— 供 HSL 侧 shell_exec 的等价替代。
+        check: async (file: string) => this.withFaultsAsync('dhv.check', () => this.dhvCheck(file)),
+        run: async (args: string[]) => this.withFaultsAsync('dhv.run', () => this.dhvRunInproc(args)),
+      },
       json: {
         parse: (s: string): unknown => this.withFaultsSync('json.parse', () => JSON.parse(s)),
         stringify: (v: unknown): string => JSON.stringify(v, null, 2),
@@ -392,6 +399,54 @@ export class Host {
         stderr: (e.killed ? '进程超时被终止\n' : '') + (e.stderr ?? ''),
       };
     }
+  }
+
+  // ---- 嵌入执行面（$host.dhv.*）----
+  // 无 bun 环境下嵌套 check / run 的进程内兜底：懒加载 main.ts 的 cliMain，
+  // 临时接管 stdout/stderr 捕获输出，恢复后返回。fresh loadProgram 保证状态隔离。
+
+  private async captureCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    // 懒加载（函数体内 import，规避 main.ts ↔ host.ts 的静态循环）
+    const mod = (await import('./main.ts')) as { cliMain: (argv: string[]) => Promise<number> };
+    const savedOut = process.stdout.write.bind(process.stdout);
+    const savedErr = process.stderr.write.bind(process.stderr);
+    const savedLog = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+    let stdout = '';
+    let stderr = '';
+    (process.stdout as unknown as { write: (c: unknown) => boolean }).write = (c: unknown) => {
+      stdout += typeof c === 'string' ? c : String(c);
+      return true;
+    };
+    (process.stderr as unknown as { write: (c: unknown) => boolean }).write = (c: unknown) => {
+      stderr += typeof c === 'string' ? c : String(c);
+      return true;
+    };
+    console.log = (...a: unknown[]) => { stdout += a.map(String).join(' ') + '\n'; };
+    console.error = (...a: unknown[]) => { stderr += a.map(String).join(' ') + '\n'; };
+    console.warn = console.error;
+    console.info = console.log;
+    try {
+      const code = await mod.cliMain(args);
+      return { code, stdout, stderr };
+    } finally {
+      (process.stdout as unknown as { write: (c: unknown) => boolean }).write = savedOut;
+      (process.stderr as unknown as { write: (c: unknown) => boolean }).write = savedErr;
+      console.log = savedLog.log;
+      console.error = savedLog.error;
+      console.warn = savedLog.warn;
+      console.info = savedLog.info;
+    }
+  }
+
+  private async dhvCheck(file: string): Promise<{ ok: boolean; output: string }> {
+    const abs = path.isAbsolute(file) ? file : path.resolve(this.opts.workspace, file);
+    const r = await this.captureCli(['check', abs]);
+    return { ok: r.code === 0, output: (r.stdout + r.stderr).trim() };
+  }
+
+  private async dhvRunInproc(args: string[]): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }> {
+    const r = await this.captureCli(args);
+    return { ok: r.code === 0, code: r.code, stdout: r.stdout, stderr: r.stderr };
   }
 
   private jsonFields(s: string): Map<string, string> {
