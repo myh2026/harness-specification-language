@@ -3514,9 +3514,10 @@ project {
   const r = run(['emit', path.join(dir, 'jc.hsl'), '--out', dir]);
   assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
   // 真机编译级：javac 全部生成 .java（此前 java 后端从未真机编译过）
+  // -encoding UTF-8：Windows javac 默认 cp1252，生成物头部中文注释会 unmappable
   const javaFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.java')).map((f) => f);
   assert(javaFiles.length > 0, `应生成 .java 文件：${fs.readdirSync(dir).join(', ')}`);
-  execFileSync(JAVAC, ['-d', dir, ...javaFiles], { cwd: dir, timeout: 120_000, stdio: 'pipe' });
+  execFileSync(JAVAC, ['-encoding', 'UTF-8', '-d', dir, ...javaFiles], { cwd: dir, timeout: 120_000, stdio: 'pipe' });
 });
 
 // ---- v0.2.55 第七轮锁定（L-15 / L-17 / L-18 / L-20）----
@@ -3537,12 +3538,13 @@ project { main -> "gen/python/main.py" : python, main -> "gen/javascript/main.js
   assert(py.includes("globals().get('__name__') == '__main__'"), `python 入口守卫缺失：\n${py.slice(-300)}`);
   assert(js.includes('_dhv_is_entry'), `js 入口守卫缺失：\n${js.slice(-300)}`);
   // 行为级：真机运行生成物，输出与 interp 全等（L-15 前生成物零输出零副作用 exit 0）
+  // Windows：python print 输出 \r\n —— 统一剥离 \r 再比对
   const interp = run(['run', path.join(dir, 'eg.hsl')]);
-  const interpLines = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
+  const interpLines = interp.stdout.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
   const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
-  const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
-  const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));
+  const pyLines = pyOut.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
+  const jsLines = jsOut.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
   assert(pyLines.join('|') === interpLines.join('|'), `python 输出漂移：${pyLines.join('|')} vs ${interpLines.join('|')}`);
   assert(jsLines.join('|') === interpLines.join('|'), `js 输出漂移：${jsLines.join('|')} vs ${interpLines.join('|')}`);
 });
@@ -3585,12 +3587,13 @@ project { q -> "gen/python/q.py" : python, q -> "gen/javascript/q.js" : javascri
   const r = run(['emit', path.join(dir, 'td.hsl'), '--out', dir]);
   assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
   const interp = run(['run', path.join(dir, 'td.hsl')]);
-  const want = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
+  // Windows：python print 输出 \r\n（文本模式换行翻译）—— 统一剥离 \r 再比对
+  const want = interp.stdout.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
   assertEq(want[0], 'emit::d1=-3', `interp 截断除语义锚点：${want[0]}`);
   const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
-  const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
-  const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));
+  const pyLines = pyOut.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
+  const jsLines = jsOut.replace(/\r/g, '').split('\n').filter((l) => l.startsWith('emit::'));
   // 历史缺陷锚点：python // floor（d1=-4）、js 浮点除（d3=3.2）、python floor 模（m1=1）
   assertEq(pyLines.join('|'), want.join('|'), `python 除模漂移：${pyLines.join('|')}`);
   assertEq(jsLines.join('|'), want.join('|'), `js 除模漂移：${jsLines.join('|')}`);
