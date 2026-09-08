@@ -129,6 +129,32 @@ test('回归', 'dsh scripted 端到端（剧本 Agent 真实跑通）', () => {
   assert(fixed.includes('export function median'), 'scripted run 后 stats.ts 应实现 median');
 });
 
+test('回归', 'dsh scripted 端到端 · CRLF 工作区（Windows autocrlf 回归，v0.2.57）', () => {
+  // Windows 宿主 git autocrlf 会把工作区文件转为 \r\n，fixture 的 old_text 是
+  // LF —— 此前 fsEdit 精确匹配静默失败（run 仍绿灯，edit failures:1 是唯一痕迹，
+  // 三平台 CI 的 windows-latest job 实测抓到）。fsEdit 现按 LF 归一化重试并保持
+  // 原文件主导行尾写回；本用例在全部平台复现该场景锁定修复。
+  const wsCopy = path.join(TMP, 'dsh-ws-crlf');
+  fs.cpSync(path.join(ROOT, 'examples/dsh/workspace'), wsCopy, { recursive: true });
+  for (const f of ['stats.ts', 'stats.test.ts']) {
+    const p = path.join(wsCopy, f);
+    fs.writeFileSync(p, fs.readFileSync(p, 'utf-8').replace(/\r?\n/g, '\r\n'), 'utf-8');
+  }
+  const r = run([
+    'run', 'examples/dsh/dsh.hsl',
+    '--fixture', 'examples/dsh/fixtures/fix-variance.json',
+    '--task', '修复 stats.ts 方差（CRLF 工作区）',
+    '--workspace', fwd(wsCopy),
+    '--quiet',
+  ]);
+  assertEq(r.code, 0, `CRLF 工作区 dsh scripted 应 Ok（exit=${r.code}）\n${r.stdout.slice(-500)}`);
+  const fixed = fs.readFileSync(path.join(wsCopy, 'stats.ts'), 'utf-8');
+  assert(fixed.includes('xs.length - 1'), 'CRLF 工作区：edit 应经 LF 归一化命中（样本方差 n-1）');
+  assert(fixed.includes('export function median'), 'CRLF 工作区：median 应已实现');
+  // 写回保持 CRLF 主导风格（不被迫整体转 LF）
+  assert((fixed.match(/\r\n/g) ?? []).length > 0, 'CRLF 文件写回应保持 \\r\\n 主导行尾');
+});
+
 test('回归', '? 的 From 显式转换通道（ProviderError → HarnessError）', () => {
   const dir = path.join(TMP, 'from');
   fs.mkdirSync(dir, { recursive: true });
@@ -504,7 +530,7 @@ print('semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
   try {
-    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
     assert(stdout.includes('semantics-ok'), `语义验证输出异常：${stdout}`);
   } catch (e) {
     throw new Error(`生成代码语义验证失败：${(e as Error).message}`);
@@ -581,7 +607,7 @@ print('iflet-semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
   try {
-    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
     assert(stdout.includes('iflet-semantics-ok'), `iflet 语义验证输出异常：${stdout}`);
   } catch (e) {
     throw new Error(`iflet 语义验证失败：${(e as Error).message}`);
@@ -624,7 +650,7 @@ print('whilelet-semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
   try {
-    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
     assert(stdout.includes('whilelet-semantics-ok'), `whilelet 语义验证输出异常：${stdout}`);
   } catch (e) {
     throw new Error(`whilelet 语义验证失败：${(e as Error).message}`);
@@ -674,7 +700,7 @@ print('shorthand-semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
   try {
-    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+    const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
     assert(stdout.includes('shorthand-semantics-ok'), `shorthand 语义验证输出异常：${stdout}`);
   } catch (e) {
     throw new Error(`shorthand 语义验证失败：${(e as Error).message}`);
@@ -730,7 +756,7 @@ assert ns['pick']([]) == -1, ns['pick']([])
 print('iflet-tail-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('iflet-tail-ok'), `if-let 尾语义验证异常：${stdout}`);
 });
 
@@ -762,7 +788,7 @@ assert ns['g'](2) == 30, ns['g'](2)
 print('nested-if-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('nested-if-ok'), `嵌套 if 语义验证异常：${stdout}`);
 });
 
@@ -791,7 +817,7 @@ assert ns['h'](None, None) == 'none', ns['h'](None, None)
 print('elseif-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('elseif-ok'), `else-if-let 语义验证异常：${stdout}`);
 });
 
@@ -854,7 +880,7 @@ assert ns['get_tour']([], {'k': 3}) == 3, ns['get_tour']([], {'k': 3})
 print('methods-tour-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('methods-tour-ok'), `新方法语义验证异常：${stdout}`);
 });
 
@@ -887,7 +913,7 @@ assert ns['vec_map']([1, 2]) == [2, 3], ns['vec_map']([1, 2])
 print('opt-map-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('opt-map-ok'), `Option::map 分发验证异常：${stdout}`);
 });
 
@@ -1067,7 +1093,7 @@ assert ns['cloned_tour'](None) == -9
 print('v144-methods-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('v144-methods-ok'), `v1.4.4 方法语义验证异常：${stdout}`);
 });
 
@@ -1106,7 +1132,7 @@ assert ns['tup']() == 120, ns['tup']()
 print('tuple-idx-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('tuple-idx-ok'), `元组语义验证异常：${stdout}`);
 });
 
@@ -1343,7 +1369,7 @@ assert count_down(None) == 0, count_down(None)
 print('py-countdown-ok')
 `;
   fs.writeFileSync(path.join(out, 'verify.py'), runner);
-  const stdout = execFileSync('python3', [path.join(out, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(out, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('py-countdown-ok'), `python count_down 语义验证异常：${stdout}`);
 });
 
@@ -1519,7 +1545,7 @@ assert ns['drain_vec']([]) == -56, ns['drain_vec']([])
 print('single-eval-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('single-eval-ok'), `副作用单次求值验证异常：${stdout}`);
 });
 
@@ -1748,7 +1774,7 @@ assert pop_sum([]) == 0, pop_sum([])
 print('py-popsum-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyVerify);
-  const pyOut = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const pyOut = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(pyOut.includes('py-popsum-ok'), `python pop_sum 语义验证异常：${pyOut}`);
 });
 
@@ -2157,7 +2183,7 @@ assert opt_val(42) == 42 and opt_val(None) == -1, (opt_val(42), opt_val(None))
 print('py-letblock-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), runner);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('py-letblock-ok'), `python let 块初始化语义验证异常：${stdout}`);
 });
 
@@ -3132,7 +3158,7 @@ assert ns['parse_sem']() == 101151, ns['parse_sem']()
 print('parse-py-semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('parse-py-semantics-ok'), `py parse 语义验证异常：${stdout}`);
 });
 
@@ -3191,7 +3217,7 @@ assert ns['opt_filter_sem']() == 2, ns['opt_filter_sem']()
 print('filter-py-semantics-ok')
 `;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
-  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const stdout = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(stdout.includes('filter-py-semantics-ok'), `py filter 语义验证异常（5-1-2=2）：${stdout}`);
   const cpp = fs.readFileSync(path.join(dir, 'of.cpp'), 'utf-8');
   assert(!cpp.includes('未翻译'), `cpp 应活体翻译 filter：\n${cpp}`);
@@ -3513,7 +3539,7 @@ project { main -> "gen/python/main.py" : python, main -> "gen/javascript/main.js
   // 行为级：真机运行生成物，输出与 interp 全等（L-15 前生成物零输出零副作用 exit 0）
   const interp = run(['run', path.join(dir, 'eg.hsl')]);
   const interpLines = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
-  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
   const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
   const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));
@@ -3538,7 +3564,7 @@ exec(chr(10).join(lines[fn_start:]), ns)
 assert ns['main']() == 0
 print('inert-ok')`;
   fs.writeFileSync(path.join(dir, 'verify.py'), pyCode);
-  const out = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const out = execFileSync('python3', [path.join(dir, 'verify.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(out.includes('inert-ok'), `exec 消费形态应惰性：${out}`);
 });
 
@@ -3561,7 +3587,7 @@ project { q -> "gen/python/q.py" : python, q -> "gen/javascript/q.js" : javascri
   const interp = run(['run', path.join(dir, 'td.hsl')]);
   const want = interp.stdout.split('\n').filter((l) => l.startsWith('emit::'));
   assertEq(want[0], 'emit::d1=-3', `interp 截断除语义锚点：${want[0]}`);
-  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000 });
+  const pyOut = execFileSync('python3', [path.join(dir, 'gen/python/main.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   const jsOut = execFileSync('bun', [path.join(dir, 'gen/javascript/main.js')], { encoding: 'utf-8', timeout: 30_000 });
   const pyLines = pyOut.split('\n').filter((l) => l.startsWith('emit::'));
   const jsLines = jsOut.split('\n').filter((l) => l.startsWith('emit::'));

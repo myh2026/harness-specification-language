@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## v0.2.57（2026-09-08）—— 全链路 IDE（vsix 捆绑工具链）+ 三平台 CI + python 跨平台回退
+## v0.2.57（2026-09-08）—— 全链路 IDE（vsix 捆绑工具链）+ 三平台 CI + Windows 兼容修复
 
-三项面向「下载即用」的交付升级：
+三项面向「下载即用」的交付升级（Windows 矩阵首跑抓到 2 个真实兼容 bug，随批修复）：
 
 - **HSL IDE v0.2.0（全链路）**：VS Code 扩展从语法高亮骨架升级为完整 IDE 闭环——
   `HSL: Type Check`（错误行 file:line:col 解析进问题面板诊断）、`HSL: Run`
@@ -18,11 +18,20 @@
   `ide` job（校验 + vsix 打包门禁）；移除 `paths-ignore: ide/**`（ide 有真实 CI
   价值）。release.yml 新增 `ide-vsix` job → vsix 随四平台 dhv 二进制一同附到
   GitHub Release（sha256sums 同批）。
-- **python3→python 跨平台回退**（emit 校验 + native python 双通道）：validate.ts
-  与 native.ts 均硬编码 `python3`——Windows 宿主常态只有 `python`，emit 的 python
-  语法校验与 `native python` 逃生舱在 Windows 直接失败。新增 `execPy` 助手
-  （ENOENT 时回退 `python`），注释宣称的「python3 -m py_compile → python」兼容
-  从此为真。158 用例回归全绿。
+- **python3→python 跨平台回退 + PYTHONUTF8 注入**（emit 校验 + native python 双通道）：
+  validate.ts 与 native.ts 均硬编码 `python3`——Windows 宿主常态只有 `python`，
+  emit 的 python 语法校验与 `native python` 逃生舱在 Windows 直接失败。新增
+  `execPy` 助手（ENOENT 回退 `python` + 注入 `PYTHONUTF8=1`——Windows 默认
+  cp1252 代码页读 UTF-8 生成物 `UnicodeDecodeError`，三平台 CI 实测抓到）。
+  run-all.ts 全部 20 处 python 子进程同步注入。
+- **fsEdit CRLF 容忍**（host.ts，Windows autocrlf 实测）：git autocrlf 使 Windows
+  工作区文件为 `\r\n`，fixture/剧本的 `old_text` 是 LF → `$host.fs.edit` 精确匹配
+  静默失败（run 仍绿灯，仅 `failures:1` 留痕——正是三平台 CI windows-latest job
+  抓到的形态）。现精确匹配失败时按 LF 归一化重试，写回保持原文件主导行尾风格
+  （CRLF 文件不被迫整体转 LF）；新增 CRLF 回归用例（159 用例，全平台复现锁定）。
+
+  验证：run-all 158→159 全绿（Linux 实测）；Windows/macOS 由 dhv-ts-matrix job
+  守卫。
 
 ## v0.2.12（2026-09-06）—— 嵌入执行面（宿主进程内复用）
 

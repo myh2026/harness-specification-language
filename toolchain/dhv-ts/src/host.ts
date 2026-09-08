@@ -351,7 +351,24 @@ export class Host {
     if (!fs.existsSync(abs)) return { ok: false, error: `文件不存在：${p}` };
     const src = fs.readFileSync(abs, 'utf-8');
     const count = src.split(oldText).length - 1;
-    if (count === 0) return { ok: false, error: `old_text 未找到（0 处）` };
+    if (count === 0) {
+      // CRLF 容忍（Windows 宿主实测：git autocrlf 使工作区文件为 \r\n，而
+      // 剧本/fixture 的 old_text 通常是 LF → 精确匹配静默失败）。归一化重试：
+      // 按 LF 匹配替换，写回保持原文件主导行尾风格（CRLF 文件不被迫整体转 LF）。
+      const crlf = (src.match(/\r\n/g) ?? []).length;
+      const lf = (src.match(/(?<!\r)\n/g) ?? []).length;
+      if (crlf > 0) {
+        const norm = src.replace(/\r\n/g, '\n');
+        const n = norm.split(oldText).length - 1;
+        if (n === 1) {
+          const patched = norm.replace(oldText, newText);
+          fs.writeFileSync(abs, crlf >= lf ? patched.replace(/\n/g, '\r\n') : patched, 'utf-8');
+          return { ok: true };
+        }
+        if (n > 1) return { ok: false, error: `old_text 非唯一（CRLF 归一化后 ${n} 处）` };
+      }
+      return { ok: false, error: `old_text 未找到（0 处）` };
+    }
     if (count > 1) return { ok: false, error: `old_text 非唯一（${count} 处）` };
     fs.writeFileSync(abs, src.replace(oldText, newText), 'utf-8');
     return { ok: true };

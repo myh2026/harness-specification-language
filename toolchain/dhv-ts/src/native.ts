@@ -15,13 +15,15 @@ import { KEYWORDS, JS_RESERVED } from './lexer';
 const execFileP = promisify(execFile);
 
 /** 跨平台 python 启动：python3 优先，宿主无该别名（Windows 常态）回退
- *  python。与 backends/validate.ts 的 execPy 同源（三平台 CI 兼容层）。 */
+ *  python；并注入 PYTHONUTF8=1（Windows 代码页兼容）。与 backends/
+ *  validate.ts 的 execPy 同源（三平台 CI 兼容层）。 */
 async function execPy(args: string[], opts: { env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number } = {}) {
+  const env = { ...process.env, PYTHONUTF8: '1', ...(opts.env ?? {}) };
   try {
-    return await execFileP('python3', args, opts);
+    return await execFileP('python3', args, { ...opts, env });
   } catch (err) {
     if ((err as { code?: string }).code === 'ENOENT') {
-      return await execFileP('python', args, opts);
+      return await execFileP('python', args, { ...opts, env });
     }
     throw err;
   }
