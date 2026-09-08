@@ -7,7 +7,7 @@
 ```
   ┌─────────────────────────────────────────────────┐
   │  dhv-ts — HSL 参考解释器          v0.2.56       │
-  │  Harness Specification Language · BNF v1.4.7    │
+  │  Harness Specification Language · BNF v1.5.0    │
   │  38 后端：32 编程语言 + 6 静态格式               │
   └─────────────────────────────────────────────────┘
 ```
@@ -431,7 +431,7 @@ dhv-ts/
   182 文件 / 38 语言实测全部通过语法校验；python 生成代码经 exec 语义级验证）
 - **双向工程**：`@dhv:source-map` / `@dhv:hsl-mirror` / `@dhv:end-source-map` 三标记围栏
   协议；`sync` 按名回写 + 回写后解析校验 + 失败回滚；`watch` File Watcher
-- **标准库 10 模块**：`import { f } from "std/<mod>";`（BNF v1.4 附录 C）——
+- **标准库 10 模块**：`import { f } from "std/<mod>";`（BNF v1.5 附录 C）——
   core/collections/text/math/io/json/time/random/env/iter，约 60 函数
 - **能力分级诚实边界**：full（python/ts/js 活体翻译）/ logic（rust/go/cpp 语句子集）/
   contract（26 语言类型契约 + 围栏 HSL 镜像）/ 静态（6 格式原文 + 插值），写入 manifest

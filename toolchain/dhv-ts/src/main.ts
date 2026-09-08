@@ -98,7 +98,7 @@ function banner(args: CliArgs): string {
     '',
     '  ┌─────────────────────────────────────────────────┐',
     '  │  dhv-ts — HSL 参考解释器          v' + VERSION + '        │',
-    '  │  Harness Specification Language · BNF v1.4.5    │',
+    '  │  Harness Specification Language · BNF v1.5.0    │',
     '  │  38 后端：32 编程语言 + 6 静态格式               │',
     '  └─────────────────────────────────────────────────┘',
     '',
@@ -187,7 +187,7 @@ async function cmdEmit(args: CliArgs): Promise<number> {
 
 async function cmdTargets(): Promise<number> {
   console.log(banner({ cmd: 'help' } as CliArgs));
-  console.log(`后端语言注册表（BNF v1.4 §5.2）—— ${LANGS.length} 编程语言 + ${STATIC_LANGS.length} 静态格式\n`);
+  console.log(`后端语言注册表（BNF v1.5 §5.2）—— ${LANGS.length} 编程语言 + ${STATIC_LANGS.length} 静态格式\n`);
   const tiers: [string, string, typeof LANGS][] = [
     ['Tier 1', 'Harness 核心（活体/语句子集翻译优先）', LANGS.filter((l) => l.tier === 1)],
     ['Tier 2', '脚本与动态', LANGS.filter((l) => l.tier === 2)],
