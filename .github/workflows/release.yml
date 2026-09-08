@@ -84,9 +84,31 @@ jobs:
           name: dhv-${{ github.ref_name }}-${{ matrix.target }}
           path: ${{ runner.temp }}/dhv-${{ github.ref_name }}-*
 
+  # ── HSL IDE vsix（全链路 IDE 安装包：含捆绑 dhv-ts 工具链） ──────────
+  ide-vsix:
+    name: Package HSL IDE vsix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Package vsix（捆绑 dhv-ts → vsce → 清理）
+        run: bun scripts/package-ide.ts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hsl-ide-vsix
+          path: dist-ide/*.vsix
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, ide-vsix]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,7 +145,7 @@ jobs:
       - name: Generate sha256 checksums
         working-directory: /tmp/artifacts
         run: |
-          sha256sum dhv-* > sha256sums.txt
+          sha256sum dhv-* hsl-ide-*.vsix > sha256sums.txt
           cat sha256sums.txt
 
       - name: Create Release

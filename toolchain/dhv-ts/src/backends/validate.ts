@@ -14,6 +14,19 @@ import * as fs from 'node:fs';
 
 const execFileP = promisify(execFile);
 
+/** 跨平台 python 启动：python3 优先，宿主无该别名（Windows 常态：只有
+ *  python）时回退 python。三平台 CI（win/mac/linux）的 python 逃生舱兼容层。 */
+async function execPy(args: string[], opts: { timeout?: number; env?: NodeJS.ProcessEnv; maxBuffer?: number } = {}) {
+  try {
+    return await execFileP('python3', args, opts);
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') {
+      return await execFileP('python', args, opts);
+    }
+    throw err;
+  }
+}
+
 export interface ValidationResult {
   ok: boolean;
   tool: string;
@@ -24,7 +37,7 @@ export async function validateGeneratedFile(absPath: string, langId: string): Pr
   try {
     switch (langId) {
       case 'python': {
-        await execFileP('python3', ['-m', 'py_compile', absPath], { timeout: 15_000 });
+        await execPy(['-m', 'py_compile', absPath], { timeout: 15_000 });
         return { ok: true, tool: 'python3 -m py_compile' };
       }
       case 'typescript': {

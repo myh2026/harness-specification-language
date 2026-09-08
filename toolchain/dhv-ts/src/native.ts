@@ -14,6 +14,19 @@ import { KEYWORDS, JS_RESERVED } from './lexer';
 
 const execFileP = promisify(execFile);
 
+/** 跨平台 python 启动：python3 优先，宿主无该别名（Windows 常态）回退
+ *  python。与 backends/validate.ts 的 execPy 同源（三平台 CI 兼容层）。 */
+async function execPy(args: string[], opts: { env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number } = {}) {
+  try {
+    return await execFileP('python3', args, opts);
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') {
+      return await execFileP('python', args, opts);
+    }
+    throw err;
+  }
+}
+
 const PY_STMT_KEYWORDS = /^(if|else|elif|for|while|def|class|return|import|from|try|except|finally|with|pass|break|continue|print|raise|assert|del|global|nonlocal|lambda|yield|and|or|not|in|is)\b/;
 
 /**
@@ -157,7 +170,7 @@ export async function evalNativeBlock(
       'sys.stdout.write("__HSL_OUT__" + json.dumps(__hsl_result__, default=str))',
     ].join('\n');
     try {
-      const { stdout } = await execFileP('python3', ['-c', wrapper], {
+      const { stdout } = await execPy(['-c', wrapper], {
         env: { ...process.env, HSL_NATIVE_CTX: ctxJson },
         timeout: 30_000,
         maxBuffer: 10 * 1024 * 1024,

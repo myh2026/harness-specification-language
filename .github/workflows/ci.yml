@@ -7,7 +7,6 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
-      - 'ide/**'
       - 'LICENSE'
       - '.gitignore'
   pull_request:
@@ -97,6 +96,66 @@ jobs:
         run: bun tests/hsl/run-all.ts
         timeout-minutes: 15
 
+  # ── Job 5: dhv-ts 三平台矩阵（Windows / macOS / Linux） ──────────────
+  # dhv-ts 是纯 Bun/TS 零依赖实现（run-all.ts 内置 fwd() 处理 Windows 路径）
+  # 但此前只在 ubuntu 验证 —— Windows 路径语义 / python·bash 校验器可用性 /
+  # os.tmpdir 行为的回归无门槛拦。此处全量套件三平台跑（失败不阻断其余 job）。
+  # python3→python 回退（v0.2.57 validate.ts / native.ts execPy）由本 job 守卫。
+  dhv-ts-matrix:
+    name: dhv-ts suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # emit 交叉语法校验需要 python（Windows 宿主通常只有 python 无 python3 别名）
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run dhv-ts test suite
+        working-directory: toolchain
+        shell: bash
+        run: bun tests/hsl/run-all.ts
+        timeout-minutes: 20
+
+  # ── Job 6: HSL IDE 扩展（校验 + vsix 打包） ──────────────
+  # 全链路 IDE（check/run/emit + 捆绑 dhv-ts）：发布级校验 + vsix 产物
+  # （Release 的安装包由 release.yml 的 ide-vsix job 打同版本，此 job 先行门禁）。
+  ide:
+    name: HSL IDE (validate + vsix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: IDE 发布级校验（12 项：JSON / regex / 解析器单测 / 命令完整性）
+        run: bun ide/tests/validate.js
+
+      - name: Package vsix（捆绑 dhv-ts 工具链）
+        run: bun scripts/package-ide.ts
+
+      - name: Upload vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hsl-ide-vsix
+          path: dist-ide/*.vsix
+          retention-days: 14
+          if-no-files-found: error
+
   # ── Job 4: 版本号一致性守卫 ─────────────────────────────
   version-sync:
     name: Version sync check
@@ -122,3 +181,38 @@ jobs:
             exit 1
           fi
           echo "OK: both at ${{ steps.dhv.outputs.version }}"
+
+  # ── Job 5: dhv-ts 三平台矩阵（Windows / macOS / Linux）──
+  # dhv-ts 是纯 Bun/TS 跨平台实现，测试套件自带 Windows 意识（run-all.ts 的
+  # fwd() 把路径转正斜杠、os.tmpdir()/mkdtempSync/execFileSync 均跨平台），
+  # 但路径语义与工具可用性差异（python3 -m py_compile、bash -n）只有在真实
+  # 非 Linux runner 上才能暴露。Rust 编译矩阵成本高，且 dhv-ts-suite 已覆盖
+  # ubuntu，故仅对 dhv-ts 套件做跨平台展开。
+  dhv-ts-matrix:
+    name: dhv-ts suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # emit 交叉语法校验调用 python3 -m py_compile（backends/validate.ts）；
+      # setup-python 在 Windows 上会同时提供 python 与 python3 别名。
+      # bash -n 依赖 Windows runner 自带的 Git for Windows bash.exe（在 PATH 中）。
+      - name: Install Python (for python3 cross-validation)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run dhv-ts test suite
+        working-directory: toolchain
+        shell: bash
+        run: bun tests/hsl/run-all.ts
+        timeout-minutes: 20

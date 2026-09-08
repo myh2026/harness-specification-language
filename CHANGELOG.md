@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## v0.2.57（2026-09-08）—— 全链路 IDE（vsix 捆绑工具链）+ 三平台 CI + python 跨平台回退
+
+三项面向「下载即用」的交付升级：
+
+- **HSL IDE v0.2.0（全链路）**：VS Code 扩展从语法高亮骨架升级为完整 IDE 闭环——
+  `HSL: Type Check`（错误行 file:line:col 解析进问题面板诊断）、`HSL: Run`
+  （模型/任务/剧本交互收集 + 流式输出 + verdict 摘要 + report.md 一键打开）、
+  `HSL: Emit`（38 后端 Tier 分组 QuickPick + 产物揭示 + manifest 打开）、保存自动
+  check（防抖静默）。纯解析层抽为 `ide/parsers.js`（无 vscode 依赖，validate.js
+  新增 4 组单测：括号消息 / Windows 盘符 / Tier 分组 / 产物容错）。**vsix 捆绑
+  dhv-ts**（`scripts/package-ide.ts`：复制 toolchain/dhv-ts 进包 → vsce → 清理；
+  223KB/45 文件）——装扩展即得完整工具链，唯一前置是 bun。工具链五级解析
+  （配置 → DHV_TS → vsix 捆绑 → 工作区 → 兄弟仓库）。
+- **三平台 CI 矩阵**：ci.yml 新增 `dhv-ts-matrix` job（ubuntu/windows/macos 全量
+  158 用例；此前 4 job 全在 ubuntu，Windows 路径语义 / 校验器可用性回归零拦截）+
+  `ide` job（校验 + vsix 打包门禁）；移除 `paths-ignore: ide/**`（ide 有真实 CI
+  价值）。release.yml 新增 `ide-vsix` job → vsix 随四平台 dhv 二进制一同附到
+  GitHub Release（sha256sums 同批）。
+- **python3→python 跨平台回退**（emit 校验 + native python 双通道）：validate.ts
+  与 native.ts 均硬编码 `python3`——Windows 宿主常态只有 `python`，emit 的 python
+  语法校验与 `native python` 逃生舱在 Windows 直接失败。新增 `execPy` 助手
+  （ENOENT 时回退 `python`），注释宣称的「python3 -m py_compile → python」兼容
+  从此为真。158 用例回归全绿。
+
 ## v0.2.12（2026-09-06）—— 嵌入执行面（宿主进程内复用）
 
 ORG（旗舰应用）单二进制分发驱动的三项稳健性升级，CLI 行为零变化：

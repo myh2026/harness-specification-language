@@ -1,8 +1,8 @@
 {
   "name": "hsl-ide",
   "displayName": "HSL IDE — Harness Specification Language",
-  "description": "HSL 语言支持：语法高亮（graph/edge/project/scale/native/block 全量构件）、语言配置、代码片段、暗色主题。基于 VSCode，砍掉冗余，专注 HSL/DHV 工程。",
-  "version": "0.1.1",
+  "description": "HSL 全链路 IDE：编写 → check（问题面板诊断）→ run（agent 执行 + 报告）→ emit（38 后端投射）。内置 dhv-ts 工具链捆绑（vsix 安装即用，仅需 bun）；语法高亮 / 语言配置 / 片段 / 暗色主题齐备。",
+  "version": "0.2.0",
   "publisher": "dhv-project",
   "license": "MIT",
   "engines": {
@@ -21,7 +21,14 @@
     "compiler",
     "ai"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:hsl",
+    "onCommand:hsl.check",
+    "onCommand:hsl.run",
+    "onCommand:hsl.emit",
+    "onCommand:hsl.compile",
+    "onCommand:hsl.targets"
+  ],
   "main": "./extension.js",
   "contributes": {
     "languages": [
@@ -64,23 +71,104 @@
     ],
     "commands": [
       {
+        "command": "hsl.check",
+        "title": "HSL: Type Check (dhv-ts check)",
+        "category": "HSL",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "hsl.run",
+        "title": "HSL: Run (dhv-ts run)",
+        "category": "HSL",
+        "icon": "$(play)"
+      },
+      {
+        "command": "hsl.emit",
+        "title": "HSL: Emit to Backend… (dhv-ts emit)",
+        "category": "HSL",
+        "icon": "$(package)"
+      },
+      {
         "command": "hsl.compile",
-        "title": "HSL: Compile (dhv emit)",
+        "title": "HSL: Compile (emit 兼容别名)",
         "category": "HSL"
       },
       {
-        "command": "hsl.check",
-        "title": "HSL: Type Check (dhv check)",
+        "command": "hsl.targets",
+        "title": "HSL: Show Target Registry (38 backends)",
         "category": "HSL"
       }
     ],
+    "keybindings": [
+      {
+        "command": "hsl.check",
+        "key": "ctrl+alt+f7",
+        "mac": "cmd+alt+f7",
+        "when": "editorLangId == hsl"
+      },
+      {
+        "command": "hsl.run",
+        "key": "ctrl+alt+f8",
+        "mac": "cmd+alt+f8",
+        "when": "editorLangId == hsl"
+      },
+      {
+        "command": "hsl.emit",
+        "key": "ctrl+alt+f9",
+        "mac": "cmd+alt+f9",
+        "when": "editorLangId == hsl"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "hsl.check",
+          "when": "editorLangId == hsl",
+          "group": "hsl@1"
+        },
+        {
+          "command": "hsl.run",
+          "when": "editorLangId == hsl",
+          "group": "hsl@2"
+        },
+        {
+          "command": "hsl.emit",
+          "when": "editorLangId == hsl",
+          "group": "hsl@3"
+        }
+      ]
+    },
     "configuration": {
       "title": "HSL IDE",
       "properties": {
-        "hsl.dhvPath": {
+        "hsl.dhvTs": {
           "type": "string",
-          "default": "dhv",
-          "description": "dhv 编译器可执行文件路径"
+          "default": "auto",
+          "description": "dhv-ts 解释器入口（src/main.ts）路径；auto = 五级解析（vsix 捆绑 → 工作区 toolchain → 兄弟仓库）"
+        },
+        "hsl.bunPath": {
+          "type": "string",
+          "default": "bun",
+          "description": "bun 运行时可执行文件（工具链宿主）"
+        },
+        "hsl.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "保存 .hsl 时自动 check（诊断进问题面板，静默不打扰）"
+        },
+        "hsl.model": {
+          "type": "string",
+          "enum": [
+            "scripted",
+            "deepseek"
+          ],
+          "default": "scripted",
+          "description": "HSL: Run 的默认模型（scripted 确定剧本 / deepseek 真实 LLM）"
+        },
+        "hsl.maxTurns": {
+          "type": "number",
+          "default": 24,
+          "description": "HSL: Run 的 AgentLoop 最大轮数（--max-turns）"
         },
         "hsl.scale": {
           "type": "string",
@@ -89,21 +177,27 @@
             "microkernel"
           ],
           "default": "monolith",
-          "description": "默认编译尺度（对应 scale 声明的回退值）"
+          "description": "emit 编译尺度（对应 scale 声明的回退值）"
         },
         "hsl.outDir": {
           "type": "string",
           "default": ".hsl-gen",
-          "description": "hsl.compile（dhv emit）的产物目录，相对工作区根"
+          "description": "HSL: Emit 的产物目录（manifest.json + 生成文件），相对工作区根"
+        },
+        "hsl.runOutDir": {
+          "type": "string",
+          "default": ".hsl-runs",
+          "description": "HSL: Run 的产物目录（report.md / transcript / events），相对工作区根"
         }
       }
     }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dhv-project/hsl"
+    "url": "https://github.com/myh2026/harness-specification-language"
   },
   "scripts": {
-    "package": "vsce package"
+    "test": "node tests/validate.js",
+    "package": "bun ../../scripts/package-ide.ts"
   }
 }

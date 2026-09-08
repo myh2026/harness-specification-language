@@ -20,3 +20,7 @@ Thumbs.db
 .env
 *.token
 gha-creds-*.json
+
+# HSL IDE 打包（临时捆绑与产物，勿提交）
+ide/dhv-ts/
+dist-ide/
