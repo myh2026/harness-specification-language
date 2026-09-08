@@ -10,12 +10,7 @@ export function variance(xs: number[]): number {
   if (xs.length === 0) return 0;
   const m = mean(xs);
   const s = xs.reduce((a, x) => a + (x - m) ** 2, 0);
-  return s / (xs.length - 1);
+  return s / xs.length;
 }
 
-export function median(xs: number[]): number {
-  if (xs.length === 0) return 0;
-  const sorted = [...xs].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
+// TODO: 缺失 median 实现

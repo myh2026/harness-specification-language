@@ -111,14 +111,22 @@ test('回归', 'dsh check（10 模块）', () => {
 });
 
 test('回归', 'dsh scripted 端到端（剧本 Agent 真实跑通）', () => {
+  // 工作区副本隔离：scripted run 会真实修改 workspace/stats.ts
+  // （历史事故：直接对仓库内 workspace 执行 → 污染入库 → fixture old_text 漂移）。
+  const wsCopy = path.join(TMP, 'dsh-ws');
+  fs.cpSync(path.join(ROOT, 'examples/dsh/workspace'), wsCopy, { recursive: true });
   const r = run([
     'run', 'examples/dsh/dsh.hsl',
     '--fixture', 'examples/dsh/fixtures/fix-variance.json',
     '--task', '修复 stats.ts 方差',
-    '--workspace', 'examples/dsh/workspace',
+    '--workspace', fwd(wsCopy),
     '--quiet',
   ]);
   assertEq(r.code, 0, `dsh scripted 应 Ok（exit=${r.code}）\n${r.stdout.slice(-500)}`);
+  // 修复真实发生：副本中的 stats.ts 应含 n-1 分母与 median 实现
+  const fixed = fs.readFileSync(path.join(wsCopy, 'stats.ts'), 'utf-8');
+  assert(fixed.includes('xs.length - 1'), 'scripted run 后 stats.ts 应为样本方差（n-1）');
+  assert(fixed.includes('export function median'), 'scripted run 后 stats.ts 应实现 median');
 });
 
 test('回归', '? 的 From 显式转换通道（ProviderError → HarnessError）', () => {
