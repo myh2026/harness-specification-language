@@ -3793,6 +3793,91 @@ fn main() -> i64 { return 0; }`);
 });
 
 // ---------------------------------------------------------------------------
+// v0.2.58 回归：位运算 BigInt 语义 + find 码点索引 + B-6 方法面上游化
+// ---------------------------------------------------------------------------
+test('运行期', '位运算 BigInt 语义（v0.2.58：1i64<<40 此前静默得 256）', () => {
+  const r = run(['run', writeTmp(`fn main() -> i64 {
+    let a = 1i64 << 40;
+    let ann: i64 = 7;
+    let b = ann << 33;
+    let c = 5i32 << 3;
+    let d = 1099511627776i64 & 255i64;
+    let e = 0i64 | 1099511627776i64;
+    let f = 1099511627776i64 >> 20;
+    let mut total = 0;
+    if a == 1099511627776 { total = total + 1; }
+    if b == 60129542144 { total = total + 10; }
+    if c == 40 { total = total + 100; }
+    if d == 0 { total = total + 1000; }
+    if e == 1099511627776 { total = total + 10000; }
+    if f == 1048576 { total = total + 100000; }
+    println!("{}", total);
+    0
+}`), '--quiet']);
+  assertEq(r.code, 0, `run 应通过：${r.stderr}`);
+  // JS 32 位掩码语义下 a=256 / b=6 / d=255 / e=255 / f=0 —— 全部错位；
+  // BigInt 语义后 1+10+100+1000+10000+100000 = 111111
+  assert(r.stdout.includes('111111'), `宽整型位运算应为 BigInt 语义（111111）：${r.stdout}`);
+});
+
+test('运行期', '位运算移位量越界可观测（不再静默掩码，v0.2.58）', () => {
+  fs.writeFileSync(path.join(TMP, 'shiftov1.hsl'), `fn main() -> i64 {
+    let a = 1i32 << 40;
+    0
+}`);
+  const r1 = run(['run', path.join(TMP, 'shiftov1.hsl'), '--quiet']);
+  assert(r1.code !== 0 && (r1.stdout + r1.stderr).includes('移位量越界'), `32 位类型移位 ≥32 应报错：${(r1.stdout + r1.stderr).slice(0, 200)}`);
+  fs.writeFileSync(path.join(TMP, 'shiftov2.hsl'), `fn main() -> i64 {
+    let a = 1i64 << 200;
+    0
+}`);
+  const r2 = run(['run', path.join(TMP, 'shiftov2.hsl'), '--quiet']);
+  assert(r2.code !== 0 && (r2.stdout + r2.stderr).includes('移位量越界'), `宽整型移位 ≥128 应报错：${(r2.stdout + r2.stderr).slice(0, 200)}`);
+});
+
+test('回归', 'String::find 码点索引统一（v0.2.58：与 len/char_at/take 同口径）', () => {
+  const r = run(['run', writeTmp(`fn main() -> i64 {
+    let s = "é😊x";
+    let mut total = 0;
+    let i = s.find("x").unwrap_or(-1);
+    if i == 2 { total = total + 1; }
+    if s.char_at(i) == "x" { total = total + 10; }
+    if s.len() == 3 { total = total + 100; }
+    let z = s.find("z").unwrap_or(-1);
+    if z == -1 { total = total + 1000; }
+    let multi = s.find("😊").unwrap_or(-1);
+    if multi == 1 { total = total + 10000; }
+    println!("{}", total);
+    0
+}`), '--quiet']);
+  assertEq(r.code, 0, `run 应通过：${r.stderr}`);
+  // 此前 find 返回 UTF-16 码元索引（x 在 3、😊 在 1）—— char_at(3) 越界得 ""
+  // 1+10+100+1000+10000 = 11111（码点空间：x@2、z 不存在、😊@1）
+  assert(r.stdout.includes('11111'), `find 应为码点索引（11111）：${r.stdout}`);
+});
+
+test('回归', 'B-6 方法面上游化：split_once / rsplit_once / truncate（自 ORG vendored 0.2.58）', () => {
+  const r = run(['run', writeTmp(`fn main() -> i64 {
+    let mut total = 0;
+    match "k: v".split_once(":") {
+        Option::Some(kv) => { if kv[0] == "k" { total = total + 1; } },
+        Option::None => {},
+    }
+    match "a=b=c".rsplit_once("=") {
+        Option::Some(kv) => { if kv[0] == "a=b" { total = total + 10; } },
+        Option::None => {},
+    }
+    let mut s = "hello".to_string();
+    s.truncate(3);
+    if s == "hel" { total = total + 100; }
+    println!("{}", total);
+    0
+}`), '--quiet']);
+  assertEq(r.code, 0, `run 应通过：${r.stderr}`);
+  assert(r.stdout.includes('111'), `B-6 方法面（split_once/rsplit_once/truncate）：${r.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main(): Promise<number> {

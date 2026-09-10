@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## v0.2.58（2026-09-10）—— 实测双 bug 修复 + ORG vendored 增量上游化（终止双向漂移）
+
+外部实测（ORG 旗舰应用真实使用）驱动的修复批次。同时把 ORG 仓库 vendored 副本上的
+三项私有改动上游化 —— 此前 org 的 B-6/B-7/网关修复只存在于 vendored 副本，上游
+0.2.57 与 vendored 0.2.58 双向漂移（上游的 CRLF/Windows 修复也未回流 vendored），
+本版合并为单一事实源：
+
+- **位运算 BigInt 语义（实测复现）**：`1i64 << 40` 此前静默返回 256（JS 把移位量
+  掩码到 5 位：40&31=8 → 1<<8），`3i64 << 33` 返回 6；bigint 操作数的 `& | ^`
+  也被 `Number()` 压回双精度（>2^53 丢失精度、>2^31 被 ToInt32 截断）。修复口径：
+  任一操作数为 bigint 或经 `exprWideInt` 静态探测（i64/u64/i128/u128/isize/usize
+  后缀字面量 / 宽整型注解绑定 / as 宽整型 cast —— 与 `exprFloaty` 同构，安全整数
+  域的宽整型字面量在运行期是 number）→ BigInt 语义（任意精度、无掩码）；双 number
+  路径 `& | ^` 保持 ToInt32（对 i32 及更窄类型与真实语义一致），但移位量越界
+  （<0 或 ≥32）抛 `HRuntimeError` —— Rust debug 语义为 panic，静默掩码是最差
+  结果；宽整型移位 ≥128 同样报错。**跨后端语义漂移的典型新案例**（正是 S-15 系列
+  要防的形态）。回归用例：值语义（111111 六断言）+ 双越界错误路径，共 2 例。
+- **String::find 码点索引统一（实测复现）**：`find` 此前返回 UTF-16 码元索引
+  （`indexOf`），而 `len/char_at/take/chars` 全部是码点口径 —— `"é😊x".find("x")`
+  得 3、`char_at(2)` 却是 `"x"`，两套索引空间静默组合必错位
+  （`s.char_at(s.find(x)?)` 取错字符）。统一为码点（与既有 `len/char_at` 行为
+  一致，破坏面最小的对齐方向）。回归用例：含 astral 字符的 find/char_at/len
+  组合断言（11111 五断言）。
+- **B-6 方法面上游化（自 ORG vendored 0.2.58）**：`split_once` / `rsplit_once`
+  （「k: v」行拆键值的 Rust 最常用写法，此前只能 find+take+native slice 手工绕）
+  与 String 就地变形五件套（`clear/truncate/retain/insert/remove`）等 26 个内建
+  方法 —— check 全过 / run 全崩的静默断层（ORG 的 BUGFIXES B-6）。上游化补齐
+  回归用例（split_once/rsplit_once/truncate）。
+- **B-7 S-19 静态预警上游化**：内建值类型（String/Vec/HashMap/Option/Result）
+  上调用不存在的方法名 → check 阶段 warning（与运行期方法面同表的静态判别），
+  把「check 过 / run 崩」的方法名断层提前到写码时刻（ORG 的 BUGFIXES B-7）。
+- **DHV_LLM_GATEWAY 网关路由上游化**：`$host.llm.complete` 检测到该环境变量
+  （指向 OpenAI 兼容端点，`<base>/v1` 形态）时走 HTTP，独立部署无需本机安装
+  z-ai-web-dev-sdk；缺省直连 SDK（行为不变）—— 此前仅 ORG vendored 副本支持。
+
+验证：run-all 159→163 全绿（Linux 实测）；Windows/macOS 由 dhv-ts-matrix job
+守卫；Rust 侧 dhv 无改动（版本号联动 0.2.58 仅为版本同步纪律）。
+
 ## v0.2.57（2026-09-08）—— 全链路 IDE（vsix 捆绑工具链）+ 三平台 CI + Windows 兼容修复
 
 三项面向「下载即用」的交付升级（Windows 矩阵首跑抓到 2 个真实兼容 bug，随批修复）：

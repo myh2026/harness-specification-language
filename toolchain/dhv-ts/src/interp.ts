@@ -37,15 +37,18 @@ export class ContinueSignal extends Error {
 
 // ---- 环境 ----
 export class Env {
-  vars = new Map<string, { value: unknown; mut: boolean; floatTy?: boolean }>();
+  // wideIntTy（v0.2.58）：注解为 i64/u64/i128/u128/isize/usize 的绑定 —— 位运算
+  // BigInt 语义的静态信号（与 floatTy 同构：值在 JS 里是安全整数 number，
+  // 但类型域是 64/128 位 —— `let x: i64 = 1; x << 40` 此前静默得到 256）。
+  vars = new Map<string, { value: unknown; mut: boolean; floatTy?: boolean; wideIntTy?: boolean }>();
   constructor(public parent?: Env) {}
-  lookup(name: string): { value: unknown; mut: boolean; floatTy?: boolean } | undefined {
+  lookup(name: string): { value: unknown; mut: boolean; floatTy?: boolean; wideIntTy?: boolean } | undefined {
     const hit = this.vars.get(name);
     if (hit) return hit;
     return this.parent?.lookup(name);
   }
-  declare(name: string, value: unknown, mut: boolean, floatTy?: boolean): void {
-    this.vars.set(name, { value, mut, floatTy });
+  declare(name: string, value: unknown, mut: boolean, floatTy?: boolean, wideIntTy?: boolean): void {
+    this.vars.set(name, { value, mut, floatTy, wideIntTy });
   }
   set(name: string, value: unknown): boolean {
     const hit = this.vars.get(name);
@@ -411,7 +414,7 @@ export class Interp {
       if (!this.matchPattern(p.pat, arg, binds, env)) {
         throw new HRuntimeError(`函数 ${fnDef.name} 第 ${ai} 个参数模式不匹配：${debug(arg)}`);
       }
-      for (const [n, b] of binds) env.declare(n, b.value, b.mut || p.mut === true, isFloatTy(p.ty) && p.pat.kind === 'binding');
+      for (const [n, b] of binds) env.declare(n, b.value, b.mut || p.mut === true, isFloatTy(p.ty) && p.pat.kind === 'binding', isWideIntTy(p.ty) && p.pat.kind === 'binding');
     }
     this.frames.push({ ret: fnDef.ret, module, name: fnDef.name });
     try {
@@ -457,7 +460,7 @@ export class Interp {
     }
     for (let i = 0; i < graphDef.params.length; i++) {
       const p = graphDef.params[i]!;
-      env.declare(p.name, args[i], p.mut, isFloatTy(p.ty));
+      env.declare(p.name, args[i], p.mut, isFloatTy(p.ty), isWideIntTy(p.ty));
     }
     const edges: A.EdgeDecl[] = [];
     for (const gs of graphDef.body) if (gs.t === 'edge') edges.push(gs.decl);
@@ -563,7 +566,7 @@ export class Interp {
           }
           throw new HRuntimeError(`let 模式不匹配：${debug(value)}（${st.pat.kind}）`);
         }
-        for (const [n, b] of binds) env.declare(n, b.value, st.mut || b.mut, isFloatTy(st.ty) && st.pat.kind === 'binding');
+        for (const [n, b] of binds) env.declare(n, b.value, st.mut || b.mut, isFloatTy(st.ty) && st.pat.kind === 'binding', isWideIntTy(st.ty) && st.pat.kind === 'binding');
         return undefined;
       }
       case 'expr':
@@ -901,13 +904,40 @@ export class Interp {
         }
         throw new HRuntimeError(`"%" 不能用于 ${typeNameOf(l)} 与 ${typeNameOf(r)}`);
       case '&': case '|': case '^': case '<<': case '>>': {
+        // v0.2.58 修复（实测复现）：位运算的 JS 32 位语义静默泄漏 ——
+        // `1i64 << 40` 此前返回 256（JS 把移位量掩码到 5 位，40&31=8 → 1<<8），
+        // `3i64 << 33` 返回 6；bigint 操作数的 `& | ^` 也被 Number() 压回
+        // 双精度（>2^53 精度丢失，>2^31 高位被 ToInt32 截断）。
+        // 修复口径：任一操作数为 bigint（i64/u64/i128/u128 字面量超出安全整数
+        // 或进制字面量），或经 exprWideInt 静态探测（i64 后缀字面量 / 宽整型
+        // 注解绑定 / cast，安全整数值在 JS 里是 number —— 与 exprFloaty 同构），
+        // 即走 BigInt 语义（任意精度、无掩码）；双 number 路径 & | ^ 保持
+        // ToInt32（对 i32 及更窄类型与真实语义一致），但移位量越界（<0 或
+        // ≥32）抛 HRuntimeError —— Rust debug 语义为 panic，静默掩码是
+        // 最差结果。bigint 移位量 ≥128（i128 最宽合法上界）同样报错；
+        // 更窄类型的精确域检查归 dhv（Rust）静态侧（与 `/` 的浮点性
+        // 探测同款「完整类型推导归 dhv」分工）。
+        if (typeof l === 'bigint' || typeof r === 'bigint'
+          || exprWideInt(e.lhs, env) || exprWideInt(e.rhs, env)) {
+          const lb = BigInt(l as bigint), rb = BigInt(r as bigint);
+          if (e.op === '&') return lb & rb;
+          if (e.op === '|') return lb | rb;
+          if (e.op === '^') return lb ^ rb;
+          if (e.op === '<<' || e.op === '>>') {
+            if (rb < 0n || rb >= 128n) throw new HRuntimeError(`移位量越界（宽整型 0..127）：${debug(r)}`);
+            return e.op === '<<' ? lb << rb : lb >> rb;
+          }
+        }
         const ln = Number(l), rn = Number(r);
         if (!Number.isFinite(ln) || !Number.isFinite(rn)) throw new HRuntimeError(`位运算不能用于 ${debug(l)} 与 ${debug(r)}`);
         if (e.op === '&') return ln & rn;
         if (e.op === '|') return ln | rn;
         if (e.op === '^') return ln ^ rn;
-        if (e.op === '<<') return ln << rn;
-        return ln >> rn;
+        if (e.op === '<<' || e.op === '>>') {
+          if (rn < 0 || rn >= 32) throw new HRuntimeError(`移位量越界（32 位类型：0..31）：${debug(r)}`);
+          return e.op === '<<' ? ln << rn : ln >> rn;
+        }
+        throw new HRuntimeError(`位运算符 ${e.op} 不能到达此处（内部一致性）`);
       }
       case '==': return deepEq(l, r);
       case '!=': return !deepEq(l, r);
@@ -1722,6 +1752,42 @@ function isFloatTy(ty: A.HType | undefined): boolean {
   if (!ty || ty.kind !== 'path') return false;
   const last = ty.segs[ty.segs.length - 1]!;
   return last === 'f32' || last === 'f64';
+}
+
+/** 类型注解是否为 64/128 位整型（宽整型追踪的静态信号，v0.2.58） */
+function isWideIntTy(ty: A.HType | undefined): boolean {
+  if (!ty || ty.kind !== 'path') return false;
+  const last = ty.segs[ty.segs.length - 1]!;
+  return last === 'i64' || last === 'u64' || last === 'i128' || last === 'u128' || last === 'isize' || last === 'usize';
+}
+
+/** 宽整型后缀（i64/u64/i128/u128/isize/usize 字面量）集合 */
+const WIDE_INT_SUFFIXES = new Set(['i64', 'u64', 'i128', 'u128', 'isize', 'usize']);
+
+/**
+ * 表达式的宽整型静态探测（v0.2.58，与 exprFloaty 同构）：i64 后缀字面量 /
+ * 宽整型注解绑定 / as 宽整型 cast / 算术递归。安全整数域的宽整型字面量
+ * 在运行期是 number（lexer 的 Number.isSafeInteger 分派），BigInt 语义需要
+ * 静态信号才能路由 —— 否则 `1i64 << 40` 走 JS 32 位掩码路径。
+ * 未注解绑定承载宽整型值是已知近似（完整类型推导归 dhv）。
+ */
+function exprWideInt(e: A.Expr, env?: Env): boolean {
+  switch (e.kind) {
+    case 'lit':
+      return e.lit.t === 'int' && WIDE_INT_SUFFIXES.has((e.lit as { suffix?: string }).suffix ?? '');
+    case 'path': {
+      if (!env || e.segs.length !== 1) return false;
+      return env.lookup(e.segs[0]!)?.wideIntTy === true;
+    }
+    case 'cast': {
+      return isWideIntTy(e.ty);
+    }
+    case 'binary':
+      if (['+', '-', '*', '/', '%'].includes(e.op)) return exprWideInt(e.lhs, env) || exprWideInt(e.rhs, env);
+      return false;
+    default:
+      return false;
+  }
 }
 
 function typeNameOf(v: unknown): string {

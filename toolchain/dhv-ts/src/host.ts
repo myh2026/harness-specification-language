@@ -490,6 +490,14 @@ export class Host {
   }
 
   private async llmComplete(req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number }): Promise<string> {
+    // LLM 网关路由（v0.2.58，自 ORG vendored 副本上游化）：DHV_LLM_GATEWAY 指向
+    // OpenAI 兼容端点（如 <base>/v1 形态）时走 HTTP —— 独立部署无需本机安装
+    // z-ai-web-dev-sdk，多 Agent 共享同一底座/限流桶；缺省直连 z-ai-web-dev-sdk
+    // （行为不变）。
+    const gateway = (process.env.DHV_LLM_GATEWAY || "").replace(/\/+$/, "");
+    if (gateway) {
+      return this.llmViaGateway(gateway, req);
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mod: any = await import('z-ai-web-dev-sdk');
     const ZAICtor: { create: () => Promise<any> } = mod.default ?? mod;
@@ -505,6 +513,31 @@ export class Host {
     });
     const content = completion.choices?.[0]?.message?.content ?? '';
     return content;
+  }
+
+  /**
+   * OpenAI 兼容网关路径（DHV_LLM_GATEWAY 指向 <base>/v1 形态端点）。
+   * 网关侧负责令牌桶限速与 429 退避重试；此处只做平凡调用与错误传播。
+   */
+  private async llmViaGateway(
+    gateway: string,
+    req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const res = await fetch(`${gateway}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: req.messages,
+        temperature: req.temperature ?? 0.2,
+        max_tokens: req.maxTokens ?? 1024,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`LLM gateway ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content ?? "";
   }
 
   // ---- 运行收尾：写事件流 ----

@@ -93,10 +93,25 @@ export const STRING_METHODS: Record<string, BuiltinMethod> = {
       return s.endsWith(p) ? someV(s.slice(0, s.length - p.length)) : noneV();
     },
   },
+  // v0.2.58 修复（实测复现）：find 的索引空间统一为码点 —— 此前 indexOf
+  // 返回 UTF-16 码元索引，而 len/char_at/take/chars 全部是码点口径：
+  // `"é😊x".find("x")` 得 3（码元），`char_at(2)` 却是 "x"（码点），
+  // 两套索引空间静默组合必错位（`s.char_at(s.find(x)?)` 取错字符）。
+  // 码点口径与 len/char_at 的既有行为一致，属破坏面最小的对齐方向。
   find: {
     fn: (r, a) => {
-      const idx = S(r).indexOf(S(a[0]));
-      return idx >= 0 ? someV(idx) : noneV();
+      const s = S(r), needle = S(a[0]);
+      if (needle === '') return someV(0);
+      const hay = [...s], nee = [...needle];
+      const n = nee.length;
+      for (let i = 0; i + n <= hay.length; i++) {
+        let hit = true;
+        for (let j = 0; j < n; j++) {
+          if (hay[i + j] !== nee[j]) { hit = false; break; }
+        }
+        if (hit) return someV(i);
+      }
+      return noneV();
     },
   },
   parse: {
@@ -126,6 +141,82 @@ export const STRING_METHODS: Record<string, BuiltinMethod> = {
   char_count: { fn: (r) => [...S(r)].length },
   take: { fn: (r, a) => [...S(r)].slice(0, N(a[0])).join('') },
   join: { fn: (r, a) => (Array.isArray(r) ? r.map(S).join(S(a[0])) : S(r)) },
+  // v0.2.58 修复（B-6）：split_once / rsplit_once 缺失 —— 「k: v」行拆键值是
+  // Rust 最常用写法，此前只能 find+take+native slice 手工绕（check 过 / run 崩
+  // 或写出别扭代码）。语义：返回 Option<(before, after)>；分隔符为空串报运行期
+  // 错误（Rust panic 的对应物）。二元组以运行期元组（数组）承载，
+  // `match s.split_once(":") { Some((k, v)) => ... }` 直接解构。
+  split_once: {
+    fn: (r, a) => {
+      const s = S(r), sep = S(a[0]);
+      if (sep === '') throw new HRuntimeError('split_once：空分隔符（Rust 语义为 panic）');
+      const i = s.indexOf(sep);
+      return i < 0 ? noneV() : someV([s.slice(0, i), s.slice(i + sep.length)]);
+    },
+  },
+  rsplit_once: {
+    fn: (r, a) => {
+      const s = S(r), sep = S(a[0]);
+      if (sep === '') throw new HRuntimeError('rsplit_once：空分隔符（Rust 语义为 panic）');
+      const i = s.lastIndexOf(sep);
+      return i < 0 ? noneV() : someV([s.slice(0, i), s.slice(i + sep.length)]);
+    },
+  },
+  // v0.2.58（B-6）：clear / truncate / retain / insert / remove —— String 的
+  // 就地变形五件套（Vec 侧此前已有 clear，String 侧缺失）。
+  clear: {
+    mutating: true,
+    fn: (r, _a, ctx) => {
+      if (ctx.setRecv) { ctx.setRecv(''); return undefined; }
+      return '';
+    },
+  },
+  truncate: {
+    mutating: true,
+    fn: (r, a, ctx) => {
+      const n = N(a[0]);
+      if (n < 0) throw new HRuntimeError(`truncate：负长度 ${n}`);
+      const nv = [...S(r)].slice(0, n).join('');
+      if (ctx.setRecv) { ctx.setRecv(nv); return undefined; }
+      return nv;
+    },
+  },
+  retain: {
+    mutating: true,
+    fn: async (r, a, ctx) => {
+      const kept: string[] = [];
+      for (const ch of [...S(r)]) if (B(await ctx.call(a[0]!, [ch]))) kept.push(ch);
+      const nv = kept.join('');
+      if (ctx.setRecv) { ctx.setRecv(nv); return undefined; }
+      return nv;
+    },
+  },
+  insert: {
+    mutating: true,
+    fn: (r, a, ctx) => {
+      const chars = [...S(r)];
+      const idx = N(a[0]);
+      const ch = S(a[1]);
+      if (ch.length !== 1) throw new HRuntimeError(`insert：期望单字符，得到 "${ch}"`);
+      if (idx < 0 || idx > chars.length) throw new HRuntimeError(`insert：索引 ${idx} 越界（长度 ${chars.length}）`);
+      chars.splice(idx, 0, ch);
+      const nv = chars.join('');
+      if (ctx.setRecv) { ctx.setRecv(nv); return undefined; }
+      return nv;
+    },
+  },
+  remove: {
+    mutating: true,
+    fn: (r, a, ctx) => {
+      const chars = [...S(r)];
+      const idx = N(a[0]);
+      if (idx < 0 || idx >= chars.length) throw new HRuntimeError(`remove：索引 ${idx} 越界（长度 ${chars.length}）`);
+      const [out] = chars.splice(idx, 1);
+      const nv = chars.join('');
+      if (ctx.setRecv) ctx.setRecv(nv);
+      return out;
+    },
+  },
 };
 
 // ============================== Vec / 数组 ==============================
@@ -238,6 +329,132 @@ export const VEC_METHODS: Record<string, BuiltinMethod> = {
   },
   insert: { mutating: true, fn: (r, a) => { (r as unknown[]).splice(N(a[0]), 0, a[1]); return undefined; } },
   remove: { mutating: true, fn: (r, a) => (r as unknown[]).splice(N(a[0]), 1)[0] },
+  // v0.2.58 修复（B-6）：迭代器对等方法缺失 —— find / filter_map / flat_map /
+  // flatten / count / min / max / zip / chain / step_by（Rust Iterator 家族中
+  // 高频前九名，此前 check 全过、run 全崩 —— B-1 类断层的最大聚集面）。
+  // 语义对齐：find → Option<T>（首个满足谓词的元素）；filter_map → 保留
+  // Some 载荷；flat_map → 闭包返回 Vec 拼接；flatten → 嵌套数组摊平；
+  // min/max → Option（空 Vec 为 None，与 Rust 一致）；zip → 短边截断；
+  // chain → 拷贝拼接（非原地）。
+  find: {
+    fn: async (r, a, ctx) => {
+      for (const x of r as unknown[]) if (B(await ctx.call(a[0]!, [x]))) return someV(x);
+      return noneV();
+    },
+  },
+  filter_map: {
+    fn: async (r, a, ctx) => {
+      const out: unknown[] = [];
+      for (const x of r as unknown[]) {
+        const v = await ctx.call(a[0]!, [x]);
+        if (isOption(v)) {
+          if (v.variant === 'Some') out.push(enumPayload(v));
+        } else {
+          throw new HRuntimeError(`filter_map：闭包必须返回 Option，得到 ${debug(v)}`);
+        }
+      }
+      return out;
+    },
+  },
+  flat_map: {
+    fn: async (r, a, ctx) => {
+      const out: unknown[] = [];
+      for (const x of r as unknown[]) {
+        const v = await ctx.call(a[0]!, [x]);
+        if (!Array.isArray(v)) throw new HRuntimeError(`flat_map：闭包必须返回 Vec，得到 ${debug(v)}`);
+        out.push(...v);
+      }
+      return out;
+    },
+  },
+  flatten: {
+    fn: (r) => {
+      const out: unknown[] = [];
+      for (const x of r as unknown[]) {
+        if (!Array.isArray(x)) throw new HRuntimeError(`flatten：元素必须是 Vec，得到 ${debug(x)}`);
+        out.push(...x);
+      }
+      return out;
+    },
+  },
+  count: { fn: (r) => (r as unknown[]).length },
+  min: { fn: (r) => ordFold(r as unknown[], 'min') },
+  max: { fn: (r) => ordFold(r as unknown[], 'max') },
+  zip: {
+    fn: (r, a) => {
+      const xs = r as unknown[];
+      const ys = a[0] as unknown[];
+      if (!Array.isArray(ys)) throw new HRuntimeError(`zip：右操作数必须是 Vec，得到 ${debug(a[0])}`);
+      const n = Math.min(xs.length, ys.length);
+      const out: unknown[] = [];
+      for (let i = 0; i < n; i++) out.push([xs[i], ys[i]]);
+      return out;
+    },
+  },
+  chain: {
+    fn: (r, a) => {
+      const ys = a[0] as unknown[];
+      if (!Array.isArray(ys)) throw new HRuntimeError(`chain：右操作数必须是 Vec，得到 ${debug(a[0])}`);
+      return [...(r as unknown[]), ...ys];
+    },
+  },
+  step_by: {
+    fn: (r, a) => {
+      const step = N(a[0]);
+      if (step < 1) throw new HRuntimeError(`step_by：步长必须 ≥ 1，得到 ${step}`);
+      return (r as unknown[]).filter((_, i) => i % step === 0);
+    },
+  },
+  // v0.2.58（B-6）：reverse / dedup / retain / truncate / chunks —— Vec 就地
+  // 变形与分块。reverse 此前缺失时既不落到内建也不落到 foreign 直通
+  // （foreign 分支显式排除数组）→ 必崩；dedup 按 Rust 语义去「连续」重复
+  // （deepEq 比较）；chunks 返回 Vec<Vec<T>>（尾块允许不足 n）。
+  reverse: { mutating: true, fn: (r) => { (r as unknown[]).reverse(); return undefined; } },
+  dedup: {
+    mutating: true,
+    fn: (r) => {
+      const arr = r as unknown[];
+      let w = 0;
+      for (let i = 0; i < arr.length; i++) {
+        if (w > 0 && deepEq(arr[w - 1], arr[i])) continue;
+        arr[w++] = arr[i];
+      }
+      arr.length = w;
+      return undefined;
+    },
+  },
+  retain: {
+    mutating: true,
+    fn: async (r, a, ctx) => {
+      const arr = r as unknown[];
+      let w = 0;
+      for (let i = 0; i < arr.length; i++) {
+        if (B(await ctx.call(a[0]!, [arr[i]]))) arr[w++] = arr[i];
+      }
+      arr.length = w;
+      return undefined;
+    },
+  },
+  truncate: {
+    mutating: true,
+    fn: (r, a) => {
+      const n = N(a[0]);
+      const arr = r as unknown[];
+      if (n < 0) throw new HRuntimeError(`truncate：负长度 ${n}`);
+      if (n < arr.length) arr.length = n;
+      return undefined;
+    },
+  },
+  chunks: {
+    fn: (r, a) => {
+      const n = N(a[0]);
+      if (n < 1) throw new HRuntimeError(`chunks：块大小必须 ≥ 1，得到 ${n}`);
+      const arr = r as unknown[];
+      const out: unknown[] = [];
+      for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+      return out;
+    },
+  },
 };
 
 // ============================== HashMap ==============================
@@ -265,6 +482,10 @@ export const MAP_METHODS: Record<string, BuiltinMethod> = {
   keys: { fn: (r) => [...(r as Map<unknown, unknown>).keys()] },
   values: { fn: (r) => [...(r as Map<unknown, unknown>).values()] },
   clone: { fn: (r) => cloneValue(r) },
+  // v0.2.58（B-6）：iter 缺失 —— Rust HashMap 遍历产出 (K, V) 二元组，
+  // 此前只能 keys() + get() 两跳绕。返回 Vec<(K, V)>（运行期元组 = 数组），
+  // `for kv in m.iter()` / `match kv.0` 均可用。
+  iter: { fn: (r) => [...(r as Map<unknown, unknown>).entries()] },
 };
 
 // ============================== 数值 ==============================
@@ -298,6 +519,9 @@ export const OPTION_METHODS: Record<string, BuiltinMethod> = {
   and_then: { fn: async (r, a, ctx) => (isOption(r) && r.variant === 'Some' ? await ctx.call(a[0]!, [enumPayload(r)]) : noneV()) },
   ok_or: { fn: (r, a) => (isOption(r) && r.variant === 'Some' ? okV(enumPayload(r)) : errV(a[0])) },
   or: { fn: (r, a) => (isOption(r) && r.variant === 'Some' ? r : a[0]) },
+  // v0.2.58（B-6）：and 缺失（or 已在，同族不对称）。Some(x) → 返回右操作数，
+  // None → None（右侧惰性求值在解释器闭包模型下不做 —— 右侧已是值）。
+  and: { fn: (r, a) => (isOption(r) && r.variant === 'Some' ? a[0] : noneV()) },
   cloned: { fn: (r) => (isOption(r) && r.variant === 'Some' ? someV(cloneValue(enumPayload(r))) : noneV()) },
   // v0.2.57 修复（Bug #4）：Option 缺 clone —— 自定义 derive(Clone) 枚举有
   // clone 而内置 Option/Result 没有（Rust 语义：Option<T: Clone> 实现 Clone；
@@ -324,10 +548,35 @@ export const RESULT_METHODS: Record<string, BuiltinMethod> = {
   clone: { fn: (r) => cloneValue(r) },
   and_then: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Ok' ? await ctx.call(a[0]!, [enumPayload(r)]) : r) },
   or_else: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Err' ? await ctx.call(a[0]!, [enumPayload(r)]) : r) },
+  // v0.2.58（B-6）：unwrap_or_else / unwrap_err 缺失 —— Option 侧早有
+  // unwrap_or_else 而 Result 侧没有（同族不对称）；unwrap_err 是测试与错误
+  // 检视路径的常用写法，Ok 时报运行期错误（Rust panic 的对应物）。
+  unwrap_or_else: { fn: async (r, a, ctx) => (isResult(r) && r.variant === 'Ok' ? enumPayload(r) : await ctx.call(a[0]!, [enumPayload(r)])) },
+  unwrap_err: { fn: (r) => (isResult(r) && r.variant === 'Err' ? enumPayload(r) : throwRuntime(`unwrap_err：Ok(${display(isResult(r) ? enumPayload(r) : r)})`)) },
 };
 
 function throwRuntime(msg: string): never {
   throw new HRuntimeError(msg);
+}
+
+// v0.2.58（B-6）：Vec::min / max 的 Ord 折叠 —— 全数值按数值序、全字符串按
+// 字典序（码元序），混合类型报运行期错误（Rust 要求同构 Ord，不静默强转）；
+// 空 Vec → None（Rust 语义）。
+function ordFold(arr: unknown[], which: 'min' | 'max'): unknown {
+  if (arr.length === 0) return noneV();
+  const allNum = arr.every((x) => typeof x === 'number' || typeof x === 'bigint');
+  const allStr = arr.every((x) => typeof x === 'string');
+  if (!allNum && !allStr) {
+    throw new HRuntimeError(`${which}：元素须同为数值或同为字符串（Rust Ord 同构约束）`);
+  }
+  let best = arr[0]!;
+  for (const x of arr.slice(1)) {
+    const better = allNum
+      ? (which === 'min' ? N(x) < N(best) : N(x) > N(best))
+      : (which === 'min' ? S(x) < S(best) : S(x) > S(best));
+    if (better) best = x;
+  }
+  return someV(best);
 }
 
 // ============================== 免费函数 ==============================

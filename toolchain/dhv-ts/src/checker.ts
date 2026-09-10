@@ -26,6 +26,10 @@ import { getLang, isStaticLangId, resolveLangId, listLangs } from './backends/re
 import { treeToTokens } from './interp';
 import { parseExprsFromTokens } from './parser';
 import { isStdPath, STD_MODULES } from './std';
+import {
+  STRING_METHODS, CHAR_METHODS, VEC_METHODS, MAP_METHODS,
+  OPTION_METHODS, RESULT_METHODS,
+} from './builtins';
 
 export interface Diag {
   severity: 'error' | 'warning';
@@ -442,9 +446,50 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
 
 // ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2）----
 interface Scope {
-  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy; litVal?: bigint; dom?: string }>;
+  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy; litVal?: bigint; dom?: string; stdTy?: StdTy }>;  // stdTy：注解为 String/Vec/HashMap/Option/Result 的绑定（S-19 方法面预警用）
   parent?: Scope;
   used: Set<string>;
+}
+
+/** S-19：内建值类型的静态判别集（运行期 builtinMethodFor 的镜像口径） */
+type StdTy = 'String' | 'Vec' | 'HashMap' | 'Option' | 'Result';
+
+const STD_TY_NAMES = new Set(['String', 'Vec', 'HashMap', 'Option', 'Result']);
+
+/** 解包 ref/paren，取路径首段；命中内建值类型名则返回（Vec<T> 看首段）。 */
+function stdTyOf(ty: A.HType | undefined): StdTy | null {
+  let t = ty;
+  for (let i = 0; i < 8 && t; i++) {
+    if (t.kind === 'ref' || t.kind === 'paren') { t = t.inner; continue; }
+    if (t.kind === 'path' && t.segs.length >= 1) {
+      const head = t.segs[0]!;
+      return STD_TY_NAMES.has(head) ? (head as StdTy) : null;
+    }
+    return null;
+  }
+  return null;
+}
+
+/** S-19 判定：内建值类型上的方法是否在运行期方法面（与 builtinMethodFor 同表）。 */
+function stdMethodOnSurface(ty: StdTy, name: string): boolean {
+  switch (ty) {
+    case 'String': return name in STRING_METHODS || name in CHAR_METHODS;
+    case 'Vec': return name in VEC_METHODS;
+    case 'HashMap': return name in MAP_METHODS;
+    case 'Option': return name in OPTION_METHODS;
+    case 'Result': return name in RESULT_METHODS;
+  }
+}
+
+/** 沿作用域链查找绑定（返回变量信息，含 stdTy）。 */
+function lookupVarInfo(scope: Scope, name: string): { mut: boolean; span: A.Span; param?: boolean; stdTy?: StdTy } | undefined {
+  let s: Scope | undefined = scope;
+  while (s) {
+    const v = s.vars.get(name);
+    if (v) return v;
+    s = s.parent;
+  }
+  return undefined;
 }
 
 function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramNames?: string[]): void {
@@ -504,6 +549,17 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
       
       for (const n of patternNames(st.pat)) declareVar(scope, n, st.mut, diags, st.span, file);
       if (st.init) checkExpr(st.init, scope, enums, diags, file, inAgentLoop);
+      // v0.2.58 S-19：注解为内建值类型（String/Vec/HashMap/Option/Result）的
+      // 绑定记入作用域 —— 后续 .method() 调用可对运行期方法面做静态预警
+      // （B-1 类「check 过 / run 崩」断层的前置暴露）。仅注解口径：无注解的
+      // 绑定（含闭包参数/函数参数）不判 —— 追踪不到类型时不冒险。
+      if (st.pat.kind === 'binding') {
+        const stdTy = stdTyOf(st.ty);
+        if (stdTy) {
+          const cur = scope.vars.get(st.pat.name);
+          if (cur) cur.stdTy = stdTy;
+        }
+      }
       // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入作用域 ——
       // 后续 path 引用可判（`let s = "abc"; s * 3` 的 lhs 是 path 不是 lit，
       // 纯 lit 口径拦不住变量中转 —— h01 样本实录）。
@@ -1018,6 +1074,18 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
       // S-2：裸 unwrap
       if (e.name === 'unwrap' && e.args.length === 0) {
         diags.push(warn('S-2', '裸 .unwrap()：非空默认建议使用 unwrap_or / match / ?（S2）', e.span, file));
+      }
+      // v0.2.58 S-19（B-7）：内建值类型方法面断层预警 —— 接收者是单段路径且
+      // 其绑定有 String/Vec/HashMap/Option/Result 注解时，方法名不在运行期
+      // 方法面 → warning（不阻断：重赋值换类型等保守边界由 warning 语义兼容）。
+      // B-1 实录：nova 的 `self.tasks.iter_mut()` check 全绿、run 才崩 ——
+      // 此类断层首次在 check 阶段可见（作用域链穿闭包/match/分支）。
+      if (e.recv.kind === 'path' && e.recv.segs.length === 1) {
+        const info = lookupVarInfo(scope, e.recv.segs[0]!);
+        if (info?.stdTy && !stdMethodOnSurface(info.stdTy, e.name)) {
+          const surface = info.stdTy === 'String' ? 'STRING_METHODS' : info.stdTy === 'Vec' ? 'VEC_METHODS' : info.stdTy === 'HashMap' ? 'MAP_METHODS' : info.stdTy === 'Option' ? 'OPTION_METHODS' : 'RESULT_METHODS';
+          diags.push(warn('S-19', `绑定 "${e.recv.segs[0]}" 注解为 ${info.stdTy}，但 ${surface} 没有 "${e.name}" —— check 不拦截，run 将报「${info.stdTy} 没有方法 ${e.name}」（B-1 类断层；若为自定义 impl 方法请忽略本警告）`, e.span, file));
+        }
       }
       break;
     }

@@ -5,8 +5,8 @@
 **从逻辑到 38 个后端的工程投射 · 为编写 AI Agent harness 而生的编译型语言**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-[![dhv](https://img.shields.io/badge/dhv-v0.2.57-success.svg)](toolchain/dhv/Cargo.toml)
-[![dhv-ts](https://img.shields.io/badge/dhv--ts-v0.2.57-success.svg)](toolchain/dhv-ts/package.json)
+[![dhv](https://img.shields.io/badge/dhv-v0.2.58-success.svg)](toolchain/dhv/Cargo.toml)
+[![dhv-ts](https://img.shields.io/badge/dhv--ts-v0.2.58-success.svg)](toolchain/dhv-ts/package.json)
 [![BNF](https://img.shields.io/badge/BNF-v1.5.0-blue.svg)](toolchain/hsl-spec/BNF.md)
 [![Backend](https://img.shields.io/badge/backends-38-orange.svg)](toolchain/hsl-spec/BNF.md)
 [![CI](https://github.com/myh2026/harness-specification-language/actions/workflows/ci.yml/badge.svg)](https://github.com/myh2026/harness-specification-language/actions/workflows/ci.yml)
@@ -306,11 +306,11 @@ main 合并（版本号变更）→ CI 四 job 全绿（含 version-sync 守卫�
 
 - tag 已存在时幂等跳过（no-op 绿灯），可手动 `workflow_dispatch` 补发；
 - 发布物料一律机械生成：release notes 取自 CHANGELOG（状态机提取）、校验和工作流产出——发布本身没有任何手写步骤；
-- 当前已发布：[v0.2.57](https://github.com/myh2026/harness-specification-language/releases/tag/v0.2.57)，最新版入口 [releases/latest](https://github.com/myh2026/harness-specification-language/releases/latest)。
+- 当前已发布：[v0.2.58](https://github.com/myh2026/harness-specification-language/releases/tag/v0.2.58)，最新版入口 [releases/latest](https://github.com/myh2026/harness-specification-language/releases/latest)。
 
 ## 🛡️ 当前版本
 
-**dhv 0.2.57 · dhv-ts 0.2.57 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
+**dhv 0.2.58 · dhv-ts 0.2.58 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
 
 - 版本号以 `toolchain/dhv/Cargo.toml` 与 `toolchain/dhv-ts/package.json` 为准，随每次功能/修复递增；
 - 详见 [CHANGELOG.md](CHANGELOG.md)。
