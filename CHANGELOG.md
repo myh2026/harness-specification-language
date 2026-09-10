@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## v0.2.59（2026-09-10）—— 网关直连服务商：鉴权 + 模型路由 + 超时保护
+
+v0.2.58 的 `DHV_LLM_GATEWAY` 假设「网关自持鉴权/限流」的部署形态；实测直连
+DeepSeek 官方 API（`https://api.deepseek.com/v1`，模型 `deepseek-flash`）发现
+三个缺口：无 Authorization 头（401）、无 model 字段（网关侧无法路由）、无超时
+（挂死 fetch 无限等待）。本版补齐，OpenAI 兼容服务商（DeepSeek / OpenRouter /
+vLLM / Ollama …）即插即用：
+
+- **DHV_LLM_API_KEY**：设置后请求携带 `Authorization: Bearer <key>`；缺省不
+  发（内网自持鉴权网关行为不变）。
+- **DHV_LLM_MODEL**：设置后写入请求体 `model` 字段；缺省不写（网关侧默认
+  模型路由行为不变）。
+- **DHV_LLM_TIMEOUT_MS**：fetch 超时保护，默认 180000；显式设 0 关闭。此前
+  网关无响应时整个 agent run 挂死（无超时的 fetch 在 Bun 默认无限等待）。
+- **DHV_LLM_THINKING**：思考量控制 —— `off`/`disabled` → `thinking:{type:
+  "disabled"}`；`low`/`medium`/`high` → `reasoning_effort`。实测 DeepSeek
+  两者均接受（off 时 reasoning_len=0）。缺省不发送（服务商默认，兼容严格
+  校验的网关）。
+- **逐调用思考量覆盖（v0.2.59）**：`$host.llm.complete` 请求可带
+  `thinking` 字段（同上取值），缺省回落 `DHV_LLM_THINKING` 环境变量 ——
+  调用侧退避升级用（如 ORG model.hsl 在 finish_reason=length 空返回后
+  关思考重试），非工具链层隐式重试。
+- **空 content 可诊断化**：推理型模型 reasoning 吃满 max_tokens 时
+  content=""、finish_reason=length —— 此前表现为无信息的 "empty
+  completion"（ORG v0.4.13 E2E 实测三连空炸穿 run 的根因）。现空 content
+  抛错带 `finish_reason` 与 `usage`，调用侧重试/换参有据可依。
+- **超时实现用 AbortController + finally clearTimeout**（不用
+  AbortSignal.timeout）：实测 Bun 1.3 的 fetch 完成路径与 timeout 信号
+  交互可丢延续 —— 响应已达但 await 不恢复，进程 park 在 sigsuspend 空
+  事件循环（HSL 侧反复挂死实测；解释器长链路多调用下间歇复现）；且
+  AbortSignal.timeout 每调用泄漏一个未取消的 180s timer。显式 controller
+  + finally 清理两头都干净。
+
+验证：ORG 侧新增 `tests/gateway.test.ts` 六例（鉴权头/model 字段贯通 + 缺省
+行为不变 + 超时中止 + 4xx 错误体传播 + 空 content 诊断 + 思考量控制），随
+ORG v0.4.13 联动；DeepSeek 官方 API 真实 E2E（org ask 直连 3.4s 结构化回答 +
+团队模式工厂全链路）。
+
 ## v0.2.58（2026-09-10）—— 实测双 bug 修复 + ORG vendored 增量上游化（终止双向漂移）
 
 外部实测（ORG 旗舰应用真实使用）驱动的修复批次。同时把 ORG 仓库 vendored 副本上的

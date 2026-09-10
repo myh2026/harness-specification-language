@@ -124,6 +124,11 @@ export class Host {
           messages: { role: string; content: string }[];
           temperature?: number;
           maxTokens?: number;
+          /** v0.2.59：逐调用思考量覆盖（"off"/"disabled"/"low"/"medium"/"high"）——
+           * 缺省回落 DHV_LLM_THINKING 环境变量，再缺省不发送（服务商默认）。
+           * 调用侧退避升级用（如 ORG model.hsl 在 finish_reason=length 空返回
+           * 后关思考重试），非工具链层隐式重试。 */
+          thinking?: string;
         }): Promise<string> => this.withFaultsAsync('llm.complete', () => this.llmComplete(req)),
       },
       fs: {
@@ -489,7 +494,7 @@ export class Host {
     return abs;
   }
 
-  private async llmComplete(req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number }): Promise<string> {
+  private async llmComplete(req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number; thinking?: string }): Promise<string> {
     // LLM 网关路由（v0.2.58，自 ORG vendored 副本上游化）：DHV_LLM_GATEWAY 指向
     // OpenAI 兼容端点（如 <base>/v1 形态）时走 HTTP —— 独立部署无需本机安装
     // z-ai-web-dev-sdk，多 Agent 共享同一底座/限流桶；缺省直连 z-ai-web-dev-sdk
@@ -517,27 +522,74 @@ export class Host {
 
   /**
    * OpenAI 兼容网关路径（DHV_LLM_GATEWAY 指向 <base>/v1 形态端点）。
-   * 网关侧负责令牌桶限速与 429 退避重试；此处只做平凡调用与错误传播。
+   * v0.2.59：直连 OpenAI 兼容服务商（DeepSeek / OpenRouter / vLLM …）补齐
+   * 鉴权与模型路由 —— DHV_LLM_API_KEY（Bearer 头）/ DHV_LLM_MODEL（请求体
+   * model 字段）；自持鉴权的内网网关两者缺省时行为不变。429/瞬断退避仍由
+   * 调用侧负责（ORG providers/model.hsl 有界重试）；此处只做平凡调用与
+   * 错误传播，另加 DHV_LLM_TIMEOUT_MS 超时保护（默认 180s，显式 0 关闭）。
+   * 推理型模型（deepseek-flash / R1 等）reasoning 计入 max_tokens 预算 ——
+   * 吃满时 content 空、finish_reason=length；空 content 抛错带 finish_reason
+   * 与 usage（可诊断），DHV_LLM_THINKING=off 可关思考（low/medium/high 调
+   * reasoning_effort，实测 DeepSeek 两者均支持）。
    */
   private async llmViaGateway(
     gateway: string,
-    req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number },
+    req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number; thinking?: string },
   ): Promise<string> {
-    const res = await fetch(`${gateway}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: req.messages,
-        temperature: req.temperature ?? 0.2,
-        max_tokens: req.maxTokens ?? 1024,
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`LLM gateway ${res.status}: ${text.slice(0, 200)}`);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const apiKey = process.env.DHV_LLM_API_KEY || "";
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const body: Record<string, unknown> = {
+      messages: req.messages,
+      temperature: req.temperature ?? 0.2,
+      max_tokens: req.maxTokens ?? 1024,
+    };
+    const model = process.env.DHV_LLM_MODEL || "";
+    if (model) body.model = model;
+    const thinking = (req.thinking ?? process.env.DHV_LLM_THINKING ?? "").trim().toLowerCase();
+    if (thinking === "off" || thinking === "disabled") body.thinking = { type: "disabled" };
+    else if (thinking === "low" || thinking === "medium" || thinking === "high") body.reasoning_effort = thinking;
+    const envTimeout = (process.env.DHV_LLM_TIMEOUT_MS ?? "").trim();
+    let timeoutMs = 180000;
+    if (envTimeout !== "") {
+      const n = Number(envTimeout);
+      if (Number.isFinite(n) && n >= 0) timeoutMs = n;
     }
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return data.choices?.[0]?.message?.content ?? "";
+    // v0.2.59：AbortController + 手动清理（不用 AbortSignal.timeout）—— 实测
+    // Bun 的 fetch 完成路径与 timeout 信号交互可丢延续（响应已达但 await 不
+    // 恢复，进程 park 在 sigsuspend 空事件循环）；且每调用泄漏一个 180s
+    // timer。显式 controller + finally 清理两头都干净。
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs > 0) timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${gateway}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`LLM gateway ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as {
+        choices?: { finish_reason?: string; message?: { content?: string } }[];
+        usage?: Record<string, unknown>;
+      };
+      const content = data.choices?.[0]?.message?.content ?? "";
+      if (content === "") {
+        // 空内容的可诊断化（v0.2.59）：推理型模型 reasoning 吃满 max_tokens 时
+        // content 空、finish_reason=length —— 此前表现为无信息的 "empty
+        // completion"。带上 finish_reason/usage 抛出，调用侧重试/换参有据可依。
+        const finish = data.choices?.[0]?.finish_reason ?? "unknown";
+        const usage = data.usage ? JSON.stringify(data.usage) : "n/a";
+        throw new Error(`empty completion (finish_reason=${finish}, usage=${usage})`);
+      }
+      return content;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   // ---- 运行收尾：写事件流 ----

@@ -132,6 +132,29 @@ fn read_file(policy: Policy, path: String) -> Result<ToolResult, HarnessError> {
 - `$host` 是宿主命名空间（LLM 网关 / 沙箱 fs / 白名单 shell / JSON 桥 / 事件总线）
 - 无 `return` 的 typescript 体自动按末表达式返回；python 体自动变换末行
 
+### `$host.llm` 网关环境变量（v0.2.59）
+
+| 变量 | 作用 | 缺省 |
+| --- | --- | --- |
+| `DHV_LLM_GATEWAY` | OpenAI 兼容端点（`<base>/v1` 形态）；设置后 `$host.llm.complete` 走 HTTP | 未设置时直连 z-ai-web-dev-sdk |
+| `DHV_LLM_API_KEY` | 直连服务商鉴权 → `Authorization: Bearer <key>` | 不发送（内网网关自持鉴权） |
+| `DHV_LLM_MODEL` | 请求体 `model` 字段（服务商侧模型路由） | 不发送（网关侧默认模型） |
+| `DHV_LLM_TIMEOUT_MS` | fetch 超时保护 | 180000；显式 `0` 关闭 |
+| `DHV_LLM_THINKING` | 思考量控制：`off`/`disabled` → `thinking:{type:"disabled"}`；`low`/`medium`/`high` → `reasoning_effort` | 不发送（服务商默认；实测 DeepSeek 两者均支持） |
+
+直连 DeepSeek 实测配置（模型 `deepseek-flash`）：
+
+```bash
+export DHV_LLM_GATEWAY=https://api.deepseek.com/v1
+export DHV_LLM_API_KEY=sk-***
+export DHV_LLM_MODEL=deepseek-flash
+# 可选：export DHV_LLM_THINKING=off   # 关思考（快而省）；缺省用模型默认
+```
+
+推理型模型注意：reasoning 计入 `max_tokens` 预算 —— 预算吃满时 content 空、
+`finish_reason=length`，网关路径抛错会带这两项（可诊断；调用侧应留足
+maxTokens 余量）。
+
 ## 已支持构件（BNF 覆盖清单）
 
 - **项**：struct / enum（含判别式与元组变体）/ trait（含默认实现）/ impl（含 `impl Trait for T`、From 特化）/ fn（async/self/mut）/ const / typealias / import（三种形态）/ export / graph / block+static 资源 / macro_rules!
