@@ -7,6 +7,10 @@ on:
   push:
     tags:
       - 'v*'
+  # v0.2.58 修复（issue #9）：GITHUB_TOKEN 推送的 tag 不会触发下游工作流
+  # （GitHub 防递归机制）—— Auto Release 打完 tag 后经 gh workflow run 主动
+  # 调度本工作流，双触发面并存（手动 push tag 的旧路径不变）。
+  workflow_dispatch:
 
 permissions:
   contents: write

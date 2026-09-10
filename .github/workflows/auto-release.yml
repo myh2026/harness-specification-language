@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # v0.2.58（issue #9）：gh workflow run 调度 Release 所需
 
 concurrency:
   group: auto-release
@@ -83,7 +84,20 @@ jobs:
           # annotated tag；release notes 由 release.yml 从 CHANGELOG 提取
           git tag -a "${TAG}" -m "DHV ${TAG} (auto-tagged by CD after CI green)"
           git push origin "${TAG}"
-          echo "Pushed ${TAG} — Release workflow will build 4-platform binaries"
+
+      # v0.2.58 修复（issue #9）：GITHUB_TOKEN 推送的 tag 不会触发下游工作流
+      # （GitHub 防递归机制：以 GITHUB_TOKEN 认证的 push 事件被有意屏蔽）——
+      # 在此主动调度 Release 工作流（其已加 workflow_dispatch 触发面）。
+      # 幂等：Release 自身对已有产物跳过；tag 不存在时此步自然失败可观测。
+      - name: Dispatch Release workflow (GITHUB_TOKEN push does not cascade)
+        if: steps.ver.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run Release --repo "${GITHUB_REPOSITORY}" --ref "${TAG}"
+          echo "Dispatched Release workflow for ${TAG}（四平台构建 + sha256sums + Post-release CI）"
 
       - name: Summary
         run: |
