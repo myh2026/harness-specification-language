@@ -2180,7 +2180,7 @@ native 块内可访问 **`$host`**——宿主 API 命名空间（运行时能�
 
 | 命名空间 | 能力 | 安全边界 |
 |:---|:---|:---|
-| `$host.fs` | `read / write / edit / list` | **路径监狱**：所有操作限制在 `--workspace` 内，越界抛错 |
+| `$host.fs` | `read / write / edit / list` | **路径监狱**：所有操作限制在 `--workspace` 内，越界抛错（v0.2.60 起含 **symlink 实解析**——工作区内指向外部的符号链同样拒绝） |
 | `$host.shell` | `run(cmd, {cwd, timeoutMs})` | **首词白名单**（`--allow`）+ 超时 + 输出上限；拒绝时发 `capability_denied` 事件 |
 | `$host.llm` | `complete({messages, temperature, maxTokens})` | LLM 网关（`--model deepseek` 时走真实模型） |
 | `$host.json` | `parse / stringify / fields` | `fields` 把 JSON 顶层字段**字符串化**为 `HashMap<String, String>` |
@@ -2510,7 +2510,7 @@ PI = 3.141592653589793
 | `read_file` | `(String) -> Result<String, String>` | 读文本（限 2 MB） |
 | `write_file` | `(String, String) -> Result<i64, String>` | 写文本，返回字符数 |
 | `append_file` | `(String, String) -> Result<i64, String>` | 追加（无则新建） |
-| `list_dir` | `(String) -> Result<Vec<String>, String>` | 列目录（两层深度，目录带 `/` 尾缀） |
+| `list_dir` | `(String) -> Result<Vec<String>, String>` | 列目录（默认 8 层深度（v0.2.60，原 2 层），目录带 `/` 尾缀；`$host.fs.list(dir, depth)` 可调，上限 32，超过 20000 条截断可观测） |
 
 **Result 语义与宿主依赖**（这是本模块最重要的知识点）：
 
@@ -3175,7 +3175,7 @@ Agent 最难的不是写出来，而是**测**。HSL 的工具链为此内置了
 | 字段 | 类型 | 消费方 |
 |:---|:---|:---|
 | `acts` | `String[]` | `$host.fixture.nextAct()`——每次调用返回下一条；耗尽抛错 |
-| `reviews` | `String[]` | `$host.fixture.nextReview()`——审查者剧本；耗尽后默认返回 `{"verdict":"accept"}` |
+| `reviews` | `String[]` | `$host.fixture.nextReview()`——审查者剧本；耗尽抛错（v0.2.60：审查判定不可静默伪造，与 `nextAct` 同口径；需要恒 accept 请显式写足条目） |
 | （只读）`actsLeft()` | `() -> i64` | `$host.fixture.actsLeft()` |
 
 acts 里放什么完全由你的 harness 协议决定——dsh 放的是模型应输出的

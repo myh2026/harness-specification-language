@@ -310,7 +310,7 @@ main 合并（版本号变更）→ CI 四 job 全绿（含 version-sync 守卫�
 
 ## 🛡️ 当前版本
 
-**dhv 0.2.59 · dhv-ts 0.2.59 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
+**dhv 0.2.60 · dhv-ts 0.2.60 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
 
 - 版本号以 `toolchain/dhv/Cargo.toml` 与 `toolchain/dhv-ts/package.json` 为准，随每次功能/修复递增；
 - 详见 [CHANGELOG.md](CHANGELOG.md)。

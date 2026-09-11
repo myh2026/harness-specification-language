@@ -110,6 +110,69 @@ test('回归', 'dsh check（10 模块）', () => {
   assertEq(r.code, 0, `dsh check 应通过`);
 });
 
+test('回归', 'nextReview 耗尽抛错（v0.2.60：审查判定不可静默伪造 accept）', () => {
+  const dir = path.join(TMP, 'rev-exhaust');
+  fs.mkdirSync(dir, { recursive: true });
+  const hsl = path.join(dir, 'rev.hsl');
+  const fix = path.join(dir, 'fix.json');
+  fs.writeFileSync(hsl, `fn main() -> Result<(), String> {\n    let first: String = native typescript {\n        return await $host.fixture.nextReview();\n    };\n    println!("first: {}", first);\n    let second: String = native typescript {\n        return await $host.fixture.nextReview();\n    };\n    println!("second: {}", second);\n    Ok(())\n}\n`, 'utf-8');
+  fs.writeFileSync(fix, `{ "acts": [], "reviews": ["{\\"verdict\\":\\"revise\\",\\"note\\":\\"first\\"}"], "tracks": {} }\n`, 'utf-8');
+  const r = run(['run', hsl, '--fixture', fix, '--quiet']);
+  // 第一次调用拿剧本条目、第二次耗尽：此前静默返回 {"verdict":"accept"}（验收
+  // 闸门伪造证据），v0.2.60 起与 nextAct / fixture.next(track) 同口径抛错
+  assert(r.code !== 0, `reviews 耗尽应运行失败（exit=${r.code}）`);
+  const out = r.stdout + r.stderr;
+  assert(out.includes('fixture reviews 已耗尽'), `应含耗尽诊断：${out.slice(0, 200)}`);
+  assert(out.includes('不可静默伪造'), `应说明语义：${out.slice(0, 200)}`);
+  assert(out.includes('first:'), '第一次调用应先消费剧本条目');
+});
+
+test('回归', 'fs.list 深度可配（v0.2.60：默认 8 层，原 2 层硬编码深层静默不可见）', () => {
+  const dir = path.join(TMP, 'fs-depth');
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(path.join(ws, 'a/b/c/d'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'a/b/c/d/deep.txt'), 'deep', 'utf-8');
+  fs.writeFileSync(path.join(ws, 'a/b/mid.txt'), 'mid', 'utf-8');
+  const hsl = path.join(dir, 'list.hsl');
+  fs.writeFileSync(hsl, `fn main() -> Result<(), String> {\n    let files: String = native typescript {\n        return $host.fs.list(".", 8);\n    };\n    println!("{}", files);\n    Ok(())\n}\n`, 'utf-8');
+  const r = run(['run', hsl, '--workspace', fwd(ws), '--quiet']);
+  assertEq(r.code, 0, `fs.list 应 Ok（exit=${r.code}）\n${r.stdout.slice(-300)}`);
+  // 第 4 层文件此前对 harness 静默不可见（2 层硬编码截断）
+  assert(r.stdout.includes('a/b/c/d/deep.txt'), `默认深度应见 4 层文件：${r.stdout.slice(-300)}`);
+  assert(r.stdout.includes('a/b/mid.txt'), '2 层内文件照常可见');
+  // depth=2 显式复现旧语义（浅层快照仍可选）
+  const hsl2 = path.join(dir, 'list2.hsl');
+  fs.writeFileSync(hsl2, `fn main() -> Result<(), String> {\n    let files: String = native typescript {\n        return $host.fs.list(".", 2);\n    };\n    println!("{}", files);\n    Ok(())\n}\n`, 'utf-8');
+  const r2 = run(['run', hsl2, '--workspace', fwd(ws), '--quiet']);
+  assertEq(r2.code, 0, `depth=2 应 Ok（exit=${r2.code}）`);
+  assert(!r2.stdout.includes('deep.txt'), 'depth=2 应保持浅层（深层不可见）');
+  assert(r2.stdout.includes('a/b/'), 'depth=2 应列出 2 层目录条目');
+});
+
+test('回归', '路径监狱 symlink 实解析（v0.2.60：词法归一可被 ws 内符号链穿越）', () => {
+  const dir = path.join(TMP, 'jail-symlink');
+  const ws = path.join(dir, 'ws');
+  const outside = path.join(dir, 'outside');
+  fs.mkdirSync(ws, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET', 'utf-8');
+  // 两个攻击向量：读外部（etclink -> /etc）· 写外部（outlink -> outside）
+  fs.symlinkSync('/etc', path.join(ws, 'etclink'));
+  fs.symlinkSync(outside, path.join(ws, 'outlink'));
+  fs.writeFileSync(path.join(ws, 'inside.txt'), 'hello', 'utf-8');
+  const hsl = path.join(dir, 'jail.hsl');
+  fs.writeFileSync(hsl, `fn main() -> Result<(), String> {\n    let leaked: String = native typescript {\n        try { return await $host.fs.read("etclink/hostname"); }\n        catch (e) { return "BLOCKED: " + String(e && e.message || e); }\n    };\n    println!("read => {}", leaked);\n    let wrote: String = native typescript {\n        try { $host.fs.write("outlink/pwned.txt", "escaped"); return "WROTE OUTSIDE"; }\n        catch (e) { return "BLOCKED: " + String(e && e.message || e); }\n    };\n    println!("write => {}", wrote);\n    let ok: String = native typescript {\n        return $host.fs.read("inside.txt");\n    };\n    println!("inside => {}", ok);\n    let created: u32 = native typescript {\n        return $host.fs.write("newdir/newfile.txt", "jail ok");\n    };\n    println!("created => {}", created);\n    Ok(())\n}\n`, 'utf-8');
+  const r = run(['run', hsl, '--workspace', fwd(ws), '--quiet']);
+  assertEq(r.code, 0, `合法轮应 Ok（exit=${r.code}）\n${r.stdout.slice(-400)}`);
+  // 攻击被拦（错误信息含 symlink 实解析证据），且外部未被写入
+  assert(r.stdout.includes('BLOCKED') && r.stdout.includes('symlink'), `符号链穿越应被拦截：${r.stdout.slice(-400)}`);
+  assert(!r.stdout.includes('WROTE OUTSIDE'), '写外部应失败');
+  assert(!fs.existsSync(path.join(outside, 'pwned.txt')), '监狱外不应出现新文件');
+  // 合法操作不误伤：内部读 + 新目录写入（walk-up 最近存在祖先路径）
+  assert(r.stdout.includes('inside => hello'), '监狱内读不受影响');
+  assert(fs.existsSync(path.join(ws, 'newdir/newfile.txt')), '新路径创建不受影响');
+});
+
 test('回归', 'dsh scripted 端到端（剧本 Agent 真实跑通）', () => {
   // 工作区副本隔离：scripted run 会真实修改 workspace/stats.ts
   // （历史事故：直接对仓库内 workspace 执行 → 污染入库 → fixture old_text 漂移）。
@@ -270,6 +333,33 @@ test('检查规则', 'S-7 _ 前缀豁免', () => {
 test('检查规则', 'S-8 同作用域遮蔽报错', () => {
   const out = checkSrc(`fn main() { let x = 1; let x = 2; println!("{}", x); }`);
   assert(out.includes('S-8'), `重复声明应触发 S-8：${out.slice(0, 200)}`);
+});
+// ---- v0.2.60 S-20：struct/变体字面量字段校验（实测：未知字段 check 全绿、run 静默收下）----
+test('检查规则', 'S-20 结构体字面量未知字段报错', () => {
+  const out = checkSrc(`struct Point { x: i64, y: i64 }\nfn main() { let p = Point { x: 1, y: 2, z: 999 }; println!("{}", p.x); }`);
+  assert(out.includes('S-20') && out.includes('没有字段 "z"'), `未知字段 z 应触发 S-20：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-20 结构体字面量缺字段报错（提前到 check，运行期兜底不再是首道闸门）', () => {
+  const out = checkSrc(`struct Point { x: i64, y: i64 }\nfn main() { let p = Point { x: 1 }; println!("{}", p.x); }`);
+  assert(out.includes('S-20') && out.includes('缺少字段'), `缺字段 y 应触发 S-20：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-20 字面量字段重复报错', () => {
+  const out = checkSrc(`struct Point { x: i64, y: i64 }\nfn main() { let p = Point { x: 1, x: 2, y: 3 }; println!("{}", p.x); }`);
+  assert(out.includes('S-20') && out.includes('重复'), `重复字段 x 应触发 S-20：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-20 枚举变体命名字面量未知/缺字段报错', () => {
+  const out = checkSrc(`enum Shape { Circle { r: f64 }, Rect { w: f64, h: f64 } }\nfn main() { let s = Shape::Rect { w: 1.0, h: 2.0, depth: 9.0 }; match s { Shape::Rect { w, h, .. } => println!("{} {}", w, h), _ => println!("other") } }`);
+  assert(out.includes('S-20') && out.includes('没有字段 "depth"'), `变体未知字段应触发 S-20：${out.slice(0, 200)}`);
+  const out2 = checkSrc(`enum Shape { Circle { r: f64 }, Rect { w: f64, h: f64 } }\nfn main() { let s = Shape::Rect { w: 1.0 }; match s { Shape::Rect { w, h, .. } => println!("{} {}", w, h), _ => println!("other") } }`);
+  assert(out2.includes('S-20') && out2.includes('缺少字段 "h"'), `变体缺字段应触发 S-20：${out2.slice(0, 200)}`);
+});
+test('检查规则', 'S-20 ..base 功能更新不误报（base 动态补齐字段，缺字段检查跳过）', () => {
+  const out = checkSrc(`struct Point { x: i64, y: i64 }\nfn main() { let p = Point { x: 1, y: 2 }; let q = Point { y: 5, ..p }; println!("{} {}", p.x, q.y); }`);
+  assert(out.includes('0 error'), `..base 合法更新应零报错：${out.slice(0, 200)}`);
+});
+test('检查规则', 'S-20 未登记名不误报（宏生成/import 别名等留运行期，静态不制造假阳性）', () => {
+  const out = checkSrc(`fn main() { let p = Myst { a: 1 }; println!("{}", p.a); }`);
+  assert(!out.includes('S-20'), `未登记结构体名不应触发 S-20（运行期自然报错）：${out.slice(0, 200)}`);
 });
 test('检查规则', 'P-3 投射目标未定义', () => {
   const out = checkSrc(`fn main() {}\nproject { Missing -> "x.py" : python }`);

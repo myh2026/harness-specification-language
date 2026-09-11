@@ -7,6 +7,9 @@
 //   S-6  match 穷尽性（枚举注册表）+ graph AgentLoop 内 _ 通配兜底
 //   S-7  未使用的 let / import
 //   S-8  同作用域遮蔽
+//   S-20 struct/变体字面量字段校验（未知/缺失/重复 —— 与运行期
+//        evalStructExpr 同口径，提前到 check；实测：构造不存在字段 check
+//        全绿、run 静默收下，类型安全闸门缺位）
 //   M3   import 名未被源模块 export（静态版，与 interp 运行期 M3 同权）
 //   G-1  graph 必含 AgentLoop
 //   G-2  edge 端点必须已声明
@@ -63,14 +66,36 @@ let enumAlias: Map<string, string> = new Map();
 // Vec<Entity> = native）是静态可判定的断层现场 —— 提前警告。
 let knownStructs: Set<string> = new Set();
 
+// v0.2.60 S-20：struct 字段注册表（name → 字段名列表）与枚举变体命名字段
+// 注册表（enum → variant → 字段名列表）—— 字面量校验的静态事实源。
+// 只在名字可解析时校验（import 别名/宏生成等未登记情形静默跳过，
+// 不制造假阳性）；类型推导仍归 dhv Rust 编译器管（本检查器是结构级铁律）。
+let structFieldNames: Map<string, string[]> = new Map();
+let enumVariantFieldNames: Map<string, Map<string, string[]>> = new Map();
+
 export function checkProgram(program: LoadedProgram): Diag[] {
   const diags: Diag[] = [];
   const enums = new Map<string, string[]>(); // name -> variants
   knownStructs = new Set<string>();
+  structFieldNames = new Map<string, string[]>(); // S-20：进程内多轮 check 防脏状态
+  enumVariantFieldNames = new Map<string, Map<string, string[]>>();
   for (const [, ast] of program.files) {
     for (const item of ast.items) {
-      if (item.kind === 'enum') enums.set(item.name, item.variants.map((v) => v.name));
-      if (item.kind === 'struct') knownStructs.add(item.name);
+      if (item.kind === 'enum') {
+        enums.set(item.name, item.variants.map((v) => v.name));
+        // S-20：登记变体命名字段（元组变体走调用语法，不参与字面量校验）
+        const vm = new Map<string, string[]>();
+        for (const v of item.variants) {
+          if (v.fields && !('tuple' in v.fields) && v.fields.named) {
+            vm.set(v.name, v.fields.named.map((f) => f.name));
+          }
+        }
+        enumVariantFieldNames.set(item.name, vm);
+      }
+      if (item.kind === 'struct') {
+        knownStructs.add(item.name);
+        structFieldNames.set(item.name, item.fields.map((f) => f.name));
+      }
     }
   }
 
@@ -1119,10 +1144,59 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
       checkExpr(e.count, scope, enums, diags, file, inAgentLoop);
       break;
     case 'struct': {
+      // v0.2.60 S-20：字段值表达式检查（既有）+ 字段面校验（新增）。
+      // 与运行期 evalStructExpr 同口径：显式/简写字段按名登记；..base
+      // 功能更新动态携带字段 → 缺字段检查跳过（base 可补齐），未知字段
+      // 检查照常（多余名字与 base 无关，仍是类型错误）。
+      const hasBase = e.fields.some((f) => f.base);
+      const givenNames: string[] = [];
       for (const f of e.fields) {
+        if (f.base) {
+          checkExpr(f.base, scope, enums, diags, file, inAgentLoop);
+          continue;
+        }
         if (f.value) checkExpr(f.value, scope, enums, diags, file, inAgentLoop);
-        else if (f.base) checkExpr(f.base, scope, enums, diags, file, inAgentLoop);
         else markUsed(scope, f.name); // 简写
+        if (givenNames.includes(f.name)) {
+          diags.push(err('S-20', `结构体字面量字段 "${f.name}" 重复`, e.span, file));
+        }
+        givenNames.push(f.name);
+      }
+      // 单段路径 → 结构体字面量
+      if (e.segs.length === 1) {
+        const def = structFieldNames.get(e.segs[0]!);
+        if (def) {
+          for (const n of givenNames) {
+            if (!def.includes(n)) {
+              diags.push(err('S-20', `结构体 ${e.segs[0]} 没有字段 "${n}"（已知字段：${def.join('、')}）`, e.span, file));
+            }
+          }
+          if (!hasBase) {
+            const missing = def.filter((n) => !givenNames.includes(n));
+            if (missing.length > 0) {
+              diags.push(err('S-20', `结构体字面量 ${e.segs[0]} 缺少字段 ${missing.map((n) => `"${n}"`).join('、')}`, e.span, file));
+            }
+          }
+        }
+      }
+      // 两段路径 → 枚举变体命名字面量（L-2：别名归一）
+      if (e.segs.length === 2) {
+        const [a, b] = e.segs as [string, string];
+        const origA = enumAlias.get(a) ?? a;
+        const vfields = enumVariantFieldNames.get(origA)?.get(b);
+        if (vfields) {
+          for (const n of givenNames) {
+            if (!vfields.includes(n)) {
+              diags.push(err('S-20', `变体 ${a}::${b} 没有字段 "${n}"（已知字段：${vfields.join('、')}）`, e.span, file));
+            }
+          }
+          if (!hasBase) {
+            const missing = vfields.filter((n) => !givenNames.includes(n));
+            if (missing.length > 0) {
+              diags.push(err('S-20', `变体字面量 ${a}::${b} 缺少字段 ${missing.map((n) => `"${n}"`).join('、')}`, e.span, file));
+            }
+          }
+        }
       }
       break;
     }

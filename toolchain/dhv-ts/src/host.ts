@@ -136,7 +136,10 @@ export class Host {
         write: (p: string, content: string): number => this.withFaultsSync('fs.write', () => this.fsWrite(p, content)),
         edit: (p: string, oldText: string, newText: string): { ok: boolean; error?: string } =>
           this.withFaultsSync('fs.edit', () => this.fsEdit(p, oldText, newText)),
-        list: (dir?: string): string => this.withFaultsSync('fs.list', () => this.fsList(dir ?? '.')),
+        // v0.2.60：depth 可选（默认 8，上限 32）—— 此前两层硬编码，深层文件
+        // 对 harness 静默不可见且无法配置（静默截断陷阱）。
+        list: (dir?: string, depth?: number): string =>
+          this.withFaultsSync('fs.list', () => this.fsList(dir ?? '.', depth)),
       },
       shell: {
         run: async (cmd: string, o?: { cwd?: string; timeoutMs?: number }) =>
@@ -172,7 +175,16 @@ export class Host {
         nextReview: async (): Promise<string> => {
           if (!this.fixture) throw new Error('fixture 未配置（--fixture）');
           const i = this.fixture.reviewIdx++;
-          if (i >= this.fixture.reviews.length) return JSON.stringify({ verdict: 'accept' });
+          // v0.2.60：耗尽抛错（与 nextAct / fixture.next(track) 同口径）——
+          // 此前静默返回 {"verdict":"accept"}：审查判定是验收闸门的证据源，
+          // 缺省伪造 accept = 闸门静默失效（「可观测不静默」纪律，同
+          // shift-overflow / 空 content 可诊断化一族）。需要恒 accept 的剧本
+          // 请在 reviews 里显式写足条目。
+          if (i >= this.fixture.reviews.length) {
+            throw new Error(
+              `fixture reviews 已耗尽（${this.fixture.reviews.length} 条）—— 审查判定不可静默伪造（accept 不是安全缺省；需要恒 accept 请显式写足剧本条目）`,
+            );
+          }
           return this.fixture.reviews[i]!;
         },
         actsLeft: (): number => (this.fixture ? this.fixture.acts.length - this.fixture.actIdx : 0),
@@ -333,6 +345,25 @@ export class Host {
     if (resolved !== ws && !resolved.startsWith(ws + path.sep)) {
       throw new Error(`路径越界（capability 违规）：${p} 逃出工作区 ${ws}`);
     }
+    // v0.2.60：symlink 实解析。path.resolve 只是词法归一 —— workspace 内一个
+    // 指向外部的符号链即可把 read/write/edit/list 送到监狱外（实测穿越：
+    // ws/etclink -> /etc 后 fs.read("etclink/hostname") 直达；write 同理可
+    // 在监狱外落盘）。规则：已存在路径经 realpathSync 归一后必须仍在
+    // （realpath 后的）工作区内；写入不存在的路径则解析最近存在祖先 ——
+    // 父目录可能恰是指向外部的符号链，walk-up 到第一个存在节点再实解析。
+    // tail 成分（不存在的新名字）不可能是符号链，落在已验证祖先内即安全。
+    if (!fs.existsSync(ws)) return resolved; // ws 未建（首写 mkdir 场景）：无从穿越
+    const realWs = fs.realpathSync(ws);
+    let probe = resolved;
+    while (!fs.existsSync(probe) && probe !== path.dirname(probe)) {
+      probe = path.dirname(probe);
+    }
+    const realProbe = fs.realpathSync(probe); // probe 必存在（词法包含保证最坏停在 ws）
+    if (realProbe !== realWs && !realProbe.startsWith(realWs + path.sep)) {
+      throw new Error(
+        `路径越界（capability 违规·symlink）：${p} 经符号链逃出工作区 ${ws}（实解析 ${realProbe}）`,
+      );
+    }
     return resolved;
   }
 
@@ -379,15 +410,34 @@ export class Host {
     return { ok: true };
   }
 
-  private fsList(dir: string): string {
+  private fsList(dir: string, depth?: number): string {
     const abs = this.jail(dir);
-    const walk = (d: string, prefix: string): string[] => {
+    // v0.2.60：深度默认 8（原硬编码 2：第 3 层起目录仅出条目不展开，深层
+    // 文件静默不可见）；上限 32 防失控；非有限/越界值钳制并警告可观测。
+    const FS_LIST_DEFAULT_DEPTH = 8;
+    const FS_LIST_MAX_DEPTH = 32;
+    const FS_LIST_MAX_ENTRIES = 20_000; // 超大树（如 node_modules）截断可观测
+    let maxDepth = FS_LIST_DEFAULT_DEPTH;
+    if (depth !== undefined) {
+      if (!Number.isFinite(depth) || depth < 1 || depth > FS_LIST_MAX_DEPTH) {
+        const clamped = Math.max(1, Math.min(FS_LIST_MAX_DEPTH, Math.trunc(Number(depth) || FS_LIST_DEFAULT_DEPTH)));
+        this.emit('fs_list_depth_clamped', { requested: depth, applied: clamped });
+        maxDepth = clamped;
+      } else {
+        maxDepth = Math.trunc(depth);
+      }
+    }
+    let truncated = false;
+    const walk = (d: string, prefix: string, depthLeft: number): string[] => {
       const out: string[] = [];
+      if (depthLeft <= 0) return out;
       for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (out.length + 1 > FS_LIST_MAX_ENTRIES) { truncated = true; return out; }
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) {
           out.push(`${rel}/`);
-          if (prefix.split('/').length < 2) out.push(...walk(path.join(d, e.name), rel));
+          out.push(...walk(path.join(d, e.name), rel, depthLeft - 1));
+          if (truncated) return out;
         } else {
           out.push(rel);
         }
@@ -395,7 +445,9 @@ export class Host {
       return out;
     };
     if (!fs.existsSync(abs)) throw new Error(`目录不存在：${dir}`);
-    return walk(abs, '').join('\n');
+    const entries = walk(abs, '', maxDepth);
+    if (truncated) entries.push(`... [fs.list 截断：超过 ${FS_LIST_MAX_ENTRIES} 条]`);
+    return entries.join('\n');
   }
 
   private async shellRun(cmd: string, o?: { cwd?: string; timeoutMs?: number }): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }> {
