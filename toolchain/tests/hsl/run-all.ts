@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseFileSource } from '../../dhv-ts/src/parser';
 import { balanceCheck } from '../../dhv-ts/src/backends/validate';
+import { Host } from '../../dhv-ts/src/host';
 
 const ROOT = path.resolve(import.meta.dir, '../..');
 const DHV = path.join(ROOT, 'dhv-ts/src/main.ts');
@@ -303,6 +304,178 @@ fn f(a: Action) -> i64 {
 }
 fn main() {}`);
   assert(out.includes('S-6') && out.includes('Stop'), `缺变体应报错：${out.slice(0, 200)}`);
+});
+
+// ---------------------------------------------------------------------------
+// 1b. LLM 网关（v0.2.58 上游化的测试补位 + v0.2.61 流式车道）
+// ---------------------------------------------------------------------------
+// 背景：v0.2.58 从 ORG vendored 副本上游化 DHV_LLM_GATEWAY 网关路由，但
+// 测试未随行 —— 本组一并补齐（鉴权/模型路由/超时/思考量）与 v0.2.61 的
+// 流式车道（SSE 逐块解析 + llm-stream.jsonl 增量落盘 + reset 标记 +
+// llm_stream_done 事件）。全部本地 mock（Bun.serve 随机端口）—— 不出网。
+// ---------------------------------------------------------------------------
+let gwServer: ReturnType<typeof Bun.serve> | null = null;
+const gwSaved: Record<string, string | undefined> = {};
+const GW_VARS = ['DHV_LLM_GATEWAY', 'DHV_LLM_API_KEY', 'DHV_LLM_MODEL', 'DHV_LLM_THINKING'];
+
+function gwTeardown(): void {
+  for (const v of GW_VARS) {
+    if (gwSaved[v] === undefined) delete process.env[v];
+    else process.env[v] = gwSaved[v]!;
+  }
+  gwServer?.stop(true);
+  gwServer = null;
+}
+
+function makeGatewayHost(outdir: string): Host {
+  return new Host({
+    workspace: TMP,
+    task: 'gateway probe',
+    model: 'deepseek',
+    temperature: 0.1,
+    maxTurns: 1,
+    maxBashCalls: 0,
+    maxOutputChars: 4096,
+    allow: [],
+    scale: 'solo',
+    outdir,
+    quiet: true,
+  });
+}
+
+test('网关', '非流式：鉴权头 + model 字段贯通（DHV_LLM_API_KEY / DHV_LLM_MODEL）', async () => {
+  for (const v of GW_VARS) gwSaved[v] = process.env[v];
+  const seen: { auth: string | null; model: unknown }[] = [];
+  gwServer = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = (await req.json()) as Record<string, unknown>;
+      seen.push({ auth: req.headers.get('authorization'), model: body.model });
+      return Response.json({ choices: [{ message: { content: `pong:${String(body.model ?? 'default')}` } }] });
+    },
+  });
+  process.env.DHV_LLM_GATEWAY = `http://127.0.0.1:${gwServer.port}/v1`;
+  process.env.DHV_LLM_API_KEY = 'sk-test-key';
+  process.env.DHV_LLM_MODEL = 'test-model-x';
+  const host = makeGatewayHost(path.join(TMP, 'gw-basic'));
+  const llm = host.api.llm as { complete: (r: unknown) => Promise<string> };
+  const out = await llm.complete({ messages: [{ role: 'user', content: 'ping' }], temperature: 0.1, maxTokens: 32 });
+  assertEq(out, 'pong:test-model-x', '网关应回显 model 字段（贯通证据）');
+  assertEq(seen[0]!.auth, 'Bearer sk-test-key', '鉴权头应为 Bearer DHV_LLM_API_KEY');
+  assertEq(seen[0]!.model, 'test-model-x', 'model 字段应来自 DHV_LLM_MODEL');
+  gwTeardown();
+});
+
+test('网关', '流式：SSE reasoning/content 双通道落盘 + 完整正文返回 + reset + llm_stream_done', async () => {
+  for (const v of GW_VARS) gwSaved[v] = process.env[v];
+  delete process.env.DHV_LLM_THINKING;
+  const outdir = path.join(TMP, 'gw-stream');
+  fs.mkdirSync(outdir, { recursive: true });
+  gwServer = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = (await req.json()) as Record<string, unknown>;
+      assert(body.stream === true, '流式车道请求体必须带 stream:true');
+      const frames: string[] = [];
+      const push = (delta: Record<string, unknown>): void => {
+        frames.push(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`);
+      };
+      push({ reasoning_content: '思' });
+      push({ reasoning_content: '考' });
+      push({ content: '你' });
+      push({ content: '好' });
+      frames.push(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { total_tokens: 7 } })}\n\n`);
+      frames.push('data: [DONE]\n\n');
+      const stream = new ReadableStream({
+        async start(controller) {
+          for (const f of frames) {
+            controller.enqueue(new TextEncoder().encode(f));
+            await new Promise((r) => setTimeout(r, 3));
+          }
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  process.env.DHV_LLM_GATEWAY = `http://127.0.0.1:${gwServer.port}/v1`;
+  const host = makeGatewayHost(outdir);
+  const llm = host.api.llm as { complete: (r: unknown) => Promise<string> };
+  const out = await llm.complete({
+    messages: [{ role: 'user', content: 'ping' }],
+    temperature: 0.1, maxTokens: 32,
+    stream: true, track: 'direct:expert-a',
+  });
+  assertEq(out, '你好', '流式返回值应为完整正文（拼接）');
+  const lines = fs.readFileSync(path.join(outdir, 'llm-stream.jsonl'), 'utf-8')
+    .split('\n').filter((l) => l.length > 0).map((l) => JSON.parse(l) as { track: string; kind: string; delta: string });
+  const kinds = lines.map((l) => l.kind);
+  assertEq(kinds[0], 'reset', '流开始应有 reset 标记');
+  assertEq(kinds.filter((k) => k === 'reasoning').length, 2, 'reasoning 增量应逐块落盘');
+  assertEq(kinds.filter((k) => k === 'content').length, 2, 'content 增量应逐块落盘');
+  assertEq(lines.filter((l) => l.kind === 'content').map((l) => l.delta).join(''), '你好', 'content 增量应保序拼接');
+  assert(lines.every((l) => l.track === 'direct:expert-a'), 'track 归因应贯通到每条增量');
+  const done = (host as unknown as { events: { name: string; data: Record<string, unknown> }[] }).events
+    .find((e) => e.name === 'llm_stream_done');
+  assert(done !== undefined, '应发 llm_stream_done 事件');
+  assertEq(done!.data.chars, '你好'.length, 'done 事件 chars = 正文长度');
+  assertEq(done!.data.reasoning_chars, '思考'.length, 'done 事件 reasoning_chars = 思考长度');
+  assertEq((done!.data.usage as Record<string, unknown>).total_tokens, 7, 'done 事件应带尾包 usage');
+  gwTeardown();
+});
+
+test('网关', '流式：空正文（推理吃满预算）→ 抛错带 reasoning_chars 诊断面', async () => {
+  for (const v of GW_VARS) gwSaved[v] = process.env[v];
+  const outdir = path.join(TMP, 'gw-empty');
+  fs.mkdirSync(outdir, { recursive: true });
+  gwServer = Bun.serve({
+    port: 0,
+    async fetch() {
+      const stream = new ReadableStream({
+        async start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '只有思考' }, finish_reason: null }] })}\n\n`));
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }], usage: {} })}\n\n`));
+          controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  process.env.DHV_LLM_GATEWAY = `http://127.0.0.1:${gwServer.port}/v1`;
+  const host = makeGatewayHost(outdir);
+  const llm = host.api.llm as { complete: (r: unknown) => Promise<string> };
+  let err: Error | null = null;
+  try {
+    await llm.complete({ messages: [{ role: 'user', content: 'x' }], stream: true, track: 't' });
+  } catch (e) {
+    err = e as Error;
+  }
+  assert(err !== null, '空正文流应抛错');
+  assert(err!.message.includes('empty completion'), `错误应可诊断：${err!.message}`);
+  assert(err!.message.includes('reasoning_chars=4'), `应带思考量归因：${err!.message}`);
+  gwTeardown();
+});
+
+test('网关', '思考量控制：thinking=off → thinking 字段；low/medium/high → reasoning_effort', async () => {
+  for (const v of GW_VARS) gwSaved[v] = process.env[v];
+  const seen: Record<string, unknown>[] = [];
+  gwServer = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = (await req.json()) as Record<string, unknown>;
+      seen.push(body);
+      return Response.json({ choices: [{ message: { content: 'ok' } }] });
+    },
+  });
+  process.env.DHV_LLM_GATEWAY = `http://127.0.0.1:${gwServer.port}/v1`;
+  const host = makeGatewayHost(path.join(TMP, 'gw-thinking'));
+  const llm = host.api.llm as { complete: (r: unknown) => Promise<string> };
+  await llm.complete({ messages: [{ role: 'user', content: 'a' }], thinking: 'off' });
+  await llm.complete({ messages: [{ role: 'user', content: 'b' }], thinking: 'high' });
+  assertEq(JSON.stringify(seen[0]!.thinking), '{"type":"disabled"}', 'thinking=off 应映射 thinking.type=disabled');
+  assertEq(seen[1]!.reasoning_effort, 'high', 'thinking=high 应映射 reasoning_effort');
+  gwTeardown();
 });
 
 // ---------------------------------------------------------------------------

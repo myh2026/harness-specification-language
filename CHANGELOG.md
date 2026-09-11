@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v0.2.61（2026-09-11）—— LLM 网关流式车道（逐 token 观测面）
+
+`$host.llm.complete` 补流式输出（`stream: true`，仅网关车道）：SSE 逐块解析
+（OpenAI 兼容 `stream` 协议），reasoning_content 与 content **双通道分别归因**
+（推理型模型思考/正文分离，DeepSeek 实测），每块立即 append-only 落盘
+`<outdir>/llm-stream.jsonl`（`{ts, track, kind, delta}`，行级原子）—— 观测面
+（ORG 引擎泵 / chat REPL / Web SSE / TUI）以行级尾随即可**逐 token 渲染**。
+返回值仍为完整正文：HSL 语义零变化（观测增强，非语义变更）。
+
+- **流式车道**：POST `stream:true` → ReadableStream 逐块；SSE 帧解析（data:
+  行负载 / [DONE] 哨兵 / 冒号注释行跳过 / 单块解析失败不炸整条流）；
+- **reset 标记**：每次流式调用开始落一行 `kind:"reset"`（空 delta 特例放行）
+  —— 调用侧有界重试会完整重发，观测面收 reset 即清已渲染正文重新开始；
+- **llm_stream_done 事件**：尾包带 usage 时发（chars / reasoning_chars /
+  elapsed_ms 可观测）；
+- **空正文可诊断**：推理吃满预算（finish_reason=length 类场景）抛错带
+  reasoning_chars —— 与非流式车道 v0.2.59 的诊断面同构；
+- **超时/鉴权/模型路由/思考量**：与非流式车道同构（AbortController + finally
+  清理；DHV_LLM_API_KEY / DHV_LLM_MODEL / DHV_LLM_THINKING）；
+- **测试补位**：v0.2.58 网关上游化时测试未随行 —— 本版补齐（鉴权头贯通 /
+  model 路由 / thinking 映射）+ 流式四例（双通道落盘 / reset / done 事件 /
+  空正文诊断面）；172 → **176 全绿**；
+- ORG 侧消费：`org chat`（交互式 REPL）与 Web GUI SSE（delta 事件）逐 token
+  渲染 —— vendored 同步 v0.4.15。
+
 ## v0.2.60（2026-09-11）—— S-20 字面量字段闸门 + 宿主面三修（可观测/安全）
 
 实测发现类型安全闸门缺位：`struct Point { x: i64, y: i64 }` 后构造

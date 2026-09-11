@@ -129,6 +129,12 @@ export class Host {
            * 调用侧退避升级用（如 ORG model.hsl 在 finish_reason=length 空返回
            * 后关思考重试），非工具链层隐式重试。 */
           thinking?: string;
+          /** v0.2.61：流式输出（仅网关车道）—— SSE 分块增量落盘
+           * <outdir>/llm-stream.jsonl（reasoning/content 双通道），返回值
+           * 仍为完整正文（HSL 语义不变）；观测面（CLI/TUI/Web/chat）尾随
+           * 该文件即可逐 token 渲染。track 仅用于事件归因。 */
+          stream?: boolean;
+          track?: string;
         }): Promise<string> => this.withFaultsAsync('llm.complete', () => this.llmComplete(req)),
       },
       fs: {
@@ -546,14 +552,17 @@ export class Host {
     return abs;
   }
 
-  private async llmComplete(req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number; thinking?: string }): Promise<string> {
+  private async llmComplete(req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number; thinking?: string; stream?: boolean; track?: string }): Promise<string> {
     // LLM 网关路由（v0.2.58，自 ORG vendored 副本上游化）：DHV_LLM_GATEWAY 指向
     // OpenAI 兼容端点（如 <base>/v1 形态）时走 HTTP —— 独立部署无需本机安装
     // z-ai-web-dev-sdk，多 Agent 共享同一底座/限流桶；缺省直连 z-ai-web-dev-sdk
     // （行为不变）。
+    // v0.2.61：req.stream（仅网关车道）→ SSE 流式 —— 增量落盘 llm-stream.jsonl
+    // 供观测面（CLI 引擎泵 / chat REPL / Web SSE / TUI）尾随渲染；返回值仍为
+    // 完整正文，HSL 语义零变化（观测增强，非语义变更）。
     const gateway = (process.env.DHV_LLM_GATEWAY || "").replace(/\/+$/, "");
     if (gateway) {
-      return this.llmViaGateway(gateway, req);
+      return req.stream ? this.llmViaGatewayStream(gateway, req) : this.llmViaGateway(gateway, req);
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mod: any = await import('z-ai-web-dev-sdk');
@@ -649,5 +658,134 @@ export class Host {
     const abs = path.resolve(this.opts.outdir, 'events.jsonl');
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, this.events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
+  }
+
+  /**
+   * 流式增量落盘（v0.2.61）：append-only llm-stream.jsonl —— 每行一个增量
+   * {ts, track, kind: "reasoning"|"content", delta}。观测面（ORG 引擎泵 /
+   * chat REPL / Web SSE / TUI）以行级尾随即可逐 token 渲染；fs.appendFileSync
+   * 行级原子，崩溃时已落盘增量不丢。落盘失败静默降级（观测面退回无流式，
+   * 主路径完整返回不受影响）。
+   */
+  private llmStreamAppend(track: string, kind: 'reasoning' | 'content' | 'reset', delta: string): void {
+    if (delta.length === 0 && kind !== 'reset') return; // reset 标记允许空 delta
+    try {
+      const abs = path.resolve(this.opts.outdir, 'llm-stream.jsonl');
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.appendFileSync(abs, JSON.stringify({ ts: new Date().toISOString(), track, kind, delta }) + '\n', 'utf-8');
+    } catch {
+      // 观测面降级，不炸调用
+    }
+  }
+
+  /**
+   * OpenAI 兼容网关 · 流式车道（v0.2.61）：POST stream:true → SSE 逐块解析。
+   * reasoning_content 与 content 双通道分别归因（推理型模型思考/正文分离，
+   * DeepSeek 实测）；每块立即 llmStreamAppend（行级原子，观测面自会节流
+   * 渲染）。返回完整正文；尾包带 usage 时发 llm_stream_done 事件（chars /
+   * reasoning_chars / elapsed_ms 可观测）。鉴权/模型路由/超时/thinking 参数
+   * 与非流式车道同构（请求体组装逻辑共享同一份）。空正文抛错带诊断面
+   * （finish_reason=stream + reasoning_chars —— 推理吃满预算场景可归因）。
+   */
+  private async llmViaGatewayStream(
+    gateway: string,
+    req: { messages: { role: string; content: string }[]; temperature?: number; maxTokens?: number; thinking?: string; track?: string },
+  ): Promise<string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const apiKey = process.env.DHV_LLM_API_KEY || "";
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const body: Record<string, unknown> = {
+      messages: req.messages,
+      temperature: req.temperature ?? 0.2,
+      max_tokens: req.maxTokens ?? 1024,
+      stream: true,
+    };
+    const model = process.env.DHV_LLM_MODEL || "";
+    if (model) body.model = model;
+    const thinking = (req.thinking ?? process.env.DHV_LLM_THINKING ?? "").trim().toLowerCase();
+    if (thinking === "off" || thinking === "disabled") body.thinking = { type: "disabled" };
+    else if (thinking === "low" || thinking === "medium" || thinking === "high") body.reasoning_effort = thinking;
+    const track = req.track || "llm";
+    // 流开始标记（观测面重绘用）：同一 ask 的有界重试会再次进入本车道，
+    // 观测面（chat/Web/TUI）收 reset 即清已渲染正文重新开始 —— 与完整重发
+    // 的真实语义一致（上一次的部分流被丢弃）
+    this.llmStreamAppend(track, 'reset', '');
+    const envTimeout = (process.env.DHV_LLM_TIMEOUT_MS ?? "").trim();
+    let timeoutMs = 180000;
+    if (envTimeout !== "") {
+      const n = Number(envTimeout);
+      if (Number.isFinite(n) && n >= 0) timeoutMs = n;
+    }
+    // 超时保护与非流式车道同构：AbortController + finally 清理（v0.2.59 实测
+    // Bun AbortSignal.timeout 与 fetch 完成路径丢延续，不用）
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs > 0) timer = setTimeout(() => controller.abort(), timeoutMs);
+    const t0 = Date.now();
+    let contentChars = 0;
+    let reasoningChars = 0;
+    let usage: Record<string, unknown> | undefined;
+    try {
+      const res = await fetch(`${gateway}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`LLM gateway ${res.status}: ${text.slice(0, 200)}`);
+      }
+      if (!res.body) throw new Error('LLM gateway 流式响应无 body');
+      let content = '';
+      let buf = '';
+      const reader = (res.body as unknown as { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }> } }).getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE 帧解析：data: 行负载为 JSON 增量；[DONE] 哨兵；冒号开头为
+        // 注释/心跳行（跳过）；单块解析失败跳过不炸整条流
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).replace(/\r$/, '');
+          buf = buf.slice(nl + 1);
+          if (line.length === 0 || line.startsWith(':')) continue;
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const chunk = JSON.parse(payload) as {
+              choices?: { delta?: { content?: string | null; reasoning_content?: string | null }; finish_reason?: string | null }[];
+              usage?: Record<string, unknown>;
+            };
+            if (chunk.usage) usage = chunk.usage;
+            const d = chunk.choices?.[0]?.delta;
+            if (d?.reasoning_content) {
+              reasoningChars += d.reasoning_content.length;
+              this.llmStreamAppend(track, 'reasoning', d.reasoning_content);
+            }
+            if (d?.content) {
+              content += d.content;
+              contentChars += d.content.length;
+              this.llmStreamAppend(track, 'content', d.content);
+            }
+          } catch {
+            // 单块解析失败跳过（SSE 中途注释/心跳行）
+          }
+        }
+      }
+      if (content === '') {
+        throw new Error(`empty completion (finish_reason=stream, usage=${usage ? JSON.stringify(usage) : 'n/a'}, reasoning_chars=${reasoningChars})`);
+      }
+      this.emit('llm_stream_done', {
+        track, chars: contentChars, reasoning_chars: reasoningChars,
+        elapsed_ms: Date.now() - t0, usage: usage ?? null,
+      });
+      return content;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 }
