@@ -17,6 +17,25 @@ fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// 测试线程栈扩容包裹器（#stackfix）。
+///
+/// 根因：pest PEG 优先级链（assignment→range→bit→eq→rel→shift→add→mul→
+/// cast→unary→postfix→primary，每表达式 ~13 层规则帧）× debug 构建肥帧，
+/// 在 libtest 默认 2 MiB 测试线程下，fixture 全量循环会爆栈（1 MiB 下
+/// 7 行最小复现即爆：enum + 两臂 match）。主线程 8 MiB 与 release 优化
+/// 帧均无碍 —— **仅 `cargo test` 环境受影响，CLI 用户路径不受影响**。
+///
+/// 修复采用标准做法：测试体迁入 16 MiB 显式栈线程，不依赖调用方设置
+/// RUST_MIN_STACK 环境变量（CI 无状态化）。assert 在子线程内触发，
+/// panic 经 join 正常回传 harness 报告，测试语义零变化。
+fn with_big_stack<F: FnOnce() + Send + 'static>(f: F) {
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn 大栈线程失败");
+    handle.join().expect("大栈测试线程 panic");
+}
+
 fn hsl_files(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("读取目录失败 {}: {e}", dir.display()))
@@ -45,87 +64,95 @@ fn run_check(path: &Path) -> String {
 /// ---- parse/：必须解析成功 ----
 #[test]
 fn parse_fixtures_must_parse() {
-    let dir = fixtures_dir().join("parse");
-    let mut failures = Vec::new();
-    for f in hsl_files(&dir) {
-        let src = std::fs::read_to_string(&f).unwrap();
-        if let Err(diags) = dhv::parser::parse(0, &src) {
-            let rendered = diags.render_all(&src, &f.display().to_string());
-            failures.push(format!("{}\n{rendered}", f.display()));
+    with_big_stack(|| {
+        let dir = fixtures_dir().join("parse");
+        let mut failures = Vec::new();
+        for f in hsl_files(&dir) {
+            let src = std::fs::read_to_string(&f).unwrap();
+            if let Err(diags) = dhv::parser::parse(0, &src) {
+                let rendered = diags.render_all(&src, &f.display().to_string());
+                failures.push(format!("{}\n{rendered}", f.display()));
+            }
         }
-    }
-    assert!(failures.is_empty(), "以下 fixture 解析失败:\n{}", failures.join("\n=====\n"));
+        assert!(failures.is_empty(), "以下 fixture 解析失败:\n{}", failures.join("\n=====\n"));
+    });
 }
 
 /// ---- check/：必须 check 全绿 ----
 #[test]
 fn check_fixtures_must_pass() {
-    let dir = fixtures_dir().join("check");
-    let mut failures = Vec::new();
-    for f in hsl_files(&dir) {
-        let out = run_check(&f);
-        // E0001/E0002 等错误码出现即失败
-        if out.contains("ERROR") {
-            failures.push(format!("{}\n{out}", f.display()));
+    with_big_stack(|| {
+        let dir = fixtures_dir().join("check");
+        let mut failures = Vec::new();
+        for f in hsl_files(&dir) {
+            let out = run_check(&f);
+            // E0001/E0002 等错误码出现即失败
+            if out.contains("ERROR") {
+                failures.push(format!("{}\n{out}", f.display()));
+            }
         }
-    }
-    assert!(failures.is_empty(), "以下 fixture check 失败:\n{}", failures.join("\n=====\n"));
+        assert!(failures.is_empty(), "以下 fixture check 失败:\n{}", failures.join("\n=====\n"));
+    });
 }
 
 /// ---- errors/：必须 check 失败且命中期望代码 ----
 #[test]
 fn error_fixtures_must_fail_with_expected_code() {
-    let dir = fixtures_dir().join("errors");
-    let mut failures = Vec::new();
-    for f in hsl_files(&dir) {
-        let stem = f.file_stem().unwrap().to_string_lossy().to_string();
-        let Some((expected_code, _)) = stem.split_once('_') else {
-            panic!("errors/ 文件名必须以期望代码开头（如 S7_xxx.hsl）: {}", f.display());
-        };
-        let out = run_check(&f);
-        if !out.contains("ERROR") {
-            failures.push(format!("{}: 期望 {} 但 check 意外通过", f.display(), expected_code));
-        } else if !out.contains(expected_code) {
-            failures.push(format!(
-                "{}: 期望诊断代码 {} 未出现，实际输出:\n{out}",
-                f.display(),
-                expected_code
-            ));
+    with_big_stack(|| {
+        let dir = fixtures_dir().join("errors");
+        let mut failures = Vec::new();
+        for f in hsl_files(&dir) {
+            let stem = f.file_stem().unwrap().to_string_lossy().to_string();
+            let Some((expected_code, _)) = stem.split_once('_') else {
+                panic!("errors/ 文件名必须以期望代码开头（如 S7_xxx.hsl）: {}", f.display());
+            };
+            let out = run_check(&f);
+            if !out.contains("ERROR") {
+                failures.push(format!("{}: 期望 {} 但 check 意外通过", f.display(), expected_code));
+            } else if !out.contains(expected_code) {
+                failures.push(format!(
+                    "{}: 期望诊断代码 {} 未出现，实际输出:\n{out}",
+                    f.display(),
+                    expected_code
+                ));
+            }
         }
-    }
-    assert!(failures.is_empty(), "errors/ 断言未满足:\n{}", failures.join("\n=====\n"));
+        assert!(failures.is_empty(), "errors/ 断言未满足:\n{}", failures.join("\n=====\n"));
+    });
 }
 
 /// ---- modules/：多模块工程（linker 集成回归） ----
 #[test]
 fn module_projects_link_and_check() {
-    let dir = fixtures_dir().join("modules");
-    let mut failures = Vec::new();
-    for project in std::fs::read_dir(&dir).unwrap() {
-        let project = project.unwrap().path();
-        if !project.is_dir() {
-            continue;
-        }
-        let root = project.join("root.hsl");
-        if !root.is_file() {
-            continue;
-        }
-        let name = project.file_name().unwrap().to_string_lossy().to_string();
-        let out = run_check(&root);
-        if name.starts_with("pass_") {
-            if out.contains("ERROR") {
-                failures.push(format!("{}\n{out}", root.display()));
+    with_big_stack(|| {
+        let dir = fixtures_dir().join("modules");
+        let mut failures = Vec::new();
+        for project in std::fs::read_dir(&dir).unwrap() {
+            let project = project.unwrap().path();
+            if !project.is_dir() {
+                continue;
             }
-        } else if let Some(rest) = name.strip_prefix("fail_") {
-            let expected_code = rest.split('_').next().unwrap_or("");
-            if !out.contains("ERROR") {
-                failures.push(format!("{}: 期望 {} 但 check 意外通过", root.display(), expected_code));
-            } else if !out.contains(expected_code) {
-                failures.push(format!("{}: 期望 {} 未出现:\n{out}", root.display(), expected_code));
+            let root = project.join("root.hsl");
+            if !root.is_file() {
+                continue;
+            }
+            let name = project.file_name().unwrap().to_string_lossy().to_string();
+            let out = run_check(&root);
+            if name.starts_with("pass_") {
+                if out.contains("ERROR") {
+                    failures.push(format!("{}\n{out}", root.display()));
+                }
+            } else if let Some(rest) = name.strip_prefix("fail_") {
+                let expected_code = rest.split('_').next().unwrap_or("");
+                if !out.contains("ERROR") {
+                    failures.push(format!("{}: 期望 {} 但 check 意外通过", root.display(), expected_code));
+                } else if !out.contains(expected_code) {
+                    failures.push(format!("{}: 期望 {} 未出现:\n{out}", root.display(), expected_code));
+                }
             }
         }
-    }
-    assert!(failures.is_empty(), "modules/ 断言未满足:\n{}", failures.join("\n=====\n"));
+        assert!(failures.is_empty(), "modules/ 断言未满足:\n{}", failures.join("\n=====\n"));
+    });
 }
 
 /// ---- 值语境 range：双编译器一致回归 ----
@@ -133,7 +160,8 @@ fn module_projects_link_and_check() {
 /// fixture: check/value_context_range.hsl
 #[test]
 fn value_context_ranges_dhv_only() {
-    let src = r#"export fn f(a: i64, b: i64) -> i64 {
+    with_big_stack(|| {
+        let src = r#"export fn f(a: i64, b: i64) -> i64 {
     let r = a..b;
     let s = a..=b;
     let mut acc: i64 = 0;
@@ -146,6 +174,7 @@ fn value_context_ranges_dhv_only() {
     acc
 }
 "#;
-    let result = dhv::compile_check("value_ranges.hsl", src);
-    assert!(!result.diags.has_errors(), "值语境 range 应通过 check: {:?}", result.diags.items.iter().map(|d| d.message.clone()).collect::<Vec<_>>());
+        let result = dhv::compile_check("value_ranges.hsl", src);
+        assert!(!result.diags.has_errors(), "值语境 range 应通过 check: {:?}", result.diags.items.iter().map(|d| d.message.clone()).collect::<Vec<_>>());
+    });
 }
