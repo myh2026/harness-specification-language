@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## v0.2.62（2026-09-12）—— 实测驱动修复批次（六处 · 每修一 bug 锁一用例）
+
+外部实测（沙盒全链路装机：bun 跑 dhv-ts + cargo 构建 dhv + 双编译器 conformance）
+驱动的一致性/健壮性修复。全部用例先复现后修复，回归锁定在
+`tests/hsl/run-all.ts` v0.2.62 批次与 `dhv/tests/fixtures/parse/`。
+
+- **G-8 expr 守卫指纹**（checker.ts）：Span 是 `{line,col,file}` 对象，
+  此前 `span[0]/span[1]` 索引恒 `undefined` → 所有 expr 守卫的指纹都是
+  `expr@undefined:undefined` —— 同端点两条**不同的**合法守卫（`x > 1` /
+  `x < 0`，Vigil 惯用法同向多守卫）被 G-8 误杀。改为**表达式结构指纹**
+  `exprFingerprint`（位置无关递归序列化）：同结构 ≡ 复制粘贴（G-8 仍拦截），
+  不同条件 ≡ 合法并行边（不误报）——两个目标同时满足。
+- **dhv（Rust）edge guard expr 形态解析**（hsl.pest）：`edge_guard =
+  { pattern | expression }` 的 PEG 有序选择里，pattern 对 `x > 1` 只消费
+  绑定模式 `x` 即成功提交（PEG 不回溯），残留 `> 1` 撞 `edge_attrs? ~ ";"` →
+  E0001 —— `>` `<` `==` `!=` `&&` 等全部中招，而 dhv-ts 同源码正常
+  （conformance 只对拍结论，语料缺 expr 守卫形态故漏网）。修复：pattern
+  分支加负向前瞻 `guard_continues`（完整 pattern 后紧跟表达式续接运算符
+  → 改走 expression 分支）。回归：`parse/edge_expr_guard_operators.hsl`。
+- **下标切片语法 `v[i..j]`**（parser.ts）：值语境 range（v1.5 §2.11.7）
+  在下标语境抢先吸收 `1..3`，postfix 的 slice 分支成死代码 → 解析为
+  `v[range(1,3)]` → interp 把 range 对象 `Number()` 成 NaN，NaN 绕过越界
+  检查静默返回 `undefined`（下游 `.len()` 报误导性「unit 没有方法 len」）。
+  与 dhv（pest `index_or_range = { range_full | expression }` 先试 slice）
+  语义分歧。修复：下标语境专用 `parseExprNoRange()`，`[i]` / `[i..j]` /
+  `[i..]` / `[i..=j]` / `[..j]` 全形态可用。
+- **复合赋值算术对齐**（interp.ts）：`evalCompound` 的 `%` 缺除零检查
+  （`x %= 0` 静默 NaN —— 垃圾值污染数据流）与 bigint 分支；`*` `/` 缺
+  bigint 分支（`x *= 大整数` 误报「int 与 float」）。全部对齐 `evalBinary`
+  的 L-9 口径（运行期干净 HRuntimeError）。
+- **fn/graph body 内 block 资源块**（parser.ts）：`ITEM_KWS` 缺 `'block'`
+  （有 `'static'`）→ `atItemStart` 在函数体内不认识 block，而
+  `atIdent('block')` 分支是死代码（block 是 kw token）—— 顶层合法、
+  函数体内非法的不对称。补齐后与 static 同权。
+- **`\x` 转义十六进制校验**（lexer.ts）：`'\xZi'` 的 `parseInt('Zi',16)=NaN`
+  → `String.fromCharCode(NaN)` = NUL 字符**静默入值**（字符串"看起来是空的"
+  却 len=1，极难排查）。对齐 `\u` 的 L-12 严格口径（2 位十六进制）。
+
+验证：dhv-ts 182/182（新增 6 回归）· cargo test 全绿（新增 parse fixture）·
+双编译器 conformance 67/67（expr 守卫语料修复后新增 1 项通过）。
+
+
 ## v0.2.61（2026-09-11）—— LLM 网关流式车道（逐 token 观测面）
 
 `$host.llm.complete` 补流式输出（`stream: true`，仅网关车道）：SSE 逐块解析

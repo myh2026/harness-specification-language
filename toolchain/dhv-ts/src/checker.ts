@@ -445,7 +445,16 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
       const guardFp = gs.decl.guardPattern
         ? patternFingerprint(gs.decl.guardPattern)
         : gs.decl.guardExpr
-          ? `expr@${gs.decl.guardExpr.span[0]}:${gs.decl.guardExpr.span[1]}`
+          ? // v0.2.62 修复：expr 守卫指纹改用「表达式结构序列化」（与 pattern
+            // 指纹同思路，位置无关）。两段历史：
+            //   ① span[0]/span[1] —— Span 是 {line,col,file} 对象，索引恒
+            //     undefined → 所有 expr 守卫指纹相同，同端点两条不同合法守卫
+            //     （x > 1 / x < 0，Vigil 惯用法）被 G-8 误杀（实测复现）。
+            //   ② span.line:col —— 按源码位置，复制粘贴到下一行即漏检，
+            //     与 G-8「复制粘贴检测」目标矛盾。
+            // 结构指纹：同结构 ≡ 复制粘贴（G-8 拦截），不同条件 ≡ 同向多守卫
+            //（合法并行边，不误报）——两个目标同时满足。
+            `expr@${exprFingerprint(gs.decl.guardExpr)}`
           : 'unguarded';
       const key = `${gs.decl.endpoints[i]}->${gs.decl.endpoints[i + 1]}|${guardFp}`;
       const prev = edgeKeys.get(key);
@@ -761,6 +770,80 @@ function patternFingerprint(p: A.Pattern): string {
 function patternDisplay(p: A.Pattern): string {
   if (p.kind === 'path') return p.segs.join('::');
   return p.kind;
+}
+
+// ---- v0.2.62 G-8：expr 守卫结构指纹（位置无关，足够判等） ----
+// 结构序列化（忽略 Span）：同结构 ≡ 复制粘贴（G-8 拦截目标）；
+// 不同条件（x > 1 vs x < 0）结构不同 ≡ 合法同向多守卫（不误报）。
+// 守卫表达式语法面有限（BNF §3.4 edge guard），全 kind 覆盖成本可控。
+function exprFingerprint(e: A.Expr): string {
+  switch (e.kind) {
+    case 'lit': {
+      const v = e.lit.v;
+      return `lit:${typeof v === 'bigint' ? v.toString() : JSON.stringify(v)}`;
+    }
+    case 'path': return `path:${e.segs.join('::')}`;
+    case 'binary': return `bin(${e.op},${exprFingerprint(e.lhs)},${exprFingerprint(e.rhs)})`;
+    case 'unary': return `un(${e.op},${exprFingerprint(e.operand)})`;
+    case 'assign': return `as(${e.op},${exprFingerprint(e.target)},${exprFingerprint(e.value)})`;
+    case 'call': return `call(${exprFingerprint(e.callee)};${e.args.map(exprFingerprint).join(',')})`;
+    case 'method': return `mth(${exprFingerprint(e.recv)}#${e.name};${e.args.map(exprFingerprint).join(',')})`;
+    case 'field': return `fld(${exprFingerprint(e.recv)}#${String(e.name)})`;
+    case 'index': return `idx(${exprFingerprint(e.recv)},${exprFingerprint(e.index)})`;
+    case 'slice': return `slc(${exprFingerprint(e.recv)},${e.lo ? exprFingerprint(e.lo) : ''},${e.hi ? exprFingerprint(e.hi) : ''},${e.inclusive ? '=' : ''})`;
+    case 'try': return `try(${exprFingerprint(e.expr)})`;
+    case 'await': return `awt(${exprFingerprint(e.expr)})`;
+    case 'cast': return `cast(${exprFingerprint(e.expr)},${typeFingerprint(e.ty)})`;
+    case 'tuple': return `tup(${e.items.map(exprFingerprint).join(',')})`;
+    case 'array': return `arr(${e.items.map(exprFingerprint).join(',')})`;
+    case 'arrayrep': return `arrrep(${exprFingerprint(e.value)},${exprFingerprint(e.count)})`;
+    case 'struct': return `st(${e.segs.join('::')}{${e.fields.map((f) => `${f.name}=${exprFingerprint(f.value)}`).join(',')}})`;
+    case 'closure': return `clo(${e.params.map((p) => patternFingerprint(p.pat)).join(',')}#${exprFingerprint(e.body)})`;
+    case 'if': return `if(${exprFingerprint(e.cond)},${exprFingerprint(e.then)},${e.els ? exprFingerprint(e.els) : ''})`;
+    case 'iflet': return `iflet(${patternFingerprint(e.pat)},${exprFingerprint(e.expr)},${exprFingerprint(e.then)},${e.els ? exprFingerprint(e.els) : ''})`;
+    case 'match': return `match(${exprFingerprint(e.expr)};${e.arms.map((a) => `${patternFingerprint(a.pat)}=>${exprFingerprint(a.body)}`).join('|')})`;
+    case 'block': return `blk(${e.stmts.map(stmtFingerprint).join(';')})`;
+    case 'asyncblock': return `ablk(${e.stmts.map(stmtFingerprint).join(';')})`;
+    case 'loop': return `loop(${exprFingerprint(e.body)})`;
+    case 'while': return `while(${exprFingerprint(e.cond)},${exprFingerprint(e.body)})`;
+    case 'whilelet': return `whilelet(${patternFingerprint(e.pat)},${exprFingerprint(e.expr)},${exprFingerprint(e.body)})`;
+    case 'for': return `for(${patternFingerprint(e.pat)},${e.iter ? exprFingerprint(e.iter) : ''},${e.body ? exprFingerprint(e.body) : ''})`;
+    case 'break': return `brk(${e.value ? exprFingerprint(e.value) : ''})`;
+    case 'continue': return 'cnt';
+    case 'return': return `ret(${e.value ? exprFingerprint(e.value) : ''})`;
+    case 'range': return `rng(${e.lo ? exprFingerprint(e.lo) : ''},${e.hi ? exprFingerprint(e.hi) : ''},${e.inclusive ? '=' : ''})`;
+    case 'macro': return `mac(${e.path.join('::')})`; // 宏树不做值级展开（token 级足够判等）
+    case 'native': return `nat(${e.lang},${JSON.stringify(e.body)})`;
+    case 'unit': return 'unit';
+    default: return 'other';
+  }
+}
+
+function typeFingerprint(t: A.HType): string {
+  switch (t.kind) {
+    case 'path': return t.segs.join('::') + (t.args ? `<${t.args.map(typeFingerprint).join(',')}>` : '');
+    case 'ref': return `${t.mut ? '&mut' : '&'}${typeFingerprint(t.inner)}`;
+    case 'tuple': return `(${t.items.map(typeFingerprint).join(',')})`;
+    case 'array': return `[${typeFingerprint(t.elem)}${t.len ? ';' + exprFingerprint(t.len) : ''}]`;
+    case 'slice': return `[${typeFingerprint(t.elem)}]`;
+    case 'fnptr': return `fn(${t.params.map(typeFingerprint).join(',')})${t.ret ? ':' + typeFingerprint(t.ret) : ''}`;
+    case 'dyn': return `dyn(${t.bounds.join('+')})`;
+    case 'implt': return `impl(${t.bounds.join('+')})`;
+    case 'infer': return '_';
+    case 'never': return '!';
+    case 'paren': return `(${typeFingerprint(t.inner)})`;
+    default: return '?';
+  }
+}
+
+function stmtFingerprint(s: A.Stmt): string {
+  switch (s.kind) {
+    case 'let': return `let(${patternFingerprint(s.pat)},${s.init ? exprFingerprint(s.init) : ''})`;
+    case 'expr': return exprFingerprint(s.expr);
+    case 'item': return `item(${s.item?.name ?? '?'})`;
+    case 'empty': return ';';
+    default: return 'stmt';
+  }
 }
 
 // ---- v0.2.53 S-14：二元运算符保守静态类型检查 ----

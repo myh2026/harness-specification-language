@@ -969,6 +969,9 @@ export class Interp {
         throw new HRuntimeError(`"${op}" 不能用于 ${typeNameOf(cur)} 与 ${typeNameOf(rhs)}`);
       case '*':
         if (typeof cur === 'number' && typeof rhs === 'number') return cur * rhs;
+        // v0.2.62：补 bigint 分支（与 evalBinary '*' 对齐）—— 此前 `x *= 大整数`
+        // 落入错误分支报「int 与 float」（typeNameOf 把 bigint 误标为 float）。
+        if (typeof cur === 'bigint' || typeof rhs === 'bigint') return BigInt(cur as number) * BigInt(rhs as number);
         throw new HRuntimeError(`"${op}" 不能用于 ${typeNameOf(cur)} 与 ${typeNameOf(rhs)}`);
       case '/':
         if (typeof cur === 'number' && typeof rhs === 'number') {
@@ -977,9 +980,25 @@ export class Interp {
           if (exprFloaty(valueExpr, env) || exprFloaty(target, env)) return cur / rhs;
           return Number.isInteger(cur) && Number.isInteger(rhs) ? Math.trunc(cur / rhs) : cur / rhs;
         }
+        // v0.2.62：补 bigint 分支与除零检查（与 evalBinary '/' 对齐）——
+        // 此前 `x /= bigint` 直接报「不能用于」。
+        if (typeof cur === 'bigint' || typeof rhs === 'bigint') {
+          if (BigInt(rhs as number) === 0n) throw new HRuntimeError('除以零');
+          return BigInt(cur as number) / BigInt(rhs as number);
+        }
         throw new HRuntimeError(`"${op}" 不能用于 ${typeNameOf(cur)} 与 ${typeNameOf(rhs)}`);
       case '%':
-        if (typeof cur === 'number' && typeof rhs === 'number') return cur % rhs;
+        // v0.2.62：补除零检查 + bigint 分支（与 evalBinary '%' 的 L-9 口径
+        // 完全对齐）—— 此前 `x %= 0` 在 number 路径静默 NaN（垃圾值污染
+        // 数据流，恰是本项目宣称已消灭的形态）、bigint 路径抛裸 RangeError。
+        if (typeof cur === 'number' && typeof rhs === 'number') {
+          if (rhs === 0) throw new HRuntimeError('除以零（模运算）');
+          return cur % rhs;
+        }
+        if (typeof cur === 'bigint' || typeof rhs === 'bigint') {
+          if (BigInt(rhs as number) === 0n) throw new HRuntimeError('除以零（模运算）');
+          return BigInt(cur as number) % BigInt(rhs as number);
+        }
         throw new HRuntimeError(`"${op}" 不能用于 ${typeNameOf(cur)} 与 ${typeNameOf(rhs)}`);
       default:
         throw new HRuntimeError(`不支持的复合赋值 ${op}`);

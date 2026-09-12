@@ -1,0 +1,27 @@
+// v0.2.62 回归：edge guard 的 expr 形态（比较/逻辑运算符）。
+// 背景：edge_guard = { pattern | expression } 的 PEG 有序选择里，pattern
+// 对 `x > 1` 只消费绑定模式 `x` 即提交，残留 `> 1` 撞 `edge_attrs? ~ ";"`。
+// 修复：pattern 分支加负向前瞻 guard_continues。
+enum Sig { Go, Stop }
+fn consume(x: i32) -> i32 { x }
+graph G(x: i32, y: i32) -> i32 {
+    node a: i32 = 0;
+    node b: i32 = 1;
+    node c: i32 = 2;
+    edge a -> b on x > 1;
+    edge a -> b on x < 0;
+    edge a -> b on x == 7;
+    edge a -> b on x != 7;
+    edge a -> b on x >= 1 && y <= 2;
+    edge a -> b on x + 1 < y * 2;
+    edge b -> c on Sig::Go;
+    edge b -> c on Sig::Stop;
+    loop {
+        match x {
+            0 => break,
+            _ => break,
+        }
+    }
+    Ok(0)
+}
+fn main() -> i32 { 0 }

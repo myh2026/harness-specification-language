@@ -4155,6 +4155,132 @@ test('回归', 'B-6 方法面上游化：split_once / rsplit_once / truncate（�
 });
 
 // ---------------------------------------------------------------------------
+// v0.2.62 实测驱动修复批次（每修一 bug 锁一用例）
+//   R1: G-8 expr 守卫结构指纹（span 对象索引 bug → 不同守卫被误杀 / 复制粘贴漏检）
+//   R2: 下标切片语法 v[i..j]（值语境 range 吸收 → slice 分支死代码 + NaN 越界绕过）
+//   R3: 复合赋值除零 / bigint 分支（x %= 0 静默 NaN、x *= 大整数误报类型）
+//   R4: fn/graph body 内 block 资源块（ITEM_KWS 缺 'block'，atIdent 死代码）
+//   R5: \x 转义十六进制校验（parseInt NaN → NUL 字符静默入值）
+// ---------------------------------------------------------------------------
+test('v0.2.62 回归', 'G-8：同端点两条不同 expr 守卫 = 合法并行边（不误报）', () => {
+  const src = path.join(TMP, 'g8-multi-guard.hsl');
+  fs.writeFileSync(src, [
+    'graph G(x: i32) -> i32 {',
+    '    node a: i32 = 0;',
+    '    node b: i32 = 1;',
+    '    edge a -> b on x > 1;',
+    '    edge a -> b on x < 0;',
+    '    loop { match x { 0 => break, _ => { x = x - 1; } } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `两条不同 expr 守卫应通过（修复前 span 指纹恒 undefined → G-8 误杀）:\n${r.stdout}`);
+});
+
+test('v0.2.62 回归', 'G-8：同端点同结构 expr 守卫复制粘贴 = 重复声明（仍拦截）', () => {
+  const src = path.join(TMP, 'g8-dup-guard.hsl');
+  fs.writeFileSync(src, [
+    'graph G(x: i32) -> i32 {',
+    '    node a: i32 = 0;',
+    '    node b: i32 = 1;',
+    '    edge a -> b on x > 1;',
+    '    edge a -> b on x > 1;',
+    '    loop { match x { 0 => break, _ => { x = x - 1; } } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, '复制粘贴同一条 expr 守卫应报 G-8（结构指纹相同）');
+  assert(r.stdout.includes('G-8'), `应报 G-8：${r.stdout}`);
+});
+
+test('v0.2.62 回归', '切片语法四形态（v[i..j] / v[i..] / v[..j] / v[i..=j]）', () => {
+  const src = path.join(TMP, 'slice-forms.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    let v: Vec<i32> = vec![1, 2, 3, 4, 5];',
+    '    let a = v[1..3];',
+    '    let b = v[2..];',
+    '    let c = v[..2];',
+    '    let d = v[1..=3];',
+    '    if a.len() != 2 { return Err(String::from("a.len")); }',
+    '    if a[0] != 2 { return Err(String::from("a[0]")); }',
+    '    if b.len() != 3 || b[2] != 5 { return Err(String::from("b")); }',
+    '    if c.len() != 2 || c[1] != 2 { return Err(String::from("c")); }',
+    '    if d.len() != 3 || d[2] != 4 { return Err(String::from("d")); }',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const cr = run(['check', src]);
+  assertEq(cr.code, 0, `check 应通过：${cr.stdout}`);
+  const r = run(['run', src, '--quiet']);
+  assertEq(r.code, 0, `run 应通过（修复前 v[1..3] 解析成 v[range] → NaN 绕过越界检查 → undefined）:\n${r.stdout}\n${r.stderr}`);
+});
+
+test('v0.2.62 回归', 'x %= 0 抛干净错误（不再静默 NaN）+ bigint 复合赋值', () => {
+  const bad = path.join(TMP, 'rem-zero.hsl');
+  fs.writeFileSync(bad, [
+    'fn main() -> Result<(), String> {',
+    '    let mut x: i32 = 5;',
+    '    x %= 0;',
+    '    println!("{}", x);',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['run', bad, '--quiet']);
+  assert(r.code !== 0, 'x %= 0 应运行期报错（修复前 number 路径静默 NaN）');
+  assert((r.stdout + r.stderr).includes('除以零'), `错误应可诊断（除以零（模运算））:${r.stdout}${r.stderr}`);
+  const big = path.join(TMP, 'mul-big.hsl');
+  fs.writeFileSync(big, [
+    'fn main() -> Result<(), String> {',
+    '    let mut b: i64 = 2;',
+    '    b *= 1000000000000;',
+    '    if b != 2000000000000 { return Err(String::from("mul")); }',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r2 = run(['run', big, '--quiet']);
+  assertEq(r2.code, 0, `x *= 大整数应走 bigint 分支（修复前误报「int 与 float」）：${r2.stderr}`);
+});
+
+test('v0.2.62 回归', 'fn body 内 block 资源块（ITEM_KWS 补 block）', () => {
+  const src = path.join(TMP, 'block-in-body.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    block banner { title: String = String::from("hi"); }',
+    '    println!("ok");',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `fn body 内 block 应与 static 同权（修复前报「无法解析的表达式起点 "block" (kw)」）：${r.stdout}`);
+});
+
+test('v0.2.62 回归', 'x 转义非十六进制 = lex 错误（不再 NUL 静默入值）', () => {
+  const src = path.join(TMP, 'hex-escape.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    let s = "\\xZi";',
+    '    println!("{}", s.len());',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['run', src, '--quiet']);
+  assert(r.code !== 0, '\\xZi 应报错（修复前 parseInt NaN → NUL 字符静默入值 len=1）');
+  assert((r.stdout + r.stderr).includes('十六进制'), `错误应可诊断：${r.stdout}${r.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main(): Promise<number> {

@@ -353,8 +353,14 @@ export class Lexer {
       case '\'': return '\'';
       case '"': return '"';
       case 'x': {
+        // v0.2.62：十六进制校验（对齐 \u 的 L-12 严格口径）—— 此前 \xZi 的
+        // parseInt('Zi',16)=NaN → String.fromCharCode(NaN) = NUL 字符静默入值
+        // （垃圾值污染数据流：字符串"看起来是空的"却 len=1，极难排查）。
         let h = '';
         h += this.advance(); h += this.advance();
+        if (h.length !== 2 || /[^0-9a-fA-F]/.test(h)) {
+          throw new LexError(`\\x${h} 转义必须是 2 位十六进制`, this.line, this.col);
+        }
         return String.fromCharCode(parseInt(h, 16));
       }
       case 'u': {
