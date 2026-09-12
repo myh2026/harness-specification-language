@@ -1,0 +1,11 @@
+// S-4 正面语料：显式 mut 参数被赋值 = 合法（v0.2.63）
+// 参数默认不可变、显式 `mut` 才可变 —— graph 与 fn 各一，双端必须都通过。
+graph G(mut x: i32) -> i32 {
+    x = 5;
+    loop { match x { 0 => break, _ => {} } }
+    Ok(0)
+}
+
+fn f(mut y: i32) -> i32 { y = 3; y }
+
+fn main() -> i32 { f(1) }

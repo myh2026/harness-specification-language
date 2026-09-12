@@ -1,4 +1,5 @@
 // 期望 P5：未知规则类型（R4）。
+// conformance: codes-exempt —— rust parse 层拦（E0001），ts check 层拦（P-5）：层级差异，见 issues/03
 
 project {
     rules {

@@ -146,6 +146,41 @@ s18_case() { # file expect_warn(yes|no)
 s18_case "$S18_WARN_FIX" yes
 s18_case "$S18_LEGAL_FIX" no
 
+# ---- v0.2.63 诊断码集合对拍（S-4 双端分歧教训）--------------------------
+# 结论对拍看不见「同 fail 但诊断码集合不同」：S-4 分歧中两端都 fail（结论
+# 一致不报分歧），但 dhv-ts 缺 S-4 码 —— 失败原因不同，语料却算「一致」。
+# 本段对 errors/ 全量语料比对归一化后的诊断码集合（码提取自双端输出，
+# 归一规则：ERROR/WARNING 大小写统一 + Rust 端「X-Xn」重复前缀 → ts 端
+# 「X-n」，如 G-G8 → G-8、S-S4 → S-4）。
+echo "== 7/7 诊断码集合一致性（errors/ 全量，S-4 分歧教训）=="
+codes_dhv() { "$DHV" check "$1" 2>&1 | grep -oE '(ERROR|WARNING)\[[A-Z0-9-]+\]' \
+  | sed -E 's/^ERROR\[/[/; s/^WARNING\[/[/; s/\[([A-Z])-\1/[\1-/' | sort -u; }
+codes_ts()  { "${DHV_TS[@]}" check "$1" 2>&1 | grep -oE '(error|warning)\[[A-Z0-9-]+\]' \
+  | sed -E 's/^(error|warning)\[/[/; s/\[([A-Z])-\1/[\1-/' | sort -u; }
+record_codes() { # name file
+  local name="$1" f="$2" a b
+  a="$(codes_dhv "$f")"
+  b="$(codes_ts "$f")"
+  if [[ "$a" == "$b" ]]; then
+    PASS_COUNT=$((PASS_COUNT + 1))
+    printf '  ✓ %-66s [码集合一致: %s]\n' "$name" "$(echo "$a" | tr '\n' ' ')"
+  else
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    DISAGREEMENTS+=("诊断码集合不一致: $name dhv=[$(echo "$a" | tr '\n' ' ')] dhv-ts=[$(echo "$b" | tr '\n' ' ')]")
+  fi
+}
+for f in "$FIX"/errors/*.hsl; do
+  # 豁免标记（语料首 3 行内 `codes-exempt`）：两端在**不同检查层级**拦截
+  # （如 rust parse 层 E0001 vs ts check 层 P-5）——结论级对拍仍生效，码级
+  # 豁免并记录差异（层级对齐属 parser 语义工程，见 issues/ 文案）。
+  if head -3 "$f" | grep -q 'codes-exempt'; then
+    PASS_COUNT=$((PASS_COUNT + 1))
+    printf '  ⊘ %-66s [码对拍豁免: 结论级仍生效]\n' "$(basename "$f")"
+    continue
+  fi
+  record_codes "$(basename "$f")" "$f"
+done
+
 echo
 echo "== 结果 =="
 echo "通过: $PASS_COUNT  失败: $FAIL_COUNT"
@@ -153,4 +188,4 @@ if (( FAIL_COUNT > 0 )); then
   printf '%s\n' "${DISAGREEMENTS[@]}"
   exit 1
 fi
-echo "双编译器一致性: 全部一致 ✓（含值级 + 行为级 + S-18 预警对等）"
+echo "双编译器一致性: 全部一致 ✓（含值级 + 行为级 + S-18 预警对等 + 诊断码集合）"

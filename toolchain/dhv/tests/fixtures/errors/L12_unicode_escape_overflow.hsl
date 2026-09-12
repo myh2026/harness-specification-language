@@ -1,4 +1,5 @@
 // v0.2.56 L-12：unicode 转义码点越域（pest 语法层收紧：> 0x10FFFF 拒绝）
+// conformance: codes-exempt —— 检查层级分歧：rust parse 层报 E0001，ts lexer 层报 E-0；对齐方向见 issues/03
 fn main() {
   let s = "\u{110000}";
   println!("{}", s);
