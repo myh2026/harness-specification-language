@@ -151,6 +151,20 @@ test('回归', 'fs.list 深度可配（v0.2.60：默认 8 层，原 2 层硬编�
 });
 
 test('回归', '路径监狱 symlink 实解析（v0.2.60：词法归一可被 ws 内符号链穿越）', () => {
+  // 平台前置守卫：本用例的两个攻击向量都由符号链构造，而 Windows 普通开发者账户
+  // （未开启开发者模式 / 非管理员）没有 SeCreateSymbolicLinkPrivilege ——
+  // fs.symlinkSync 直接抛 EPERM，用例在 setup 阶段就崩，失败原因是环境权限而不是
+  // 监狱逻辑（极易误判成安全回归）。CI 的 windows-latest runner 以管理员运行、
+  // 能建链，所以上游 CI 全绿，而普通 Windows 检出必红一条（175/176）——
+  // 这个「CI 绿 / 本地红」的可复现性缺口正是本守卫要消除的。
+  const capProbe = path.join(TMP, 'symlink-capability-probe');
+  fs.mkdirSync(capProbe, { recursive: true });
+  try {
+    fs.symlinkSync(capProbe, path.join(capProbe, 'probe-link'), 'dir');
+  } catch {
+    console.log('  ⊘ 跳过：当前平台/权限不允许创建符号链（Windows 需开发者模式或管理员权限），无法构造攻击向量');
+    return;
+  }
   const dir = path.join(TMP, 'jail-symlink');
   const ws = path.join(dir, 'ws');
   const outside = path.join(dir, 'outside');
