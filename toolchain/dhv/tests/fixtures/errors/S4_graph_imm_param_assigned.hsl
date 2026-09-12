@@ -1,0 +1,11 @@
+// S-4：graph 非 mut 参数在体内被赋值 = 编译错误（v0.2.63 双端一致性语料）
+// 根因史：dhv-ts declareParam 恒 mut:true → 对非 mut 参数赋值放行（漏报），
+// dhv(Rust) 同源码报 S-S4 —— 双端 exit code 分歧。带 loop 避免混入 G-1，
+// 保证两端诊断码集合恰为 {S-4}。
+graph G(x: i32) -> i32 {
+    x = 5;
+    loop { match x { 0 => break, _ => {} } }
+    Ok(0)
+}
+
+fn main() -> i32 { 0 }

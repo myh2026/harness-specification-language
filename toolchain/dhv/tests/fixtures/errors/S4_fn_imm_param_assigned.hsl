@@ -1,0 +1,5 @@
+// S-4：fn 非 mut 参数在体内被赋值 = 编译错误（v0.2.63 双端一致性语料）
+// dhv-ts 曾恒视参数为可变（declareParam mut:true）→ 漏报；dhv(Rust) 拦截。
+fn f(x: i32) -> i32 { x = 3; x }
+
+fn main() -> i32 { 0 }

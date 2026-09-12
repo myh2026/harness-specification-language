@@ -335,8 +335,8 @@ function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], fi
   }
   if (item.kind === 'fn' && item.fn.body) {
     // v0.2.51：函数参数进入作用域（E-2 调用检查需要；param 标记豁免 S-7）
-    const params = item.fn.params.flatMap((p) => patternNames(p.pat));
-    checkBody(item.fn.body, enums, diags, file, undefined, params);
+    // v0.2.63：可变性随绑定传入（S-4 双端一致性）
+    checkBody(item.fn.body, enums, diags, file, undefined, fnParamBindings(item.fn.params));
   }
   if (item.kind === 'graph') {
     checkGraph(item.graph, enums, diags, file);
@@ -344,16 +344,14 @@ function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], fi
   if (item.kind === 'impl') {
     for (const m of item.methods) {
       if (m.body) {
-        const params = m.params.flatMap((p) => patternNames(p.pat));
-        checkBody(m.body, enums, diags, file, undefined, params);
+        checkBody(m.body, enums, diags, file, undefined, fnParamBindings(m.params));
       }
     }
   }
   if (item.kind === 'trait') {
     for (const ti of item.items) {
       if (ti.fn?.body) {
-        const params = ti.fn.params.flatMap((p) => patternNames(p.pat));
-        checkBody(ti.fn.body, enums, diags, file, undefined, params);
+        checkBody(ti.fn.body, enums, diags, file, undefined, fnParamBindings(ti.fn.params));
       }
     }
   }
@@ -445,7 +443,16 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
       const guardFp = gs.decl.guardPattern
         ? patternFingerprint(gs.decl.guardPattern)
         : gs.decl.guardExpr
-          ? `expr@${gs.decl.guardExpr.span[0]}:${gs.decl.guardExpr.span[1]}`
+          ? // v0.2.62 修复：expr 守卫指纹改用「表达式结构序列化」（与 pattern
+            // 指纹同思路，位置无关）。两段历史：
+            //   ① span[0]/span[1] —— Span 是 {line,col,file} 对象，索引恒
+            //     undefined → 所有 expr 守卫指纹相同，同端点两条不同合法守卫
+            //     （x > 1 / x < 0，Vigil 惯用法）被 G-8 误杀（实测复现）。
+            //   ② span.line:col —— 按源码位置，复制粘贴到下一行即漏检，
+            //     与 G-8「复制粘贴检测」目标矛盾。
+            // 结构指纹：同结构 ≡ 复制粘贴（G-8 拦截），不同条件 ≡ 同向多守卫
+            //（合法并行边，不误报）——两个目标同时满足。
+            `expr@${exprFingerprint(gs.decl.guardExpr)}`
           : 'unguarded';
       const key = `${gs.decl.endpoints[i]}->${gs.decl.endpoints[i + 1]}|${guardFp}`;
       const prev = edgeKeys.get(key);
@@ -458,8 +465,10 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   }
   // graph 体内的 match/赋值等检查（含 AgentLoop 内 _ 检查）
   // v0.2.51：graph 参数进入作用域（param 标记豁免 S-7，E-2 可见）
+  // v0.2.63：参数可变性传入作用域表（GraphParam.mut）—— 此前恒 mut:true，
+  // 对非 mut 参数赋值漏报 S-4（dhv(Rust) 端同源码正确拦截，双端分歧）。
   const gscope: Scope = { vars: new Map(), used: new Set() };
-  for (const p of g.params) declareParam(gscope, p.name);
+  for (const p of g.params) declareParam(gscope, p.name, p.mut);
   for (const gs of g.body) {
     if (gs.t === 'stmt') {
       // let 声明由 checkStmt 内部完成（此处不再重复 declare —— 否则 S-8 误报）
@@ -517,18 +526,36 @@ function lookupVarInfo(scope: Scope, name: string): { mut: boolean; span: A.Span
   return undefined;
 }
 
-function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramNames?: string[]): void {
+function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramBindings?: Array<{ name: string; mut: boolean }>): void {
   
   const scope: Scope = { vars: new Map(), used: new Set() };
-  if (paramNames) for (const n of paramNames) declareParam(scope, n);
+  if (paramBindings) for (const b of paramBindings) declareParam(scope, b.name, b.mut);
   checkStmts(stmts, scope, enums, diags, file, inAgentLoop ?? false);
 }
 
-/** 声明参数绑定：参与 S-4/E-2 作用域解析，但豁免 S-7（未使用参数是合法风格） */
-function declareParam(scope: Scope, name: string): void {
+/**
+ * 声明参数绑定：参与 S-4/E-2 作用域解析，但豁免 S-7（未使用参数是合法风格）。
+ * v0.2.63：mut 按声明处传入（参数默认不可变，显式 `mut` 才可变，与 dhv(Rust)
+ * 及 BNF 语义一致）—— 此前恒 mut:true，非 mut 参数被赋值时 S-4 漏报。
+ */
+function declareParam(scope: Scope, name: string, mut: boolean): void {
   if (name === '_' || name.startsWith('_')) return;
   if (scope.vars.has(name)) return;
-  scope.vars.set(name, { mut: true, span: { line: 0, col: 0, file: '' }, param: true });
+  scope.vars.set(name, { mut, span: { line: 0, col: 0, file: '' }, param: true });
+}
+
+/**
+ * v0.2.63：FnParam → 参数绑定（name + mut）。
+ * - self 参数：mut 由 self kind 映射（mutvalue/refmut 可变，value/ref 不可变）；
+ * - 普通参数：以 FnParam.mut 为准（parser 已把声明处 `mut x` 记入顶层字段）；
+ * - 解构模式：patternNames 展开的全部名字共用参数级 mut。
+ */
+function fnParamBindings(params: A.FnParam[]): Array<{ name: string; mut: boolean }> {
+  return params.flatMap((p) => {
+    const names = patternNames(p.pat);
+    const mut = p.self ? p.self === 'mutvalue' || p.self === 'refmut' : (p.mut ?? false);
+    return names.map((name) => ({ name, mut }));
+  });
 }
 
 function checkStmts(stmts: A.Stmt[], scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
@@ -761,6 +788,80 @@ function patternFingerprint(p: A.Pattern): string {
 function patternDisplay(p: A.Pattern): string {
   if (p.kind === 'path') return p.segs.join('::');
   return p.kind;
+}
+
+// ---- v0.2.62 G-8：expr 守卫结构指纹（位置无关，足够判等） ----
+// 结构序列化（忽略 Span）：同结构 ≡ 复制粘贴（G-8 拦截目标）；
+// 不同条件（x > 1 vs x < 0）结构不同 ≡ 合法同向多守卫（不误报）。
+// 守卫表达式语法面有限（BNF §3.4 edge guard），全 kind 覆盖成本可控。
+function exprFingerprint(e: A.Expr): string {
+  switch (e.kind) {
+    case 'lit': {
+      const v = e.lit.v;
+      return `lit:${typeof v === 'bigint' ? v.toString() : JSON.stringify(v)}`;
+    }
+    case 'path': return `path:${e.segs.join('::')}`;
+    case 'binary': return `bin(${e.op},${exprFingerprint(e.lhs)},${exprFingerprint(e.rhs)})`;
+    case 'unary': return `un(${e.op},${exprFingerprint(e.operand)})`;
+    case 'assign': return `as(${e.op},${exprFingerprint(e.target)},${exprFingerprint(e.value)})`;
+    case 'call': return `call(${exprFingerprint(e.callee)};${e.args.map(exprFingerprint).join(',')})`;
+    case 'method': return `mth(${exprFingerprint(e.recv)}#${e.name};${e.args.map(exprFingerprint).join(',')})`;
+    case 'field': return `fld(${exprFingerprint(e.recv)}#${String(e.name)})`;
+    case 'index': return `idx(${exprFingerprint(e.recv)},${exprFingerprint(e.index)})`;
+    case 'slice': return `slc(${exprFingerprint(e.recv)},${e.lo ? exprFingerprint(e.lo) : ''},${e.hi ? exprFingerprint(e.hi) : ''},${e.inclusive ? '=' : ''})`;
+    case 'try': return `try(${exprFingerprint(e.expr)})`;
+    case 'await': return `awt(${exprFingerprint(e.expr)})`;
+    case 'cast': return `cast(${exprFingerprint(e.expr)},${typeFingerprint(e.ty)})`;
+    case 'tuple': return `tup(${e.items.map(exprFingerprint).join(',')})`;
+    case 'array': return `arr(${e.items.map(exprFingerprint).join(',')})`;
+    case 'arrayrep': return `arrrep(${exprFingerprint(e.value)},${exprFingerprint(e.count)})`;
+    case 'struct': return `st(${e.segs.join('::')}{${e.fields.map((f) => `${f.name}=${exprFingerprint(f.value)}`).join(',')}})`;
+    case 'closure': return `clo(${e.params.map((p) => patternFingerprint(p.pat)).join(',')}#${exprFingerprint(e.body)})`;
+    case 'if': return `if(${exprFingerprint(e.cond)},${exprFingerprint(e.then)},${e.els ? exprFingerprint(e.els) : ''})`;
+    case 'iflet': return `iflet(${patternFingerprint(e.pat)},${exprFingerprint(e.expr)},${exprFingerprint(e.then)},${e.els ? exprFingerprint(e.els) : ''})`;
+    case 'match': return `match(${exprFingerprint(e.expr)};${e.arms.map((a) => `${patternFingerprint(a.pat)}=>${exprFingerprint(a.body)}`).join('|')})`;
+    case 'block': return `blk(${e.stmts.map(stmtFingerprint).join(';')})`;
+    case 'asyncblock': return `ablk(${e.stmts.map(stmtFingerprint).join(';')})`;
+    case 'loop': return `loop(${exprFingerprint(e.body)})`;
+    case 'while': return `while(${exprFingerprint(e.cond)},${exprFingerprint(e.body)})`;
+    case 'whilelet': return `whilelet(${patternFingerprint(e.pat)},${exprFingerprint(e.expr)},${exprFingerprint(e.body)})`;
+    case 'for': return `for(${patternFingerprint(e.pat)},${e.iter ? exprFingerprint(e.iter) : ''},${e.body ? exprFingerprint(e.body) : ''})`;
+    case 'break': return `brk(${e.value ? exprFingerprint(e.value) : ''})`;
+    case 'continue': return 'cnt';
+    case 'return': return `ret(${e.value ? exprFingerprint(e.value) : ''})`;
+    case 'range': return `rng(${e.lo ? exprFingerprint(e.lo) : ''},${e.hi ? exprFingerprint(e.hi) : ''},${e.inclusive ? '=' : ''})`;
+    case 'macro': return `mac(${e.path.join('::')})`; // 宏树不做值级展开（token 级足够判等）
+    case 'native': return `nat(${e.lang},${JSON.stringify(e.body)})`;
+    case 'unit': return 'unit';
+    default: return 'other';
+  }
+}
+
+function typeFingerprint(t: A.HType): string {
+  switch (t.kind) {
+    case 'path': return t.segs.join('::') + (t.args ? `<${t.args.map(typeFingerprint).join(',')}>` : '');
+    case 'ref': return `${t.mut ? '&mut' : '&'}${typeFingerprint(t.inner)}`;
+    case 'tuple': return `(${t.items.map(typeFingerprint).join(',')})`;
+    case 'array': return `[${typeFingerprint(t.elem)}${t.len ? ';' + exprFingerprint(t.len) : ''}]`;
+    case 'slice': return `[${typeFingerprint(t.elem)}]`;
+    case 'fnptr': return `fn(${t.params.map(typeFingerprint).join(',')})${t.ret ? ':' + typeFingerprint(t.ret) : ''}`;
+    case 'dyn': return `dyn(${t.bounds.join('+')})`;
+    case 'implt': return `impl(${t.bounds.join('+')})`;
+    case 'infer': return '_';
+    case 'never': return '!';
+    case 'paren': return `(${typeFingerprint(t.inner)})`;
+    default: return '?';
+  }
+}
+
+function stmtFingerprint(s: A.Stmt): string {
+  switch (s.kind) {
+    case 'let': return `let(${patternFingerprint(s.pat)},${s.init ? exprFingerprint(s.init) : ''})`;
+    case 'expr': return exprFingerprint(s.expr);
+    case 'item': return `item(${s.item?.name ?? '?'})`;
+    case 'empty': return ';';
+    default: return 'stmt';
+  }
 }
 
 // ---- v0.2.53 S-14：二元运算符保守静态类型检查 ----

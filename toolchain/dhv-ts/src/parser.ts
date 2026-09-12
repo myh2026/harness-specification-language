@@ -13,7 +13,13 @@ export class ParseError extends Error {
 }
 
 const ASSIGN_OPS = ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>='];
-const ITEM_KWS = ['fn', 'struct', 'enum', 'trait', 'impl', 'const', 'type', 'import', 'export', 'graph', 'static', 'async', 'mod', 'use'];
+// v0.2.62：补 'block' —— block 与 static 同为资源块关键字（顶层由 parseItem
+// 的 static/block 分支处理），但 ITEM_KWS 缺 'block' 导致 atItemStart 在
+// fn/graph body 内不认识它，而 atIdent('block') 分支是死代码（block 是
+// kind='kw' 的关键字 token，永远不是 ident）→ 函数体内 block 资源块报
+// 「无法解析的表达式起点 "block" (kw)」（顶层合法、函数体内非法的不对称，
+// 实测复现）。'static' 一直在表内且行为正确，照抄即可。
+const ITEM_KWS = ['fn', 'struct', 'enum', 'trait', 'impl', 'const', 'type', 'import', 'export', 'graph', 'static', 'block', 'async', 'mod', 'use'];
 
 export class Parser {
   private i = 0;
@@ -743,6 +749,32 @@ export class Parser {
     return this.parseAssign();
   }
 
+  /** 下标/切片语境专用（v0.2.62 修复）：跳过值语境 range 吸收层。
+   *  背景（实测 bug，dhv/dhv-ts 分歧）：`v[1..3]` 里 parseExpr 的值语境
+   *  range（v1.5 §2.11.7）把 `1..3` 整体吃成 range 值，postfix 的
+   *  `atP('..')` 分支变死代码 → 解析成 `v[range(1,3)]` → interp 把 range
+   *  对象 Number() 成 NaN，NaN 绕过越界检查静默返回 undefined（下游
+   *  `.len()` 报误导性「unit 没有方法 len」）。而 dhv（Rust）的 pest
+   *  index_or_range = { range_full | expression } 有序选择先试 slice，
+   *  同一代码两端语义不同 —— conformance 只对拍 check 退出码，此分歧漏网。
+   *  修复：下标语境先解析无 range 表达式，看到 `..` 才进 slice 分支
+   *  （`[i]` 下标 / `[i..j]`、`[i..]`、`[i..=j]`、`[..j]` 切片四形态全部可用）。 */
+  parseExprNoRange(): A.Expr {
+    return this.parseAssignNoRange();
+  }
+
+  private parseAssignNoRange(): A.Expr {
+    const lhs = this.parseOr();
+    if (exprIsWithBlock(lhs)) return lhs;
+    const t = this.peek();
+    if (t.kind === 'punct' && ASSIGN_OPS.includes(t.text)) {
+      this.next();
+      const rhs = this.parseAssign();
+      return { kind: 'assign', op: t.text, target: lhs, value: rhs, span: this.sp(t) };
+    }
+    return lhs;
+  }
+
   private parseAssign(): A.Expr {
     const lhs = this.parseRange();
     // 块表达式不能作赋值 LHS（Rust 语义）—— 否则 `while {...} = x` 会被错解析为赋值
@@ -993,7 +1025,9 @@ export class Parser {
           expr = { kind: 'slice', recv: expr, lo: undefined, hi, inclusive, span: expr.span };
           continue;
         }
-        const index = this.parseExpr();
+        // v0.2.62：下标表达式用 NoRange 变体 —— 值语境 range 不得在
+        // 下标语境抢先吸收 `..`（否则 slice 分支永不可达，见 parseExprNoRange 注释）
+        const index = this.parseExprNoRange();
         if (this.atP('..') || this.atP('..=')) {
           let inclusive = false;
           if (this.atP('..=')) { this.next(); inclusive = true; }

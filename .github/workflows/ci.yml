@@ -11,6 +11,10 @@ on:
       - '.gitignore'
   pull_request:
     branches: [main]
+  # 手动触发面：任意分支可从 Actions 页面跑全量 CI —— PR 到非 main 工作分支
+  # 时不自动触发（branches 过滤），此前只能靠合并到 main 才能验证；
+  # workflow_dispatch 补上这个空档（修复分支的验证不再依赖合并）。
+  workflow_dispatch:
 
 # 避免同一 PR 重复运行
 concurrency:

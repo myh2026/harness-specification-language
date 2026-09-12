@@ -4155,6 +4155,197 @@ test('回归', 'B-6 方法面上游化：split_once / rsplit_once / truncate（�
 });
 
 // ---------------------------------------------------------------------------
+// v0.2.62 实测驱动修复批次（每修一 bug 锁一用例）
+//   R1: G-8 expr 守卫结构指纹（span 对象索引 bug → 不同守卫被误杀 / 复制粘贴漏检）
+//   R2: 下标切片语法 v[i..j]（值语境 range 吸收 → slice 分支死代码 + NaN 越界绕过）
+//   R3: 复合赋值除零 / bigint 分支（x %= 0 静默 NaN、x *= 大整数误报类型）
+//   R4: fn/graph body 内 block 资源块（ITEM_KWS 缺 'block'，atIdent 死代码）
+//   R5: \x 转义十六进制校验（parseInt NaN → NUL 字符静默入值）
+// ---------------------------------------------------------------------------
+test('v0.2.62 回归', 'G-8：同端点两条不同 expr 守卫 = 合法并行边（不误报）', () => {
+  const src = path.join(TMP, 'g8-multi-guard.hsl');
+  fs.writeFileSync(src, [
+    // v0.2.63：参数改 `mut x` —— body 内 `x = x - 1` 需要可变绑定（S-4 修复后
+    // 非 mut 参数赋值会正确报错；此 fixture 此前依赖参数恒可变的漏报才通过，
+    // dhv(Rust) 端同源码本就报 S-S4）。
+    'graph G(mut x: i32) -> i32 {',
+    '    node a: i32 = 0;',
+    '    node b: i32 = 1;',
+    '    edge a -> b on x > 1;',
+    '    edge a -> b on x < 0;',
+    '    loop { match x { 0 => break, _ => { x = x - 1; } } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `两条不同 expr 守卫应通过（修复前 span 指纹恒 undefined → G-8 误杀）:\n${r.stdout}`);
+});
+
+test('v0.2.62 回归', 'G-8：同端点同结构 expr 守卫复制粘贴 = 重复声明（仍拦截）', () => {
+  const src = path.join(TMP, 'g8-dup-guard.hsl');
+  fs.writeFileSync(src, [
+    // v0.2.63：同上，`mut x`（S-4 修复后非 mut 参数赋值正确报错）
+    'graph G(mut x: i32) -> i32 {',
+    '    node a: i32 = 0;',
+    '    node b: i32 = 1;',
+    '    edge a -> b on x > 1;',
+    '    edge a -> b on x > 1;',
+    '    loop { match x { 0 => break, _ => { x = x - 1; } } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, '复制粘贴同一条 expr 守卫应报 G-8（结构指纹相同）');
+  assert(r.stdout.includes('G-8'), `应报 G-8：${r.stdout}`);
+});
+
+test('v0.2.62 回归', '切片语法四形态（v[i..j] / v[i..] / v[..j] / v[i..=j]）', () => {
+  const src = path.join(TMP, 'slice-forms.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    let v: Vec<i32> = vec![1, 2, 3, 4, 5];',
+    '    let a = v[1..3];',
+    '    let b = v[2..];',
+    '    let c = v[..2];',
+    '    let d = v[1..=3];',
+    '    if a.len() != 2 { return Err(String::from("a.len")); }',
+    '    if a[0] != 2 { return Err(String::from("a[0]")); }',
+    '    if b.len() != 3 || b[2] != 5 { return Err(String::from("b")); }',
+    '    if c.len() != 2 || c[1] != 2 { return Err(String::from("c")); }',
+    '    if d.len() != 3 || d[2] != 4 { return Err(String::from("d")); }',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const cr = run(['check', src]);
+  assertEq(cr.code, 0, `check 应通过：${cr.stdout}`);
+  const r = run(['run', src, '--quiet']);
+  assertEq(r.code, 0, `run 应通过（修复前 v[1..3] 解析成 v[range] → NaN 绕过越界检查 → undefined）:\n${r.stdout}\n${r.stderr}`);
+});
+
+test('v0.2.62 回归', 'x %= 0 抛干净错误（不再静默 NaN）+ bigint 复合赋值', () => {
+  const bad = path.join(TMP, 'rem-zero.hsl');
+  fs.writeFileSync(bad, [
+    'fn main() -> Result<(), String> {',
+    '    let mut x: i32 = 5;',
+    '    x %= 0;',
+    '    println!("{}", x);',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['run', bad, '--quiet']);
+  assert(r.code !== 0, 'x %= 0 应运行期报错（修复前 number 路径静默 NaN）');
+  assert((r.stdout + r.stderr).includes('除以零'), `错误应可诊断（除以零（模运算））:${r.stdout}${r.stderr}`);
+  const big = path.join(TMP, 'mul-big.hsl');
+  fs.writeFileSync(big, [
+    'fn main() -> Result<(), String> {',
+    '    let mut b: i64 = 2;',
+    '    b *= 1000000000000;',
+    '    if b != 2000000000000 { return Err(String::from("mul")); }',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r2 = run(['run', big, '--quiet']);
+  assertEq(r2.code, 0, `x *= 大整数应走 bigint 分支（修复前误报「int 与 float」）：${r2.stderr}`);
+});
+
+test('v0.2.62 回归', 'fn body 内 block 资源块（ITEM_KWS 补 block）', () => {
+  const src = path.join(TMP, 'block-in-body.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    block banner { title: String = String::from("hi"); }',
+    '    println!("ok");',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `fn body 内 block 应与 static 同权（修复前报「无法解析的表达式起点 "block" (kw)」）：${r.stdout}`);
+});
+
+test('v0.2.62 回归', 'x 转义非十六进制 = lex 错误（不再 NUL 静默入值）', () => {
+  const src = path.join(TMP, 'hex-escape.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> Result<(), String> {',
+    '    let s = "\\xZi";',
+    '    println!("{}", s.len());',
+    '    Ok(())',
+    '}',
+    '',
+  ].join('\n'));
+  const r = run(['run', src, '--quiet']);
+  assert(r.code !== 0, '\\xZi 应报错（修复前 parseInt NaN → NUL 字符静默入值 len=1）');
+  assert((r.stdout + r.stderr).includes('十六进制'), `错误应可诊断：${r.stdout}${r.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// v0.2.63 回归 —— S-4 参数可变性双端一致（dhv-ts 漏报 → 对齐 dhv(Rust)）
+// ---------------------------------------------------------------------------
+// 根因：declareParam 恒 mut:true，无视声明处 mut —— 非 mut 参数被赋值时
+// dhv-ts 放行（exit 0）、dhv(Rust) 报 S-S4（exit 1），双端分歧；conformance
+// 语料无此维度用例，故一直未暴露。修复后：参数默认不可变，显式 `mut` 才可变。
+
+test('v0.2.63 回归', 'S-4：graph 非 mut 参数被赋值 = 报错（对齐 dhv Rust）', () => {
+  const src = path.join(TMP, 's4-graph-imm-param.hsl');
+  fs.writeFileSync(src, [
+    'graph G(x: i32) -> i32 {',
+    '    x = 5;',
+    '    loop { match x { 0 => break, _ => {} } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, 'graph 非 mut 参数被赋值应报错（修复前 dhv-ts 放行，dhv(Rust) 拦截）');
+  assert(r.stdout.includes('S-4'), `应报 S-4：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：graph mut 参数被赋值 = 合法（显式 mut 才可变）', () => {
+  const src = path.join(TMP, 's4-graph-mut-param.hsl');
+  fs.writeFileSync(src, [
+    'graph G(mut x: i32) -> i32 {',
+    '    x = 5;',
+    '    loop { match x { 0 => break, _ => {} } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `graph mut 参数赋值应通过：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：fn 非 mut 参数被赋值 = 报错', () => {
+  const src = path.join(TMP, 's4-fn-imm-param.hsl');
+  fs.writeFileSync(src, [
+    'fn f(x: i32) -> i32 { x = 3; x }',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, 'fn 非 mut 参数被赋值应报错（修复前 dhv-ts 恒视为可变）');
+  assert(r.stdout.includes('S-4'), `应报 S-4：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：fn mut 参数被赋值 = 合法', () => {
+  const src = path.join(TMP, 's4-fn-mut-param.hsl');
+  fs.writeFileSync(src, [
+    'fn f(mut x: i32) -> i32 { x = 3; x }',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `fn mut 参数赋值应通过：${r.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main(): Promise<number> {
