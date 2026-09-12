@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v0.2.63（2026-09-12）—— S-4 参数可变性双端一致（dhv-ts 漏报修复）
+
+外部实测发现的双端语义分歧（worklog 遗留观察 → 最小复现实锤）：
+
+- **现象**：`graph` / `fn` 的**非 mut 参数**在体内被赋值时，dhv-ts 放行
+  （exit 0），dhv(Rust) 正确报 `S-S4`（exit 1）—— 双端 exit code 分歧。
+- **根因**（checker.ts `declareParam`）：参数进作用域表时恒 `mut: true`，
+  无视声明处 `mut`（`graph R(mut task: Task, question: String)` 中
+  `question` 被当成可变绑定）。S-4 检查依赖 `hit.mut` → 漏报。
+- **修复**：参数默认不可变、显式 `mut` 才可变（与 dhv(Rust) parser 及
+  BNF 语义一致）。`declareParam(scope, name, mut)` 按声明传入；graph 参数
+  取 `GraphParam.mut`；fn/impl/trait 参数经新增 `fnParamBindings()`
+  （self 参数按 kind 映射：mutvalue/refmut 可变，value/ref 不可变）。
+- **连锁修正**：v0.2.62 的两个 G-8 回归 fixture 此前依赖此漏报才通过
+  （非 mut 参数 `x` 在 body 内 `x = x - 1`；dhv(Rust) 同源码本就报 S-S4），
+  参数改 `mut x` 并注明缘由。
+- **conformance 语料盲区**：对拍只比「通过/失败」结论，本分歧两端都
+  fail 时结论相同不报；且语料无「graph/fn 参数可变性」维度用例 ——
+  exit code 分歧的用例（补 loop 后 ts 全过）缺失是未暴露的直接原因。
+  后续建议对拍粒度升级为诊断码集合。
+
+验证：dhv-ts 186/186（新增 4 回归：graph/fn × 非 mut 拦截/mut 放行）·
+conformance 67/67 · nova 15 模块 / backends-demo / dsh 剧本端到端全过。
+
+
 ## v0.2.62（2026-09-12）—— 实测驱动修复批次（六处 · 每修一 bug 锁一用例）
 
 外部实测（沙盒全链路装机：bun 跑 dhv-ts + cargo 构建 dhv + 双编译器 conformance）

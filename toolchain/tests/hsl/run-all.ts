@@ -4165,7 +4165,10 @@ test('回归', 'B-6 方法面上游化：split_once / rsplit_once / truncate（�
 test('v0.2.62 回归', 'G-8：同端点两条不同 expr 守卫 = 合法并行边（不误报）', () => {
   const src = path.join(TMP, 'g8-multi-guard.hsl');
   fs.writeFileSync(src, [
-    'graph G(x: i32) -> i32 {',
+    // v0.2.63：参数改 `mut x` —— body 内 `x = x - 1` 需要可变绑定（S-4 修复后
+    // 非 mut 参数赋值会正确报错；此 fixture 此前依赖参数恒可变的漏报才通过，
+    // dhv(Rust) 端同源码本就报 S-S4）。
+    'graph G(mut x: i32) -> i32 {',
     '    node a: i32 = 0;',
     '    node b: i32 = 1;',
     '    edge a -> b on x > 1;',
@@ -4183,7 +4186,8 @@ test('v0.2.62 回归', 'G-8：同端点两条不同 expr 守卫 = 合法并行�
 test('v0.2.62 回归', 'G-8：同端点同结构 expr 守卫复制粘贴 = 重复声明（仍拦截）', () => {
   const src = path.join(TMP, 'g8-dup-guard.hsl');
   fs.writeFileSync(src, [
-    'graph G(x: i32) -> i32 {',
+    // v0.2.63：同上，`mut x`（S-4 修复后非 mut 参数赋值正确报错）
+    'graph G(mut x: i32) -> i32 {',
     '    node a: i32 = 0;',
     '    node b: i32 = 1;',
     '    edge a -> b on x > 1;',
@@ -4278,6 +4282,67 @@ test('v0.2.62 回归', 'x 转义非十六进制 = lex 错误（不再 NUL 静默
   const r = run(['run', src, '--quiet']);
   assert(r.code !== 0, '\\xZi 应报错（修复前 parseInt NaN → NUL 字符静默入值 len=1）');
   assert((r.stdout + r.stderr).includes('十六进制'), `错误应可诊断：${r.stdout}${r.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// v0.2.63 回归 —— S-4 参数可变性双端一致（dhv-ts 漏报 → 对齐 dhv(Rust)）
+// ---------------------------------------------------------------------------
+// 根因：declareParam 恒 mut:true，无视声明处 mut —— 非 mut 参数被赋值时
+// dhv-ts 放行（exit 0）、dhv(Rust) 报 S-S4（exit 1），双端分歧；conformance
+// 语料无此维度用例，故一直未暴露。修复后：参数默认不可变，显式 `mut` 才可变。
+
+test('v0.2.63 回归', 'S-4：graph 非 mut 参数被赋值 = 报错（对齐 dhv Rust）', () => {
+  const src = path.join(TMP, 's4-graph-imm-param.hsl');
+  fs.writeFileSync(src, [
+    'graph G(x: i32) -> i32 {',
+    '    x = 5;',
+    '    loop { match x { 0 => break, _ => {} } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, 'graph 非 mut 参数被赋值应报错（修复前 dhv-ts 放行，dhv(Rust) 拦截）');
+  assert(r.stdout.includes('S-4'), `应报 S-4：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：graph mut 参数被赋值 = 合法（显式 mut 才可变）', () => {
+  const src = path.join(TMP, 's4-graph-mut-param.hsl');
+  fs.writeFileSync(src, [
+    'graph G(mut x: i32) -> i32 {',
+    '    x = 5;',
+    '    loop { match x { 0 => break, _ => {} } }',
+    '    Ok(0)',
+    '}',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `graph mut 参数赋值应通过：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：fn 非 mut 参数被赋值 = 报错', () => {
+  const src = path.join(TMP, 's4-fn-imm-param.hsl');
+  fs.writeFileSync(src, [
+    'fn f(x: i32) -> i32 { x = 3; x }',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assert(r.code !== 0, 'fn 非 mut 参数被赋值应报错（修复前 dhv-ts 恒视为可变）');
+  assert(r.stdout.includes('S-4'), `应报 S-4：${r.stdout}`);
+});
+
+test('v0.2.63 回归', 'S-4：fn mut 参数被赋值 = 合法', () => {
+  const src = path.join(TMP, 's4-fn-mut-param.hsl');
+  fs.writeFileSync(src, [
+    'fn f(mut x: i32) -> i32 { x = 3; x }',
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  const r = run(['check', src]);
+  assertEq(r.code, 0, `fn mut 参数赋值应通过：${r.stdout}`);
 });
 
 // ---------------------------------------------------------------------------

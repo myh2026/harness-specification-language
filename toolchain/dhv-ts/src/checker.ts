@@ -335,8 +335,8 @@ function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], fi
   }
   if (item.kind === 'fn' && item.fn.body) {
     // v0.2.51：函数参数进入作用域（E-2 调用检查需要；param 标记豁免 S-7）
-    const params = item.fn.params.flatMap((p) => patternNames(p.pat));
-    checkBody(item.fn.body, enums, diags, file, undefined, params);
+    // v0.2.63：可变性随绑定传入（S-4 双端一致性）
+    checkBody(item.fn.body, enums, diags, file, undefined, fnParamBindings(item.fn.params));
   }
   if (item.kind === 'graph') {
     checkGraph(item.graph, enums, diags, file);
@@ -344,16 +344,14 @@ function checkItem(item: A.Item, enums: Map<string, string[]>, diags: Diag[], fi
   if (item.kind === 'impl') {
     for (const m of item.methods) {
       if (m.body) {
-        const params = m.params.flatMap((p) => patternNames(p.pat));
-        checkBody(m.body, enums, diags, file, undefined, params);
+        checkBody(m.body, enums, diags, file, undefined, fnParamBindings(m.params));
       }
     }
   }
   if (item.kind === 'trait') {
     for (const ti of item.items) {
       if (ti.fn?.body) {
-        const params = ti.fn.params.flatMap((p) => patternNames(p.pat));
-        checkBody(ti.fn.body, enums, diags, file, undefined, params);
+        checkBody(ti.fn.body, enums, diags, file, undefined, fnParamBindings(ti.fn.params));
       }
     }
   }
@@ -467,8 +465,10 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   }
   // graph 体内的 match/赋值等检查（含 AgentLoop 内 _ 检查）
   // v0.2.51：graph 参数进入作用域（param 标记豁免 S-7，E-2 可见）
+  // v0.2.63：参数可变性传入作用域表（GraphParam.mut）—— 此前恒 mut:true，
+  // 对非 mut 参数赋值漏报 S-4（dhv(Rust) 端同源码正确拦截，双端分歧）。
   const gscope: Scope = { vars: new Map(), used: new Set() };
-  for (const p of g.params) declareParam(gscope, p.name);
+  for (const p of g.params) declareParam(gscope, p.name, p.mut);
   for (const gs of g.body) {
     if (gs.t === 'stmt') {
       // let 声明由 checkStmt 内部完成（此处不再重复 declare —— 否则 S-8 误报）
@@ -526,18 +526,36 @@ function lookupVarInfo(scope: Scope, name: string): { mut: boolean; span: A.Span
   return undefined;
 }
 
-function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramNames?: string[]): void {
+function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramBindings?: Array<{ name: string; mut: boolean }>): void {
   
   const scope: Scope = { vars: new Map(), used: new Set() };
-  if (paramNames) for (const n of paramNames) declareParam(scope, n);
+  if (paramBindings) for (const b of paramBindings) declareParam(scope, b.name, b.mut);
   checkStmts(stmts, scope, enums, diags, file, inAgentLoop ?? false);
 }
 
-/** 声明参数绑定：参与 S-4/E-2 作用域解析，但豁免 S-7（未使用参数是合法风格） */
-function declareParam(scope: Scope, name: string): void {
+/**
+ * 声明参数绑定：参与 S-4/E-2 作用域解析，但豁免 S-7（未使用参数是合法风格）。
+ * v0.2.63：mut 按声明处传入（参数默认不可变，显式 `mut` 才可变，与 dhv(Rust)
+ * 及 BNF 语义一致）—— 此前恒 mut:true，非 mut 参数被赋值时 S-4 漏报。
+ */
+function declareParam(scope: Scope, name: string, mut: boolean): void {
   if (name === '_' || name.startsWith('_')) return;
   if (scope.vars.has(name)) return;
-  scope.vars.set(name, { mut: true, span: { line: 0, col: 0, file: '' }, param: true });
+  scope.vars.set(name, { mut, span: { line: 0, col: 0, file: '' }, param: true });
+}
+
+/**
+ * v0.2.63：FnParam → 参数绑定（name + mut）。
+ * - self 参数：mut 由 self kind 映射（mutvalue/refmut 可变，value/ref 不可变）；
+ * - 普通参数：以 FnParam.mut 为准（parser 已把声明处 `mut x` 记入顶层字段）；
+ * - 解构模式：patternNames 展开的全部名字共用参数级 mut。
+ */
+function fnParamBindings(params: A.FnParam[]): Array<{ name: string; mut: boolean }> {
+  return params.flatMap((p) => {
+    const names = patternNames(p.pat);
+    const mut = p.self ? p.self === 'mutvalue' || p.self === 'refmut' : (p.mut ?? false);
+    return names.map((name) => ({ name, mut }));
+  });
 }
 
 function checkStmts(stmts: A.Stmt[], scope: Scope, enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop: boolean): void {
