@@ -1,6 +1,6 @@
 # Issue 文案：S-4 双端分歧——graph/fn 非 mut 参数被赋值，dhv-ts 放行、dhv(Rust) 拦截
 
-> 粘贴到 GitHub → New issue。**尚未修复**；根因已定位（见下），建议按「修复方案」实施后补 conformance 语料。
+> 粘贴到 GitHub → New issue。已随 commit `1f03a4c`（分支 `fix/practical-fixes-0.2.62`，v0.2.63）修复，合并后可关闭。
 
 ---
 
@@ -60,12 +60,13 @@ function declareParam(scope: Scope, name: string): void {
 - `graph` 参数与 `fn` 参数（`declareParam` 共用）在 dhv-ts 端都恒可变；
 - dhv-ts 是参考解释器 —— 语义以它为锚的下游（38 后端投射、org 铸出专家闸门）会把非法赋值放行到生成工程里。
 
-## 修复方案（建议）
+## 修复方案（已实施，commit 1f03a4c / v0.2.63）
 
-1. AST 参数节点携带 `mut` 标记（parser.ts 若未带则补）；
-2. `declareParam(scope, name, mut)`：`mut: false` 默认，显式 `mut` 参数才 `mut: true`；
-3. 回归：`graph` / `fn` 各一例非 mut 参数赋值 → dhv-ts 报 S-4；显式 mut 参数赋值 → 两端都通过；
-4. conformance 语料补「graph 非 mut 参数被赋值」（当前两端 exit code 分歧的用例缺失，正因如此本分歧未被发现）——同时建议对拍粒度从「通过/失败结论」升级为「诊断码集合」（同 fail 但诊断集不同也应报分歧）。
+1. ✅ AST 参数节点携带 `mut` 标记（parser 原已带：`FnParam.mut` / `GraphParam.mut`）；
+2. ✅ `declareParam(scope, name, mut)`：`mut: false` 默认，显式 `mut` 参数才 `mut: true`；graph 参数取 `GraphParam.mut`，fn/impl/trait 参数经新增 `fnParamBindings()`（self 按 kind 映射：mutvalue/refmut 可变，value/ref 不可变）；
+3. ✅ 回归 4 例：`graph` / `fn` 各一例非 mut 参数赋值 → dhv-ts 报 S-4；显式 mut 参数赋值 → 两端都通过；
+4. ✅ v0.2.62 两个 G-8 回归 fixture 此前依赖本漏报才通过（dhv(Rust) 同源码本就报 S-S4），参数改 `mut x`；
+5. ⬜ conformance 语料补「graph 非 mut 参数被赋值」+ 对拍粒度从「通过/失败结论」升级为「诊断码集合」——**待办**（本轮仅记录于 CHANGELOG）。
 
 ## 佐证：conformance 语料盲区
 
