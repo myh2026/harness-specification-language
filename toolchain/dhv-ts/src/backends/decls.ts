@@ -396,8 +396,12 @@ function finalizePython(lines: string[]): string {
     }
   }
 
-  // ---- 2. 用量扫描（正文 = 非_import 行 + __future__ 头） ----
-  const bodyText = lines.filter((_, i) => !importLineIdx.has(i)).join('\n');
+  // ---- 2. 用量扫描（正文 = 非 import 行；注释行剥离 —— @dhv:hsl-mirror
+  // 镜像里的名字是注释不是代码，ruff 不认（main.py 实测：contract 回退文件
+  // 引用全在镜像注释里 → 导入被误判「已用」→ F401）） ----
+  const codeLines = lines.filter((_, i) => !importLineIdx.has(i))
+    .map((l) => (l.trimStart().startsWith('#') ? '' : l));
+  const bodyText = codeLines.join('\n');
   const nameUsed = (name: string): boolean => {
     const bare = name.replace(/\s+as\s+\w+$/i, '');
     const local = name.replace(/^.*\s+as\s+/i, '');

@@ -564,6 +564,13 @@ export class Host {
     if (gateway) {
       return req.stream ? this.llmViaGatewayStream(gateway, req) : this.llmViaGateway(gateway, req);
     }
+    // 零外联开关（v0.4.17）：DHV_LLM_DISABLE_SDK=1 时禁用 SDK 直连车道，
+    // 显式抛错 —— CI / 离线环境可机械保证「测试零外联」（org 的 scripted
+    // 剧本哲学：确定性、可复现、不外联）；此前只能靠「环境恰好没装 SDK」
+    // 这个偶然前提，装了 SDK 的机器上负例测试反而假阴（实测踩坑）。
+    if ((process.env.DHV_LLM_DISABLE_SDK || "").trim() === "1") {
+      throw new Error("llm: SDK 车道已禁用（DHV_LLM_DISABLE_SDK=1，零外联模式）—— scripted 剧本车道或显式网关（DHV_LLM_GATEWAY）二选一");
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mod: any = await import('z-ai-web-dev-sdk');
     const ZAICtor: { create: () => Promise<any> } = mod.default ?? mod;

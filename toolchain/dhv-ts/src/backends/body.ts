@@ -886,18 +886,30 @@ export class Body {
       case 'assign': {
         const t = this.expr(e.target);
         const v = this.expr(e.value);
-        return e.op === '=' ? `${t} = ${v}` : `${t} ${e.op}= ${v}`;
+        // v0.5.4 修正：AST 的 op 已是完整算符（'=' / '+=' / '-=' / …，
+        // parser ASSIGN_OPS），此前模板对复合算符再追加 '=' → 生成
+        // `i +== 1` 非法语法（python py_compile 抓到；上游 emit 一致性
+        // 语料未覆盖复合赋值的 python 活体翻译 —— 覆盖缺口实录）。
+        return `${t} ${e.op} ${v}`;
       }
       case 'call': {
         if (e.callee.kind === 'path') {
-          const args = e.args.map((a) => this.expr(a));
+          // v0.5.4 python：实参外层括号剥离（`fact((n - 1))` → `fact(n - 1)`，
+          // ruff UP034；元组由 pyStripOuter 保护）
+          const args = e.args.map((a) => {
+            const t = this.expr(a);
+            return L === 'python' ? pyStripOuter(t) : t;
+          });
           return this.pathCall(e.callee.segs, args);
         }
         throw new TranspileError('复杂调用链');
       }
       case 'method': {
         const recv = this.expr(e.recv);
-        const args = e.args.map((a) => this.expr(a));
+        const args = e.args.map((a) => {
+          const t = this.expr(a);
+          return L === 'python' ? pyStripOuter(t) : t;
+        });
         // v1.4.9：透传原始实参 AST（go sort_by 闭包体内联替换需要）+ turbofish 泛型实参（parse::<T>）
         return this.method(recv, e.recv, e.name, args, e.args, e.generics);
       }
@@ -2438,6 +2450,13 @@ export class Body {
   }
   private returnLine(i: string, v: string | null): string {
     const L = this.lang.id;
+    // v0.5.4 python：return 值的外层包裹括号剥离（二元表达式全括号化发射
+    // 的副作用 —— `return (a * b)` 触发 ruff UP034「多余括号」；语句位
+    // 剥一层不改变优先级语义，元组字面量由 pyStripOuter 保护）。
+    if (L === 'python') {
+      const bare = pyStripOuter(v);
+      return bare ? `${i}return ${bare}` : `${i}return`;
+    }
     if (L === 'python' || L === 'go') return v ? `${i}return ${v}` : `${i}return`;
     return v ? `${i}return ${v};` : `${i}return;`;
   }
@@ -3252,6 +3271,24 @@ function stdMathFreeCall(name: string, args: string[], L: string): string | null
   }
   // rust / go / cpp：自由函数是方法形态（(x).sin()），不可廉价直译 → null
   return null;
+}
+
+/**
+ * v0.5.4：python 语句位外层括号剥离（ruff UP034「多余括号」治理）。
+ * 二元/一元表达式全括号化发射在语句位（return / 调用实参）产生冗余包裹；
+ * 元组字面量 `(a, b)` 的括号是语义的一部分 —— 顶层逗号探测保护，绝不剥。
+ */
+function pyStripOuter(s: string): string {
+  if (s.length < 2 || !s.startsWith('(') || !s.endsWith(')')) return s;
+  const inner = s.slice(1, -1);
+  let depth = 0;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (ch === ',' && depth === 0) return s; // 元组字面量 —— 括号是语义
+  }
+  return inner.trim();
 }
 
 function snakeUpper(s: string): string {
