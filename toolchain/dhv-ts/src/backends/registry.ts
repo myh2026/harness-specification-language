@@ -55,7 +55,7 @@ export const LANGS: LangSpec[] = [
     id: 'python', name: 'Python', tier: 1, tierName: 'Harness 核心', ext: '.py',
     lineComment: '#', blockComment: ['"""', '"""'], body: 'full', nativeRuntime: true,
     validateWith: 'python3',
-    types: T({ String: 'str', char: 'str', bool: 'bool', i32: 'int', i64: 'int', u32: 'int', u64: 'int', usize: 'int', isize: 'int', f32: 'float', f64: 'float', Vec: 'list[%T]', HashMap: 'dict[%K, %V]', HashSet: 'set[%T]', Option: '%T | None', Result: '%T', Box: '%T', unit: 'None' }),
+    types: T({ String: 'str', char: 'str', bool: 'bool', i8: 'int', i16: 'int', i32: 'int', i64: 'int', i128: 'int', u8: 'int', u16: 'int', u32: 'int', u64: 'int', u128: 'int', usize: 'int', isize: 'int', f32: 'float', f64: 'float', Vec: 'list[%T]', HashMap: 'dict[%K, %V]', HashSet: 'set[%T]', Option: '%T | None', Result: '%T', Box: '%T', unit: 'None' }),
   },
   {
     id: 'typescript', name: 'TypeScript', tier: 1, tierName: 'Harness 核心', ext: '.ts',

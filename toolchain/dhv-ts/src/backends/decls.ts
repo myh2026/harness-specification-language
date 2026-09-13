@@ -350,7 +350,139 @@ export function emitFile(
   // import 块之后正文无 `pkg.` 引用的包从 import 中移除；全部未用则替换为空白导入。
   if (L === 'go') return trimGoImports(out);
 
+  // v0.5.4 python：导入按需化（ruff F401 清零 + Protocol F821 修复）
+  if (L === 'python') return finalizePython(out);
+
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+/**
+ * v0.5.4：python 导入按需化（ruff F401 清零）。
+ * 头部的 `# __DHV_PY_IMPORTS__` 占位标记按正文实际用量替换为导入块：
+ *   dataclass/field ← @dataclass / field( 装饰与默认值
+ *   math ← math. 路径引用（std/math 映射）
+ *   Any ← 无类型注解参数兜底（p.ty 之外的裸 Any）
+ *   Protocol ← trait 投射 class X(Protocol)（此前从未导入 —— F821 实测）
+ *   Optional/Dict/List/Callable ← 遗留形态兜底（现映射为内建泛型，通常为空）
+ * 排序遵循 isort（I001）：__future__ 独立段 → stdlib 按模块名排序；
+ * 随后的跨文件 import（extraHeader）与 stdlib 块之间补空行分段。
+ */
+function finalizePython(lines: string[]): string {
+  const markerIdx = lines.indexOf('# __DHV_PY_IMPORTS__');
+  if (markerIdx < 0) return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+
+  // ---- 1. 抽取全部顶层 import（跨文件 extraHeader 在标记后；本函数统一收编） ----
+  // from X import A, B as C  /  import X
+  const importLineIdx = new Set<number>();
+  const fromImports = new Map<string, Set<string>>(); // module → names（含别名原样保留）
+  const plainImports = new Set<string>();
+  for (let i = markerIdx + 1; i < lines.length; i++) {
+    const ln = lines[i]!;
+    if (ln.startsWith('    ') || ln.startsWith('\t')) continue;
+    const m = ln.match(/^from ([A-Za-z_][\w.]*) import (.+)$/);
+    if (m) {
+      if (m[1] === '__future__') continue; // 已在头部
+      if (!fromImports.has(m[1]!)) fromImports.set(m[1]!, new Set());
+      for (const name of m[2]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0)) {
+        fromImports.get(m[1]!)!.add(name);
+      }
+      importLineIdx.add(i);
+      continue;
+    }
+    const m2 = ln.match(/^import ([A-Za-z_][\w.]*)$/);
+    if (m2) {
+      plainImports.add(m2[1]!);
+      importLineIdx.add(i);
+    }
+  }
+
+  // ---- 2. 用量扫描（正文 = 非_import 行 + __future__ 头） ----
+  const bodyText = lines.filter((_, i) => !importLineIdx.has(i)).join('\n');
+  const nameUsed = (name: string): boolean => {
+    const bare = name.replace(/\s+as\s+\w+$/i, '');
+    const local = name.replace(/^.*\s+as\s+/i, '');
+    const probe = bare === local ? bare : local;
+    return new RegExp(`\\b${probe.replace(/\$/g, '\\$')}\\b`).test(bodyText);
+  };
+
+  // ---- 3. 标准库按需（dataclass/field/math/typing 族） ----
+  const uses = {
+    dataclass: /@dataclass\b/.test(bodyText),
+    field: /\bfield\s*\(/.test(bodyText),
+    math: /\bmath\./.test(bodyText),
+    any: /\bAny\b/.test(bodyText),
+    protocol: /\bProtocol\b/.test(bodyText),
+    optional: /\bOptional\b/.test(bodyText),
+    dict: /\bDict\b/.test(bodyText),
+    list: /\bList\b/.test(bodyText),
+    callable: /\bCallable\b/.test(bodyText),
+  };
+  const std: string[] = [];
+  if (uses.dataclass || uses.field) {
+    const names = [uses.dataclass ? 'dataclass' : '', uses.field ? 'field' : ''].filter((s) => s.length > 0);
+    std.push(`from dataclasses import ${names.join(', ')}`);
+  }
+  if (uses.math) std.push('import math');
+  const typingNames = [
+    uses.any ? 'Any' : '',
+    uses.callable ? 'Callable' : '',
+    uses.dict ? 'Dict' : '',
+    uses.list ? 'List' : '',
+    uses.optional ? 'Optional' : '',
+    uses.protocol ? 'Protocol' : '',
+  ].filter((s) => s.length > 0);
+  if (typingNames.length > 0) std.push(`from typing import ${typingNames.join(', ')}`);
+
+  // ---- 4. 跨文件导入裁剪（F401 清零）+ 同模块合并（I001/I 重复行治理） ----
+  const thirdParty: string[] = [];
+  for (const [mod, names] of [...fromImports.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    // 名字排序（isort I001：from X import A, B, C 需按名字升序）
+    const kept = [...names].filter(nameUsed).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    if (kept.length > 0) thirdParty.push(`from ${mod} import ${kept.join(', ')}`);
+  }
+  const keptPlain = [...plainImports].filter((m) => new RegExp(`\\b${m}\\.`).test(bodyText));
+  for (const m of keptPlain.sort()) thirdParty.push(`import ${m}`);
+
+  // ---- 5. prelude 变体类按需注入（F821：模式匹配引用 Result::Ok/Err、
+  // Option::Some 时生成最小桩类 —— 生成物此前引用未定义名，py_compile 不查
+  // 名字解析故语法校验绿，ruff F821 实测抓到）。仅当未被跨文件导入时注入。
+  const importedNames = new Set([...fromImports.values()].flatMap((s) => [...s]));
+  const variantStubs: string[] = [];
+  for (const vn of ['Ok', 'Err', 'Some']) {
+    if (importedNames.has(vn)) continue;
+    if (new RegExp(`\\b${vn}\\b`).test(bodyText)) {
+      // 纯 class 桩（f0 位置字段）：模式匹配 isinstance + .f0 访问即可用；
+      // 不用 @dataclass —— 零 import 依赖，消费者侧的桩定义可覆盖
+      variantStubs.push(`class ${vn}:`, `    def __init__(self, f0=None):`, `        self.f0 = f0`, '');
+    }
+  }
+
+  // ---- 6. 重组：标记位置放 stdlib 块；空行分段；跨文件块 + 变体桩紧随 ----
+  const replacement: string[] = [];
+  if (std.length > 0 || thirdParty.length > 0) replacement.push('');
+  replacement.push(...std);
+  if (std.length > 0 && thirdParty.length > 0) replacement.push('');
+  replacement.push(...thirdParty);
+  if (variantStubs.length > 0) {
+    // __future__ 行与首语句（桩类）之间同样需要两个空行（I001）
+    replacement.push('', '');
+    replacement.push(...variantStubs);
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === markerIdx) {
+      out.push(...replacement);
+      // isort 惯例：导入区之后两个空行再接首语句/注释（I001 实测；无导入
+      // 时 __future__ 行后同样需要）
+      out.push('', '');
+      continue;
+    }
+    if (importLineIdx.has(i)) continue; // 原位删除（已收编重组）
+    out.push(lines[i]!);
+  }
+  // 空行归一：≥3 空行压到 2（PEP8 顶层两空行约定；E303 阈值是 3+ 空行）
+  return out.join('\n').replace(/\n{4,}/g, '\n\n\n').trim() + '\n';
 }
 
 /** v1.4.10：go body 尾 return 判定（跳过尾随兜底 return，防 vet unreachable） */
@@ -429,9 +561,13 @@ function fileHeader(p: P, items: ProjectedItem[], goSkipHelpers = false): string
       break;
     }
     case 'python': {
-      head.push('from __future__ import annotations', 'from dataclasses import dataclass, field', 'from typing import Any, Optional, Dict, List, Callable');
-      // v0.2.51：std/math 函数与常量映射为 math.*（body.ts 路径映射；未使用无害）
-      head.push('import math');
+      // v0.5.4：导入按需化（ruff F401 清零）—— 头部只放 __future__ 与
+      // 占位标记，finalizePython 扫描正文实际用量后生成导入块
+      // （dataclass/field/math/Any/Protocol…）。修掉两个实测缺陷：
+      //   F401×9/文件 —— typing/dataclasses/math 全量导入从不裁剪；
+      //   F821 —— trait 投射 `class X(Protocol)` 但 Protocol 从未导入。
+      head.push('from __future__ import annotations');
+      head.push('# __DHV_PY_IMPORTS__');
       head.push(...languagePrelude('python'));
       break;
     }
