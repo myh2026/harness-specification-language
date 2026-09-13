@@ -1003,6 +1003,10 @@ export async function emitProgram(
       },
     },
   };
+  // outDir 兜底创建：无 project{} / 零投射文件时 byPath 为空，上面的
+  // per-file mkdir 不会执行 —— manifest 先写即 ENOENT（实测：emit 无投射
+  // 文件的源到不存在目录直接炸）。这里统一确保目录存在（幂等）。
+  fs.mkdirSync(path.resolve(outDir), { recursive: true });
   fs.writeFileSync(path.resolve(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
 
   return { outDir, scale, entry: program.entry, files, warnings };

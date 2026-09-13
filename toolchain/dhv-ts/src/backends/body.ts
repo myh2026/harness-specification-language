@@ -1196,6 +1196,11 @@ export class Body {
     if (name === 'to_string' && kind === 'str' && L === 'cpp') {
       return `std::string(${recv})`;
     }
+    // v0.5.4 python 同理：字符串接收者的 to_string 是恒等变换 —— 直接返回
+    // 接收者（`str('unit')` 形态触发 ruff UP018「不必要的 str 调用」）。
+    if (name === 'to_string' && kind === 'str' && L === 'python') {
+      return recv;
+    }
     // String::contains 与 Vec::contains 同名不同义：String 是子串查找。
     // 🔴 v1.4.7 修复：此前 cpp 走 Vec 表生成 std::find(s.begin(), s.end(), "x")
     // （char 与 const char* 比较 = g++ 编译错误）、go 生成 slices.Contains(s, "x")
@@ -2276,7 +2281,7 @@ export class Body {
     if (!hasWildcard) {
       if (L === 'python') {
         out.push(`${indent}else:`);
-        out.push(`${indent}    raise ValueError('dhv: match 不可达分支（S-6 穷尽性）')`);
+        out.push(`${indent}    raise TypeError('dhv: match 不可达分支（S-6 穷尽性）')`);
       } else {
         out.push(`${indent}} else {`);
         out.push(L === 'go'
@@ -2581,8 +2586,10 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         'def _dhv_pop(v):',
         '    return v.pop() if v else None',
         'def _dhv_clone(x):',
-        '    if isinstance(x, list): return list(x)',
-        '    if isinstance(x, dict): return dict(x)',
+        '    if isinstance(x, list):',
+        '        return list(x)',
+        '    if isinstance(x, dict):',
+        '        return dict(x)',
         '    return x',
         'def _dhv_is_sorted(v):',
         '    return all(v[i] <= v[i + 1] for i in range(len(v) - 1))',
@@ -2622,7 +2629,8 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         '    return a / b',
         // v0.2.55 L-19：interp display 规范的 python 实现（JS Number::toString 风格）
         'def _dhv_float_str(x):',
-        "    if x != x:",
+        "    import math as _dhv_m",
+        "    if _dhv_m.isnan(x):",
         "        return 'NaN'",
         "    if x == float('inf'):",
         "        return 'Infinity'",
@@ -2633,10 +2641,10 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         '        if a < 1e16:',
         '            return str(int(x))',
         '        if a < 1e21:',
-        "            return '{:.0f}'.format(x)",
+        "            return f'{x:.0f}'",
         '        return repr(x)',
         '    if 1e-7 <= a < 1e-4:',
-        "        s = '{:.20f}'.format(x).rstrip('0').rstrip('.')",
+        "        s = f'{x:.20f}'.rstrip('0').rstrip('.')",
         "        return s if s else '0'",
         '    r = repr(x)',
         "    if 'e' in r:",
