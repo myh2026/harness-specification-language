@@ -1,5 +1,79 @@
 # CHANGELOG
 
+## v0.2.65（2026-09-13）—— dhv(Rust) python 生成器 ruff 全绿（按工具链补齐）
+
+v0.2.64 把 dhv-ts 的 python 产物带到 ruff 全绿；本批按工具链推进到
+**dhv(Rust) 编译器**：本地装 Rust 工具链实测基线（四语料 50 项失败）
+→ 逐根因修复 → 全绿 → 双车道门禁进 CI。
+
+**基线实测（修复前，四语料 29 个 .py · 50 项失败）**：
+22 项语法错误（E999）+ 12 项 F821 + 6 项 I001 + 2 项 UP034 + 2 项 PLC3002。
+
+**根因修复（python.rs · 生成器层）**：
+
+- **format! 宏拼接损坏**（×6 文件）：字面量带引号原样入串 + 整体再包
+  一层引号 + 占位符与实参错位 → `""tpl""{}{}"`.format(...) 非法语法。
+  重写为 f-string 投射（模板 `{{}}` 转义 / `{}` 消耗实参；实参 token
+  级翻译：`x.len()` → `len(x)` · `String::from(x)` → `str(x)`；无占位
+  回落普通字面量防 F541）；首逗号不再产生空组（空占位 `{}` 是语法错）；
+- **while-let 模式当赋值目标**（×4）：`Some(head) = q.pop()` 非法赋值
+  + 条件与绑定各自重求值（副作用双 popping）。改为合成 `while True` +
+  循环体内单次求值 + 取反条件 break；模式语义统一走
+  `py_match_condition`（与 match/if-let 同源）；
+- **`String.from` 关键字方法名**：`from` 是 python 关键字 → `str(x)`
+  （字面量直出）；
+- **元组下标字段**：`kv.1` 非法属性名 → 下标访问 `kv[1]`；
+- **impl 顶层缩进 def**：impl 是独立投射项不在 class 体内 → 顶层 def
+  （self 显式首参）；
+- **空方法名 `.()`**：py_std_method 把整式塞 receiver 的形态（first/
+  last/abs/collect…）此前仍拼 `.()`——直接返回整式；
+- **async lambda**：python 无此构造 → 诚实降级注释（此前 E999）；
+- **块表达式 IIFE**：纯尾块 `(lambda: x)()` ≡ x —— 直接内联（PLC3002
+  消除）；多语句块表达式位诚实降级；
+- **Some/None/Option 语义**：`Some(x)` → x · `None` 值不再被 py_ident
+  转义成 `None_` · `HashMap::new()` → `{}` 等内置容器构造直译。
+
+**根因修复（跨文件引用层 —— finalize_crossrefs 后置收尾，与 dhv-ts
+finalizePython 同思路）**：
+
+- **F821 未定义名**（×12）：一项一文件的裸跨引用 → 全产物注册表
+  （顶层名 → 模块 stem）→ 代码视图扫描（剥注释/字符串；**f-string 占位
+  表达式保留** —— 引用常藏在里面）→ 注入 `from <module> import <names>`；
+- **属性访问不算裸名使用**：`WorkStatus.Running(3)` 不再误导入 Running
+  （导入未用 F401）；
+- **Result 变体桩类**：`isinstance(x, Ok)` → 注入 `class Ok`（`_fields/
+  __getitem__`，与枚举 tuple 变体投射同构）；
+- **isort 分区**：stdlib 与本地模块分区（provider.py 实测：typing +
+  prompt 混排单区被 I001 拒）+ 导入区后两空行。
+
+**根因修复（语句层）**：
+
+- **println! 语句被吞**：`pass # 局部项` 吞掉语句 → 变量使用点消失
+  （F841）+ 块内多余 pass（PIE790）。println! → `print(f-string)` 真实
+  投射（main.py 语义恢复：真的打印了）；其它语句级宏诚实注释降级；
+- **常量名 snake_case 打碎**：`DEFAULT_PRIORITY` → `d_e_f_a_u_l_t…`
+  引用侧不匹配（F821）→ 常量名保持原样（全大写惯例）；
+- **混合枚举漏 dataclass 导入**：Named 变体的 `@dataclass` 需要导入
+  （此前仅纯 struct 路径导入）；
+- **FURB136 夹逼形态**：`b if a > b else a` → `min(a, b)`（gt）/`max`
+  （lt）直译；
+- **绑定多语句**：`; ` 单行拼接 → 多行（E702 预防）。
+
+**门禁基础设施（双车道）**：
+
+- `scripts/ruff-gate.ts` 按工具链分车道：ts（默认）+ rust（需
+  cargo build 产出二进制；`--require-rust` 强制在环）—— 8 份语料·车道
+  全绿（修复前 ts 0 / rust 50）；
+- CI 新 job `rust-ruff-gate`（Rust 工具链 + cargo build + 双语料门禁，
+  `--rust-only --require-rust`）；既有 `ruff-gate` job 显式 `--ts-only`。
+
+**诚实边界**：dhv(Rust) python 产物的运行期 parity（prelude 助手 /
+`_dhv_str` 显示语义）不在本批范围 —— 静态投射门禁目标（ruff 全绿）
+已达成，活体运行请用 dhv-ts（nativeRuntime 路径）。
+
+验证：dhv(Rust) cargo test 15/15 · 四语料 ruff 全绿（50 → 0）· dhv-ts
+194/194 · 双车道门禁 8/8 · CI 9 job（含新 rust-ruff-gate）。
+
 ## v0.2.64（2026-09-13）—— python 产物 ruff 全绿 + 门禁基础设施（生成器九修）
 
 「所有产物 ruff 检测均可通过」从口号变为可执行门禁。ORG 侧（v0.5.4）

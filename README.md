@@ -5,8 +5,8 @@
 **从逻辑到 38 个后端的工程投射 · 为编写 AI Agent harness 而生的编译型语言**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
-[![dhv](https://img.shields.io/badge/dhv-v0.2.64-success.svg)](toolchain/dhv/Cargo.toml)
-[![dhv-ts](https://img.shields.io/badge/dhv--ts-v0.2.64-success.svg)](toolchain/dhv-ts/package.json)
+[![dhv](https://img.shields.io/badge/dhv-v0.2.65-success.svg)](toolchain/dhv/Cargo.toml)
+[![dhv-ts](https://img.shields.io/badge/dhv--ts-v0.2.65-success.svg)](toolchain/dhv-ts/package.json)
 [![BNF](https://img.shields.io/badge/BNF-v1.5.0-blue.svg)](toolchain/hsl-spec/BNF.md)
 [![Backend](https://img.shields.io/badge/backends-38-orange.svg)](toolchain/hsl-spec/BNF.md)
 [![CI](https://github.com/myh2026/harness-specification-language/actions/workflows/ci.yml/badge.svg)](https://github.com/myh2026/harness-specification-language/actions/workflows/ci.yml)
@@ -268,7 +268,7 @@ project {
 测试节奏双车道，均失败自动开 Issue 跟踪、恢复全绿自动关闭，均可手动触发（Actions → 对应工作流 → Run workflow）：
 
 - **[Quarter Tests](.github/workflows/quarter-tests.yml)（每 15 分钟快车道）**：实装工具链（cargo build --release + dhv 二进制冒烟）→ 3 个项目（nova 静态检查 / dsh 剧本端到端 / backends-demo 投射）→ 38 后端全测（[tests/verify_backends.ts](toolchain/tests/verify_backends.ts)：全文件语法校验 + 零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级真解析）；
-- **[Scheduled Tests](.github/workflows/scheduled-tests.yml)（每日 UTC 20:30 / 北京 04:30 全量深水区）**：dhv-ts 全量套件（194 用例，含 v0.2.64 python 产物 ruff 门禁）+ 示例回归 + IDE 校验 + cargo test + 双编译器一致性。
+- **[Scheduled Tests](.github/workflows/scheduled-tests.yml)（每日 UTC 20:30 / 北京 04:30 全量深水区）**：dhv-ts 全量套件（194 用例，含 v0.2.64/v0.2.65 python 产物 ruff 门禁 · 双工具链车道）+ 示例回归 + IDE 校验 + cargo test + 双编译器一致性。
 
 ## 📦 版本化发布（含 CD 自动发布链）
 
@@ -310,7 +310,7 @@ main 合并（版本号变更）→ CI 四 job 全绿（含 version-sync 守卫�
 
 ## 🛡️ 当前版本
 
-**dhv 0.2.64 · dhv-ts 0.2.64 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
+**dhv 0.2.65 · dhv-ts 0.2.65 · BNF v1.5.0 · 指南 v0.2.56 · IDE v0.2.0**
 
 - 版本号以 `toolchain/dhv/Cargo.toml` 与 `toolchain/dhv-ts/package.json` 为准，随每次功能/修复递增；
 - 详见 [CHANGELOG.md](CHANGELOG.md)。

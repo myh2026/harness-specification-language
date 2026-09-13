@@ -215,7 +215,7 @@ jobs:
           ruff --version
 
       - name: Run ruff gate (4 corpora → emit → ruff check)
-        run: bun scripts/ruff-gate.ts
+        run: bun scripts/ruff-gate.ts --ts-only
 
       # 带着真 ruff 再跑一遍套件 —— 让 run-all.ts 里「ruff 缺席时跳过」的
       # 断言在 CI 侧真实执行（本地裸跑无法覆盖的路径）。
@@ -223,3 +223,46 @@ jobs:
         working-directory: toolchain
         run: bun tests/hsl/run-all.ts
         timeout-minutes: 15
+
+  # ── Job 8: dhv(Rust) python 产物 ruff 门禁（v0.2.65）──────
+  # 双工具链门禁的另一车道：dhv(Rust) 编译器的 python 生成器
+  # （v0.2.65 修复 50 项失败 → 全绿；四语料与 ts 车道同源）。
+  # 构建 dhv release 后跑 scripts/ruff-gate.ts --rust-only --require-rust
+  #（--require-rust：二进制缺席 = 失败，不静默跳过）。
+  rust-ruff-gate:
+    name: dhv (Rust) python ruff gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            toolchain/dhv/target
+          key: rust-${{ runner.os }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install ruff (uv tool)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv tool install ruff
+          ruff --version
+
+      - name: Build dhv release
+        working-directory: toolchain/dhv
+        run: cargo build --release
+
+      - name: Run Rust ruff gate (4 corpora → emit → ruff check)
+        run: bun scripts/ruff-gate.ts --rust-only --require-rust

@@ -53,7 +53,8 @@ impl CodegenBackend for PythonBackend {
                 }
             }
             Item::Struct(s) => {
-                out.push_str("from dataclasses import dataclass\n\n@dataclass\n");
+                // v0.2.65：导入区后两空行（isort 规范 I001 —— 此前一空行实测被 ruff 拒）
+                out.push_str("from dataclasses import dataclass\n\n\n@dataclass\n");
                 out.push_str(&format!("class {}:\n", s.name.name));
                 match &s.kind {
                     StructKind::Named(fields) => {
@@ -83,6 +84,12 @@ impl CodegenBackend for PythonBackend {
                 // 枚举 → class with class-level constants (simple) or dataclass subclasses
                 let has_fields = e.variants.iter().any(|v| !matches!(&v.fields, StructKind::Unit));
                 if has_fields {
+                    // v0.2.65：Named 变体投射 @dataclass —— 需要导入（此前混合枚举
+                    // 只在纯 struct 路径导入，混合枚举文件用 @dataclass 而无导入
+                    // → F821 实测：action.py/verdict.py/work_status.py/shape.py）
+                    if e.variants.iter().any(|v| matches!(&v.fields, StructKind::Named(_))) {
+                        out.push_str("from dataclasses import dataclass\n\n\n");
+                    }
                     // 变体带字段 → 基类 + 子类
                     out.push_str(&format!("class {}:\n", e.name.name));
                     out.push_str("    pass\n\n");
@@ -117,7 +124,7 @@ impl CodegenBackend for PythonBackend {
                     }
                 } else {
                     // 纯单元变体 → 简单枚举类
-                    out.push_str("from enum import Enum, auto\n\n");
+                    out.push_str("from enum import Enum, auto\n\n\n");
                     out.push_str(&format!("class {}(Enum):\n", e.name.name));
                     for v in &e.variants {
                         out.push_str(&format!("    {} = auto()\n", v.name.name));
@@ -126,7 +133,7 @@ impl CodegenBackend for PythonBackend {
             }
             Item::Trait(t) => {
                 // trait → Protocol (structural typing)
-                out.push_str("from typing import Protocol\n\n");
+                out.push_str("from typing import Protocol\n\n\n");
                 out.push_str(&format!("class {}(Protocol):\n", t.name.name));
                 let has_items = !t.items.is_empty();
                 for ti in &t.items {
@@ -147,6 +154,8 @@ impl CodegenBackend for PythonBackend {
             }
             Item::Impl(imp) => {
                 // impl → 方法定义（class body，Python 无需显式 impl 块）
+                // v0.2.65：顶层 def（此前 4 空格缩进发射 = IndentationError E999 ——
+                // impl 是独立投射项，不在 class 体内；self 作显式首参）
                 let self_ty_name = py_type(&imp.self_ty);
                 if let Some(trait_ty) = &imp.trait_ty {
                     out.push_str(&format!("# impl {} for {}\n", py_type(trait_ty), self_ty_name));
@@ -157,23 +166,25 @@ impl CodegenBackend for PythonBackend {
                     if let ImplItem::Fn(f) = ii {
                         let ret = f.ret.as_ref().map(|t| format!(" -> {}", py_type(t))).unwrap_or_default();
                         out.push_str(&format!(
-                            "    {}def {}({}){}:\n",
+                            "{}def {}({}){}:\n",
                             if f.is_async { "async " } else { "" },
                             py_ident(&snake_case(&f.name.name)),
                             f.params.iter().map(py_param).collect::<Vec<_>>().join(", "),
                             ret
                         ));
                         match &f.body {
-                            Some(body) => out.push_str(&emit_block_py(body, 2, false)),
-                            None => out.push_str("        ...\n"),
+                            Some(body) => out.push_str(&emit_block_py(body, 1, false)),
+                            None => out.push_str("    ...\n"),
                         }
                     }
                 }
             }
             Item::Const(c) => {
+                // v0.2.65：常量名保持原样（全大写惯例；此前 snake_case 把
+                // DEFAULT_PRIORITY 打碎成 d_e_f_a_u_l_t… —— 引用侧不匹配 → F821）
                 out.push_str(&format!(
                     "{}: {} = {}\n",
-                    py_ident(&snake_case(&c.name.name)),
+                    py_ident(&c.name.name),
                     py_type(&c.ty),
                     emit_expr_py(&c.value)
                 ));
@@ -320,10 +331,22 @@ fn emit_block_py(block: &BlockExpr, indent: usize, no_return_tail: bool) -> Stri
     for stmt in &block.stmts {
         match stmt {
             Stmt::Let(l) => {
+                // v0.2.65：Some(x) 模式直译为绑定（python 的 Option 语义 = 裸值/None；
+                // 此前把模式文本当赋值目标 → `Some(x) = e` 非法赋值 E999）
+                if let Some(init) = &l.init {
+                    if let Some(name) = py_some_bind(&l.pattern) {
+                        out.push_str(&format!("{pad}{} = {}\n", name, py_strip_outer(&emit_expr_py(init))));
+                        if let Some(els) = &l.else_block {
+                            out.push_str(&format!("{pad}else:\n"));
+                            out.push_str(&emit_block_py(els, indent + 1, false));
+                        }
+                        continue;
+                    }
+                }
                 let pat = py_pattern(&l.pattern);
                 // Python 无 mut 关键字
                 match &l.init {
-                    Some(init) => out.push_str(&format!("{pad}{} = {}\n", pat, emit_expr_py(init))),
+                    Some(init) => out.push_str(&format!("{pad}{} = {}\n", pat, py_strip_outer(&emit_expr_py(init)))),
                     None => out.push_str(&format!("{pad}{} = None\n", pat)),
                 }
                 if let Some(els) = &l.else_block {
@@ -335,7 +358,23 @@ fn emit_block_py(block: &BlockExpr, indent: usize, no_return_tail: bool) -> Stri
                 out.push_str(&emit_stmt_expr_py(expr, &pad, indent));
             }
             Stmt::Empty(_) => {}
-            Stmt::Item(_) => out.push_str(&format!("{pad}pass  # 局部项\n")),
+            Stmt::Item(item) => {
+                // v0.2.65：语句级宏（println! 等）真实投射 —— 此前一律
+                // `pass  # 局部项` 吞掉语句：变量使用点消失（F841）+ 块内
+                // 多余 pass（PIE790）双违规；println! → print(f-string)
+                if let Item::MacroCall { path, args } = item {
+                    let mname = path.last().name.clone();
+                    if mname == "println" || mname == "print" {
+                        out.push_str(&format!("{pad}print({})\n", py_format_macro(args)));
+                        continue;
+                    }
+                    // 其它语句级宏：诚实注释降级（不静默伪造语义）
+                    out.push_str(&format!("{pad}# macro {}!(…) — 未投射\n", mname));
+                    continue;
+                }
+                // 局部项（fn 内 struct/fn 声明）：注释占位
+                out.push_str(&format!("{pad}# 局部项（未投射）\n"));
+            }
         }
     }
     if let Some(tail) = &block.tail {
@@ -351,11 +390,18 @@ fn emit_block_py(block: &BlockExpr, indent: usize, no_return_tail: bool) -> Stri
                 ExprKind::Return(..) | ExprKind::Break { .. } | ExprKind::Continue { .. } => {
                     out.push_str(&format!("{pad}{}\n", emit_expr_py(tail)));
                 }
-                _ => out.push_str(&format!("{pad}return {}\n", emit_expr_py(tail))),
+                _ => out.push_str(&format!("{pad}return {}\n", py_strip_outer(&emit_expr_py(tail)))),
             }
         }
-    } else if out.is_empty() {
-        out.push_str(&format!("{pad}pass\n"));
+    } else {
+        // v0.2.65：块为空（或仅注释）时补 pass —— 注释不构成语句体，
+        // 纯注释体在 python 是 IndentationError（诚实空体探测）
+        let has_code = out
+            .lines()
+            .any(|l| { let t = l.trim(); !t.is_empty() && !t.starts_with('#') });
+        if !has_code {
+            out.push_str(&format!("{pad}pass\n"));
+        }
     }
     out
 }
@@ -392,13 +438,27 @@ fn emit_stmt_expr_py(expr: &Expr, pad: &str, indent: usize) -> String {
             out
         }
         ExprKind::WhileLet { pattern, expr, body, .. } => {
-            // Python 无 while let → while condition + 内部解构
+            // v0.2.65：python 无 while let → 合成 while True + 循环体内单次求值 + break。
+            // 此前两缺陷同源（把模式文本当赋值目标）：
+            //   ① `Some(head) = q.pop()` 非法赋值目标（E999 实测 ×4 文件）；
+            //   ② 条件与绑定各自重求值 scrutinee —— 副作用双 popping。
+            // 模式语义统一走 py_match_condition（与 match/if-let 同源）。
             let mut out = String::new();
-            let scrut = emit_expr_py(expr);
+            let scrut_expr = emit_expr_py(expr);
             out.push_str(&format!("{}while True:\n", pad));
-            out.push_str(&format!("{}    {} = {}\n", pad, py_pattern(pattern), scrut));
-            out.push_str(&format!("{}    if {} is None:\n", pad, py_pattern(pattern)));
-            out.push_str(&format!("{}        break\n", pad));
+            let inner = format!("{pad}    ");
+            let scrut = if py_is_simple_name(&scrut_expr) {
+                scrut_expr
+            } else {
+                out.push_str(&format!("{}_wl_scrut = {}\n", inner, scrut_expr));
+                "_wl_scrut".to_string()
+            };
+            let (cond, bindings) = py_match_condition(pattern, scrut);
+            out.push_str(&format!("{}if {}:\n", inner, py_negate(&cond)));
+            out.push_str(&format!("{}    break\n", inner));
+            for b in bindings.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str(&format!("{}{}\n", inner, b));
+            }
             out.push_str(&emit_block_py(body, indent + 1, true));
             out
         }
@@ -420,7 +480,9 @@ fn emit_stmt_expr_py(expr: &Expr, pad: &str, indent: usize) -> String {
             // if let → isinstance 检查（与 match arm 一致）
             let (cond_str, bindings) = py_match_condition(pattern, scrut);
             out.push_str(&format!("{}if {}:\n", pad, cond_str));
-            out.push_str(&format!("{}    {}\n", pad, bindings));
+            for b in bindings.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str(&format!("{}    {}\n", pad, b));
+            }
             out.push_str(&emit_block_py(then, indent + 1, true));
             if let Some(els) = else_ {
                 if let ExprKind::If { .. } = &els.kind {
@@ -471,7 +533,9 @@ fn emit_match_as_if_chain_py(
         let kw = if i == 0 { "if" } else { "elif" };
         out.push_str(&format!("{}{} {}{}:\n", pad, kw, cond, guard));
         if !bindings.is_empty() {
-            out.push_str(&format!("{}    {}\n", pad, bindings));
+            for b in bindings.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str(&format!("{}    {}\n", pad, b));
+            }
         }
         // arm body
         if let ExprKind::Block(b) = &arm.body.kind {
@@ -494,7 +558,12 @@ fn py_match_condition(pattern: &Pattern, scrutinee: String) -> (String, String) 
         PatternKind::Ident { name, sub: Some(inner), .. } => {
             // x @ pat → bind x, check inner
             let (inner_cond, inner_bind) = py_match_condition(inner, scrutinee.clone());
-            (inner_cond, format!("{} = {}; {}", py_ident(&snake_case(&name.name)), scrutinee, inner_bind))
+            (inner_cond, format!("{} = {};\n{}", py_ident(&snake_case(&name.name)), scrutinee, inner_bind))
+        }
+        // v0.2.65：Option::None / None 路径模式 → is None（此前 len>=2 落到
+        // isinstance(scrut, None) —— 无意义且运行期必假）
+        PatternKind::Path(p) if py_is_none_path(p) => {
+            (format!("{} is None", scrutinee), String::new())
         }
         PatternKind::Literal(lit) => {
             (format!("{} == {}", scrutinee, py_literal(lit)), String::new())
@@ -509,6 +578,18 @@ fn py_match_condition(pattern: &Pattern, scrutinee: String) -> (String, String) 
                 (format!("{} == {}", scrutinee, name), String::new())
             }
         }
+        PatternKind::TupleStruct { path, elems, .. } if py_is_some_path(path) && elems.len() == 1 => {
+            // v0.2.65：Some(x) → python 语义 = 非 None 即有值（值即绑定）。
+            // 此前落入通用 TupleStruct 分支：isinstance(scrut, Some) 必假
+            // + 绑定 `x = scrut[0]` 对裸值越界。
+            match &elems[0].kind {
+                PatternKind::Ident { name, .. } => (
+                    format!("{} is not None", scrutinee),
+                    format!("{} = {}", py_ident(&snake_case(&name.name)), scrutinee),
+                ),
+                _ => (format!("{} is not None", scrutinee), String::new()),
+            }
+        }
         PatternKind::TupleStruct { path, elems, .. } => {
             let variant = path.segments.last().map(|s| s.name.as_str()).unwrap_or("");
             let bindings: Vec<String> = elems.iter().enumerate().map(|(i, e)| {
@@ -520,7 +601,7 @@ fn py_match_condition(pattern: &Pattern, scrutinee: String) -> (String, String) 
                     _ => format!("# unsupported pattern at [{}]", i),
                 }
             }).filter(|s| !s.is_empty()).collect();
-            (format!("isinstance({}, {})" , scrutinee, variant), bindings.join("; "))
+            (format!("isinstance({}, {})" , scrutinee, variant), bindings.join("\n"))
         }
         PatternKind::Struct { path, fields, .. } => {
             let class_name = path.segments.last().map(|s| s.name.as_str()).unwrap_or("");
@@ -551,7 +632,7 @@ fn py_match_condition(pattern: &Pattern, scrutinee: String) -> (String, String) 
                     ));
                 }
             }
-            (conds.join(" and "), bindings.join("; "))
+            (conds.join(" and "), bindings.join("\n"))
         }
         PatternKind::Tuple { elems, .. } => {
             let bindings: Vec<String> = elems.iter().enumerate().map(|(i, e)| {
@@ -563,7 +644,7 @@ fn py_match_condition(pattern: &Pattern, scrutinee: String) -> (String, String) 
                     _ => format!("# unsupported tuple pattern at [{}]", i),
                 }
             }).filter(|s| !s.is_empty()).collect();
-            (format!("isinstance({}, tuple) and len({}) == {}" , scrutinee, scrutinee, elems.len()), bindings.join("; "))
+            (format!("isinstance({}, tuple) and len({}) == {}" , scrutinee, scrutinee, elems.len()), bindings.join("\n"))
         }
         PatternKind::Or(pats) => {
             let sub: Vec<String> = pats.iter()
@@ -646,6 +727,9 @@ pub fn emit_expr_py(expr: &Expr) -> String {
         ExprKind::Path(p) => {
             let segs: Vec<&str> = p.segments.iter().map(|s| s.name.as_str()).collect();
             if segs.len() == 1 {
+                // v0.2.65：None 是值不是标识符（此前 py_ident 关键字转义 →
+                // `None_` 值损坏；Some 作构造名由 Call 分支消解）
+                if segs[0] == "None" { return "None".into(); }
                 py_ident(segs[0]).to_string()
             } else {
                 segs.join(".")
@@ -657,29 +741,74 @@ pub fn emit_expr_py(expr: &Expr) -> String {
         }
         ExprKind::Unary { op, operand } => py_unop(*op, &emit_expr_py(operand)),
         ExprKind::Call { callee, args } => {
-            format!(
-                "{}({})",
-                emit_expr_py(callee),
-                args.iter().map(emit_expr_py).collect::<Vec<_>>().join(", ")
-            )
+            // v0.2.65：Option/原生构造直译（与 dhv-ts 同源约定）：
+            //   Some(x) → x · None → None（python 的 Option = 裸值/None）
+            //   String::from(x) → str(x)（字面量直出 —— `from` 是 python 关键字，
+            //   此前 `String.from(x)` 非法语法 E999）
+            if let ExprKind::Path(p) = &callee.kind {
+                let segs: Vec<&str> = p.segments.iter().map(|s| s.name.as_str()).collect();
+                if segs.len() == 1 && segs[0] == "Some" && args.len() == 1 {
+                    return emit_expr_py(&args[0]);
+                }
+                if segs.len() == 1 && segs[0] == "None" && args.is_empty() {
+                    return "None".into();
+                }
+                if segs.len() == 2 && segs[0] == "Option" {
+                    if segs[1] == "Some" && args.len() == 1 { return emit_expr_py(&args[0]); }
+                    if segs[1] == "None" && args.is_empty() { return "None".into(); }
+                }
+                // v0.2.65：内置容器构造直译（tally 实测：HashMap::new() 裸引用
+                // → F821；语义即空容器字面量）
+                if segs.len() >= 2 && args.is_empty() {
+                    let (head, tail) = (segs[segs.len() - 2], segs[segs.len() - 1]);
+                    if (head == "HashMap" || head == "BTreeMap") && tail == "new" {
+                        return "{}".into();
+                    }
+                    if (head == "Vec" || head == "VecDeque") && tail == "new" {
+                        return "[]".into();
+                    }
+                    if head == "String" && tail == "new" {
+                        return "\"\"".into();
+                    }
+                    if (head == "HashSet" || head == "BTreeSet") && tail == "new" {
+                        return "set()".into();
+                    }
+                }
+                if segs.len() >= 2 && segs[segs.len() - 2] == "String" && segs[segs.len() - 1] == "from" && args.len() == 1 {
+                    if let ExprKind::Literal(l) = &args[0].kind {
+                        if matches!(l.kind, LiteralKind::Str { .. }) { return py_literal(l); }
+                    }
+                    return format!("str({})", emit_expr_py(&args[0]));
+                }
+            }
+            // v0.2.65：实参外层括号剥离（二元全括号化发射的副作用 ——
+            // `f((a - b))` 触发 UP034；元组由 py_strip_outer 顶层逗号保护）
+            let args_str = args.iter().map(|a| py_strip_outer(&emit_expr_py(a))).collect::<Vec<_>>().join(", ");
+            format!("{}({})", emit_expr_py(callee), args_str)
         }
         ExprKind::MethodCall { receiver, method, args, .. } => {
             let mname = snake_case(&method.name);
             // 常用 std 方法映射
             let (mapped_receiver, mapped_method) = py_std_method(receiver, &mname);
+            if mapped_method.is_empty() {
+                // v0.2.65：映射已把整式塞进 receiver（first/last/abs/collect…）——
+                // 空方法名此前发射 `recv.()`（E999）；实参诚实丢弃（min/max 形态）
+                return mapped_receiver;
+            }
+            let args_str = args.iter().map(|a| py_strip_outer(&emit_expr_py(a))).collect::<Vec<_>>().join(", ");
             format!(
                 "{}.{}({})",
                 mapped_receiver,
                 mapped_method,
-                args.iter().map(emit_expr_py).collect::<Vec<_>>().join(", ")
+                args_str
             )
         }
         ExprKind::Field { base, field } => {
-            let f = match field {
-                FieldIndex::Named(id) => snake_case(&id.name),
-                FieldIndex::Index(i, _) => i.to_string(),
-            };
-            format!("{}.{}", emit_expr_py(base), f)
+            match field {
+                FieldIndex::Named(id) => format!("{}.{}", emit_expr_py(base), snake_case(&id.name)),
+                // v0.2.65：元组下标访问 → 下标（`kv.1` 在 python 是非法属性名 E999 实测）
+                FieldIndex::Index(i, _) => format!("{}[{}]", emit_expr_py(base), i),
+            }
         }
         ExprKind::Index { base, index } => {
             format!("{}[{}]", emit_expr_py(base), emit_expr_py(index))
@@ -721,23 +850,55 @@ pub fn emit_expr_py(expr: &Expr) -> String {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
-            format!("{} = {}", emit_expr_py(lhs), emit_expr_py(rhs))
+            format!("{} = {}", emit_expr_py(lhs), py_strip_outer(&emit_expr_py(rhs)))
         }
         ExprKind::CompoundAssign { op, lhs, rhs } => {
-            format!("{} {}= {}", emit_expr_py(lhs), py_binop(*op), emit_expr_py(rhs))
+            format!("{} {}= {}", emit_expr_py(lhs), py_binop(*op), py_strip_outer(&emit_expr_py(rhs)))
         }
         ExprKind::If { cond, then, else_ } => {
-            // if 作为表达式 → Python 三元表达式 (仅简单情况) 或 None
-            // 完整 if/elif/else 作为表达式需赋值临时变量
-            let mut out = String::new();
-            out.push_str(&format!("({} if {} else ", emit_block_tail_py(then), emit_expr_py(cond)));
+            // if 作为表达式 → 三元表达式
+            // v0.2.65 FURB136：min/max 惯用法直译 —— `b if a > b else a` →
+            // min(a, b)（ruff 对条件表达式夹逼形态会要求 min/max 重写，clamp 实测）
             if let Some(els) = else_ {
-                out.push_str(&emit_expr_py(els));
-            } else {
-                out.push_str("None");
+                if let ExprKind::Binary { op, lhs, rhs } = &cond.kind {
+                    if !matches!(op, BinaryOp::Gt | BinaryOp::Lt) {
+                        // 仅夹逼形态（Gt/Lt）走 min/max 直译，其它比较算符走通用三元
+                    } else {
+                    let a_s = emit_expr_py(lhs);
+                    let b_s = emit_expr_py(rhs);
+                    let then_s = emit_block_tail_py(then);
+                    let else_s = if let ExprKind::Block(b) = &els.kind {
+                        emit_block_tail_py(b)
+                    } else {
+                        emit_expr_py(els)
+                    };
+                    if then_s.trim() == b_s && else_s.trim() == a_s {
+                        let fname = match op { BinaryOp::Gt => "min", _ => "max" };
+                        return format!("{}({}, {})", fname, a_s, b_s);
+                    }
+                    }
+                }
             }
-            out.push_str(")");
-            out
+            // v0.2.65：else 分支为块时取尾表达式（此前 emit_expr_py(Block)
+            // → `(lambda: x)()` IIFE —— PLC3002 + 徒增调用层，fact/clamp 实测）
+            let then_s = py_strip_outer(&emit_block_tail_py(then));
+            let cond_s = {
+                let c = emit_expr_py(cond);
+                // 括号剥离仅限无条件表达式内嵌形态（含 if/else 的内层不剥 —— 优先级风险）
+                if c.contains(" if ") || c.contains(" else ") { c } else { py_strip_outer(&c) }
+            };
+            let else_s = match else_ {
+                Some(els) => {
+                    let raw = if let ExprKind::Block(b) = &els.kind {
+                        emit_block_tail_py(b)
+                    } else {
+                        emit_expr_py(els)
+                    };
+                    py_strip_outer(&raw)
+                }
+                None => "None".into(),
+            };
+            format!("({} if {} else {})", then_s, cond_s, else_s)
         }
         ExprKind::IfLet { pattern, expr, then, else_ } => {
             // if let 作为表达式 → 临时变量 + if/else 赋值
@@ -792,7 +953,7 @@ pub fn emit_expr_py(expr: &Expr) -> String {
         }
         ExprKind::Return(val) => {
             match val {
-                Some(v) => format!("return {}", emit_expr_py(v)),
+                Some(v) => format!("return {}", py_strip_outer(&emit_expr_py(v))),
                 None => "return".into(),
             }
         }
@@ -804,13 +965,18 @@ pub fn emit_expr_py(expr: &Expr) -> String {
         }
         ExprKind::Continue { .. } => "continue".into(),
         ExprKind::Block(b) => {
-            // 块作为表达式 → 返回尾表达式值（用临时函数模拟）
-            let tail = b.tail.as_ref().map(|t| emit_expr_py(t)).unwrap_or_else(|| "None".into());
-            format!("(lambda: {})()", tail)
+            // v0.2.65：纯尾块直接内联（(lambda: x)() ≡ x，此前徒增 IIFE
+            // 调用层且触发 PLC3002）；带语句块在表达式位无法安全内联 → 诚实降级
+            if b.stmts.is_empty() {
+                b.tail.as_ref().map(|t| emit_expr_py(t)).unwrap_or_else(|| "None".into())
+            } else {
+                "None  # block expression（多语句块无法内联表达式位）".into()
+            }
         }
-        ExprKind::AsyncBlock { body, .. } => {
-            let tail = body.tail.as_ref().map(|t| emit_expr_py(t)).unwrap_or_else(|| "None".into());
-            format!("(await (async lambda: {})())", tail)
+        ExprKind::AsyncBlock { .. } => {
+            // v0.2.65：python 无 async lambda（此前 `(await (async lambda: …)())`
+            // 非法语法 E999）—— 异步块表达式诚实降级（语句位用 async def）
+            "None  # async block expression（Python 无 async lambda）".into()
         }
         ExprKind::Array(elems) => {
             format!("[{}]", elems.iter().map(emit_expr_py).collect::<Vec<_>>().join(", "))
@@ -833,7 +999,7 @@ pub fn emit_expr_py(expr: &Expr) -> String {
             } else {
                 String::new()
             };
-            format!("{}({}{} )", class_name, fields_str, spread_str)
+            format!("{}({}{})", class_name, fields_str, spread_str)
         }
         ExprKind::Tuple(elems) => {
             if elems.len() == 1 {
@@ -868,6 +1034,10 @@ pub fn emit_expr_py(expr: &Expr) -> String {
             // format! → f-string
             if name == "format" {
                 return py_format_macro(args);
+            }
+            // vec! → 列表字面量（v0.2.65：此前 `vec_macro()` 引用未定义函数 F821）
+            if name == "vec" {
+                return py_vec_macro(args);
             }
             // println! → print()
             if name == "println" {
@@ -971,48 +1141,219 @@ fn py_std_method(receiver: &Expr, method: &str) -> (String, String) {
     }
 }
 
-/// format! 宏 → f-string
+/// format! 宏 → f-string（v0.2.65 重写）
+/// ----------------------------------------------------------------------------
+/// 此前实现的拼接损坏（三处叠加）：字面量带引号原样入 parts + 整体再包一层
+/// 引号 + `{}` 占位与实参错位 → `""tpl""{}{}"`.format(...) 非法语法 E999
+/// （classify/describe/summarize/tally 实测复现）。
+/// 重写语义：
+///   · 模板 = 首个字符串字面量（`{{`/`}}` 转义 → 字面括号，`{}` → 消耗实参）
+///   · 实参 = 顶层逗号分组的 token 序列 → py_token_expr 翻译
+///     （`x.len()` → `len(x)` · `String::from(x)` → `str(x)` · 字段链直连）
+///   · 有占位 → f-string（ruff UP032 首选形态）；无占位 → 普通字面量
+///     （F541 规避 —— f-string 无占位被拒）
 fn py_format_macro(args: &MacroArgs) -> String {
-    let mut parts = Vec::new();
+    let mut template: Option<String> = None;
+    let mut template_quote = '"';
+    let mut arg_groups: Vec<Vec<TokenTree>> = Vec::new();
+    let mut cur: Vec<TokenTree> = Vec::new();
+    let mut seen_template = false;
     for tt in &args.tokens {
         match tt {
-            TokenTree::Token(tok, _) => match tok {
-                Token::Literal(lit) => parts.push(lit.raw.clone()),
-                Token::Punct(s) if s == "," => {}
-                Token::Ident(s) | Token::RawIdent(s) => parts.push(format!("{{{}}}", snake_case(s))),
-                _ => {}
-            },
-            TokenTree::Delimited { tokens, .. } => {
-                for t in tokens {
-                    if let TokenTree::Token(tok, _) = t {
-                        match tok {
-                            Token::Literal(lit) => parts.push(lit.raw.clone()),
-                            Token::Ident(s) | Token::RawIdent(s) => parts.push(format!("{{{}}}", snake_case(s))),
-                            _ => {}
-                        }
-                    }
+            // 顶层逗号 = 实参分组边界
+            TokenTree::Token(Token::Punct(p), _) if p == "," => {
+                // v0.2.65 修正：模板字面量后的首逗号不产生空组（此前空组进入
+                // 实参表 → f-string 占位 `{}` 空表达式 = E999 实测 ×5 文件）
+                if !cur.is_empty() {
+                    arg_groups.push(std::mem::take(&mut cur));
+                }
+            }
+            // 首个字符串字面量 = 模板（剥离引号，记录引号风格）
+            TokenTree::Token(Token::Literal(l), _)
+                if !seen_template && matches!(l.kind, LiteralKind::Str { .. }) =>
+            {
+                let raw = l.raw.as_str();
+                if raw.len() >= 2 {
+                    template_quote = raw.chars().next().unwrap();
+                    template = Some(raw[1..raw.len() - 1].to_string());
+                }
+                seen_template = true;
+            }
+            other => cur.push(other.clone()),
+        }
+    }
+    if !cur.is_empty() {
+        arg_groups.push(cur);
+    }
+    let Some(tpl) = template else {
+        return "\"\"".into();
+    };
+    let arg_texts: Vec<String> = arg_groups.iter().map(|g| py_token_expr(g)).collect();
+
+    // 模板走两遍语义：f-string 形态（花括号转义）与 plain 形态（花括号字面）
+    let mut f_body = String::new();
+    let mut plain_body = String::new();
+    let mut placeholders = 0usize;
+    let chars: Vec<char> = tpl.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        match c {
+            '{' if next == Some('{') => {
+                f_body.push('{');
+                plain_body.push('{');
+                i += 2;
+            }
+            '}' if next == Some('}') => {
+                f_body.push('}');
+                plain_body.push('}');
+                i += 2;
+            }
+            '{' if next == Some('}') => {
+                // {} 占位 —— 消耗下一个实参
+                if placeholders < arg_texts.len() {
+                    f_body.push('{');
+                    f_body.push_str(&arg_texts[placeholders]);
+                    f_body.push('}');
+                    placeholders += 1;
+                } else {
+                    // 实参不足：占位原样保留（运行期可见的诚实降级）
+                    f_body.push_str("{}");
+                }
+                plain_body.push_str("{}");
+                i += 2;
+            }
+            '{' => {
+                f_body.push_str("{{");
+                plain_body.push('{');
+                i += 1;
+            }
+            '}' => {
+                f_body.push_str("}}");
+                plain_body.push('}');
+                i += 1;
+            }
+            _ => {
+                f_body.push(c);
+                plain_body.push(c);
+                i += 1;
+            }
+        }
+    }
+    if placeholders == 0 {
+        // 无占位 → 普通字符串字面量（花括号无需转义）
+        format!("{template_quote}{plain_body}{template_quote}")
+    } else {
+        // 引号冲突回避：f-string 体内含同款引号时换用另一种（3.12 前不允许嵌套）
+        let quote = if f_body.contains(template_quote) {
+            if template_quote == '"' { '\'' } else { '"' }
+        } else {
+            template_quote
+        };
+        format!("f{quote}{f_body}{quote}")
+    }
+}
+
+/// vec! 宏 → 列表字面量（v0.2.65：此前兜底 `vec_macro()` 引用未定义函数 F821）
+fn py_vec_macro(args: &MacroArgs) -> String {
+    // token 形状：单个 Bracket delimited（剥皮）或扁平 token 列表（直接收编）
+    let toks: Vec<TokenTree> = if args.tokens.len() == 1 {
+        match &args.tokens[0] {
+            TokenTree::Delimited { delim: Delimiter::Bracket, tokens, .. } => tokens.clone(),
+            _ => args.tokens.clone(),
+        }
+    } else {
+        args.tokens.clone()
+    };
+    let mut groups: Vec<Vec<TokenTree>> = Vec::new();
+    let mut cur: Vec<TokenTree> = Vec::new();
+    for tt in toks {
+        match &tt {
+            TokenTree::Token(Token::Punct(p), _) if p == "," => {
+                if !cur.is_empty() {
+                    groups.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(tt),
+        }
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+    let items: Vec<String> = groups.iter().map(|g| py_token_expr(g)).collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// 宏实参 token → python 表达式文本（token 级翻译）
+/// ----------------------------------------------------------------------------
+/// 识别常用形状（整式重写），其余按连接规则拼装（`::` → `.`、字面量原样）：
+///   · `x.len()` → `len(x)` · `x.to_string()` → `str(x)`
+///   · `String::from(x)` → `str(x)`（字面量直出）
+///   · `self.title` / `m.calls` 等字段链 → 直连
+fn py_token_expr(tokens: &[TokenTree]) -> String {
+    // 形状 1：recv.<len|to_string>()（4 token 精确匹配，空实参括号）
+    if tokens.len() == 4 {
+        if let (
+            TokenTree::Token(Token::Ident(recv), _),
+            TokenTree::Token(Token::Punct(p), _),
+            TokenTree::Token(Token::Ident(m), _),
+            TokenTree::Delimited { delim: Delimiter::Paren, tokens: inner, .. },
+        ) = (&tokens[0], &tokens[1], &tokens[2], &tokens[3])
+        {
+            if inner.is_empty() && (p == "." || p == "::") {
+                match m.as_str() {
+                    "len" => return format!("len({})", py_ident(recv)),
+                    "to_string" | "to_str" => return format!("str({})", py_ident(recv)),
+                    _ => {}
                 }
             }
         }
     }
-    // 将 {value} 占位替换为 {} 格式化参数
-    let mut fmt_parts = Vec::new();
-    let mut fmt_args = Vec::new();
-    for part in &parts {
-        if part.starts_with('{') && part.ends_with('}') && part.len() > 2 {
-            let arg_name = &part[1..part.len()-1];
-            fmt_args.push(arg_name.to_string());
-            fmt_parts.push("{}".to_string());
-        } else {
-            // 处理字符串字面量中的花括号
-            fmt_parts.push(part.replace('{', "{{").replace('}', "}}"));
+    // 形状 2：String::from(x)（字面量直出避免 str("lit") 冗余）
+    if tokens.len() == 4 {
+        if let (
+            TokenTree::Token(Token::Ident(h), _),
+            TokenTree::Token(Token::Punct(p), _),
+            TokenTree::Token(Token::Ident(m), _),
+            TokenTree::Delimited { delim: Delimiter::Paren, tokens: inner, .. },
+        ) = (&tokens[0], &tokens[1], &tokens[2], &tokens[3])
+        {
+            if p == "::" && h == "String" && m == "from" {
+                if inner.len() == 1 {
+                    if let TokenTree::Token(Token::Literal(l), _) = &inner[0] {
+                        if matches!(l.kind, LiteralKind::Str { .. }) {
+                            return l.raw.clone();
+                        }
+                    }
+                }
+                return format!("str({})", py_token_expr(inner));
+            }
         }
     }
-    if fmt_args.is_empty() {
-        format!("\"{}\"", fmt_parts.join(""))
-    } else {
-        format!("\"{}\".format({})", fmt_parts.join(""), fmt_args.join(", "))
+    // 通用连接：Ident 直出（py_ident 关键字避让）· `::` → `.` · 字面量 raw · 分组递归
+    let mut out = String::new();
+    for tt in tokens {
+        match tt {
+            TokenTree::Token(tok, _) => match tok {
+                Token::Ident(s) | Token::RawIdent(s) => out.push_str(&py_ident(s)),
+                Token::Literal(l) => out.push_str(&l.raw),
+                Token::Label(s) => out.push_str(s),
+                Token::Punct(s) => out.push_str(if s == "::" { "." } else { s }),
+            },
+            TokenTree::Delimited { delim, tokens: inner, .. } => {
+                let (open, close) = match delim {
+                    Delimiter::Paren => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Brace => ("{", "}"),
+                };
+                out.push_str(open);
+                out.push_str(&py_token_expr(inner));
+                out.push_str(close);
+            }
+        }
     }
+    out
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1048,4 +1389,427 @@ pub fn snake_case(name: &str) -> String {
         }
     }
     out
+}
+
+// ────────────────────────────────────────────────────────────────
+// v0.2.65 工具：括号剥离 / 模式辅助 / 条件取反
+// ────────────────────────────────────────────────────────────────
+
+/// 语句位外层括号剥离（ruff UP034「多余括号」治理，与 dhv-ts pyStripOuter 同源算法）。
+///
+/// 二元/一元表达式全括号化发射（`Binary → (a op b)`）在语句位（return /
+/// 调用实参 / 赋值 RHS）产生冗余包裹。仅剥「完整覆盖整个串的一层括号」：
+///   · 深度探测：内层任何位置深度归零后再度上升 = 不是单层包裹，不剥；
+///   · 元组保护：顶层逗号（`(a, b)`）的括号是语义，绝不剥。
+fn py_strip_outer(s: &str) -> String {
+    let t = s.trim();
+    if t.len() < 2 || !t.starts_with('(') || !t.ends_with(')') {
+        return t.to_string();
+    }
+    let inner = &t[1..t.len() - 1];
+    let mut depth = 0i32;
+    for ch in inner.chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => return t.to_string(), // 元组字面量 —— 括号是语义
+            _ => {}
+        }
+    }
+    inner.trim().to_string()
+}
+
+/// 简单名探测（while-let scrutinee 缓存判定：简单名每次迭代重读即单次求值语义）
+fn py_is_simple_name(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty()
+        && t.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+        && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// while-let 循环退出条件的取反（常见形态直译，避免双重否定）
+fn py_negate(cond: &str) -> String {
+    let t = cond.trim();
+    if let Some(name) = t.strip_suffix(" is not None") {
+        return format!("{} is None", name);
+    }
+    if let Some(name) = t.strip_suffix(" is None") {
+        return format!("{} is not None", name);
+    }
+    if t == "True" {
+        return "False".into();
+    }
+    if t.starts_with("isinstance(") && t.ends_with(')') {
+        return format!("not {}", t);
+    }
+    format!("not ({})", t)
+}
+
+/// 路径是否为 Option::Some 构造形态（[Some] / [Option, Some]）
+fn py_is_some_path(path: &crate::ast::Path) -> bool {
+    let segs: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+    (segs.len() == 1 && segs[0] == "Some") || (segs.len() == 2 && segs[0] == "Option" && segs[1] == "Some")
+}
+
+/// 路径是否为 Option::None 形态（[None] / [Option, None]）
+fn py_is_none_path(path: &crate::ast::Path) -> bool {
+    let segs: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+    (segs.len() == 1 && segs[0] == "None") || (segs.len() == 2 && segs[0] == "Option" && segs[1] == "None")
+}
+
+/// let 语句的 Some(x) 模式 → 绑定名（python 的 Option = 裸值/None，直接绑定）
+fn py_some_bind(pat: &Pattern) -> Option<String> {
+    if let PatternKind::TupleStruct { path, elems, .. } = &pat.kind {
+        if py_is_some_path(path) && elems.len() == 1 {
+            if let PatternKind::Ident { name, .. } = &elems[0].kind {
+                return Some(py_ident(&snake_case(&name.name)));
+            }
+        }
+    }
+    None
+}
+
+// ────────────────────────────────────────────────────────────────
+// v0.2.65：python 产物跨文件引用收尾（emit 后置处理）
+// ────────────────────────────────────────────────────────────────
+//
+// dhv(Rust) 的 emit 是「一项一文件」：跨文件类型引用（main.py 引用
+// meter.py 的 Meter）此前裸引用 → F821 未定义名（status_line/provider/
+// first_ok/describe 实测）。本收尾与 dhv-ts 的 finalizePython 同思路：
+//   1. 全 python 产物建注册表（顶层名 → 模块 stem）；
+//   2. 逐文件扫描代码（剥离注释/字符串）中的跨文件引用；
+//   3. 注入 `from <module> import <names>`（按模块分组、isort 排序、
+//      与文件既有导入合并重排 —— I001 友好）；
+//   4. `isinstance(x, Ok/Err)` 的 Result 变体 → 注入桩类
+//      （`class Ok:` + `_fields/__getitem__`，与枚举 tuple 变体投射同构）。
+//
+// 局限（诚实边界）：运行期 parity（prelude 助手/_dhv_str 显示语义）不在
+// 本批范围 —— dhv(Rust) python 产物是静态投射门禁目标（ruff 全绿），
+// 活体运行请用 dhv-ts（nativeRuntime）。
+
+/// 收尾入口：由 codegen::CodegenContext::emit 在产出全部文件后调用（仅处理 python）
+pub fn finalize_crossrefs(files: &mut [crate::codegen::GeneratedFile]) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // ---- 1. 注册表：顶层名 → 模块 stem ----
+    let mut registry: BTreeMap<String, String> = BTreeMap::new();
+    for f in files.iter().filter(|f| f.lang == "python") {
+        let stem = py_module_stem(&f.path);
+        for name in py_top_level_defs(&f.content) {
+            registry.entry(name).or_insert_with(|| stem.clone());
+        }
+    }
+
+    // ---- 2. 逐文件：扫描引用 → 注入导入/桩类 ----
+    for f in files.iter_mut().filter(|f| f.lang == "python") {
+        let own_defs: BTreeSet<String> = py_top_level_defs(&f.content).into_iter().collect();
+        let code = py_code_only(&f.content); // 剥离注释与字符串字面量
+
+        // 需要导入的跨文件名（按模块分组）
+        let mut needed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (name, module) in &registry {
+            if own_defs.contains(name) {
+                continue;
+            }
+            if py_word_used(&code, name) {
+                needed.entry(module.clone()).or_default().insert(name.clone());
+            }
+        }
+        // Result 变体桩（Ok/Err 被引用且未在本文件定义）
+        let mut stubs: Vec<&str> = Vec::new();
+        for v in ["Ok", "Err"] {
+            if !own_defs.contains(v) && py_word_used(&code, v) {
+                stubs.push(v);
+            }
+        }
+        if needed.is_empty() && stubs.is_empty() {
+            continue; // 自包含文件零改动
+        }
+        f.content = py_rebuild_head(&f.content, &needed, &stubs);
+    }
+}
+
+/// 投射路径 → 模块 stem（flat import 语义：同目录互引，与 dhv-ts 约定一致）
+fn py_module_stem(path: &str) -> String {
+    path.rsplit(['/']).next()
+        .map(|s| s.strip_suffix(".py").unwrap_or(s).to_string())
+        .unwrap_or_default()
+}
+
+/// 顶层定义名收集：`^class X` / `^(async )?def X` / `^X: T = ` / `^X = `
+fn py_top_level_defs(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let t = line.trim_end();
+        if t.starts_with("class ") {
+            if let Some(name) = t["class ".len()..].split(['(', ':', ' ']).next() {
+                if !name.is_empty() {
+                    out.push(name.to_string());
+                }
+            }
+        } else if let Some(rest) = t.strip_prefix("async def ").or_else(|| t.strip_prefix("def ")) {
+            if let Some(name) = rest.split(['(', ':', ' ']).next() {
+                if !name.is_empty() {
+                    out.push(name.to_string());
+                }
+            }
+        } else {
+            // 常量/别名：^NAME: T = v 或 ^NAME = v（仅列首、标识符形态）
+            let valid_start = t
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic() || c == '_')
+                .unwrap_or(false);
+            if valid_start {
+                let name_end = t
+                    .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .unwrap_or(t.len());
+                let name = &t[..name_end];
+                let rest = &t[name_end..];
+                let rest_trim = rest.trim_start();
+                if rest_trim.starts_with("= ")
+                    || rest_trim.starts_with(": ")
+                    || rest_trim == "="
+                    || rest_trim.starts_with(": ")
+                {
+                    if !name.is_empty() && name != "if" && name != "while" && name != "for" {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 代码视图：整行注释剔除 + 行内注释截断 + 字符串字面量内容抹除
+///（@dhv:hsl-mirror 镜像注释里的名字不构成引用 —— 与 dhv-ts F401 修复同源）。
+/// f-string 的占位表达式（`f"{expr}"` 的 `{expr}`）是代码 —— 保留；
+/// 普通串与 f-string 字面段抹除（main.py 实测：跨引用藏在 f-string 占位里，
+/// 一并抹除 → status_line/WorkStatus/Verdict 漏注入 F821）。
+#[derive(PartialEq)]
+enum PyScan {
+    Code,
+    /// (引号, 是否 f-string)
+    Str(char, bool),
+    /// f-string 占位表达式（深度计数 + 宿主串引号，出占位回 Str）
+    Placeholder(i32, char),
+}
+
+fn py_code_only(content: &str) -> String {
+    let mut out = String::new();
+    'line: for line in content.lines() {
+        let t = line.trim_start();
+        if t.starts_with('#') {
+            continue; // 整行注释
+        }
+        let mut cleaned = String::new();
+        let mut state = PyScan::Code;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match state {
+                PyScan::Code => {
+                    if c == '#' {
+                        continue 'line; // 行内注释截断
+                    }
+                    if c == '"' || c == '\'' {
+                        state = PyScan::Str(c, false);
+                        cleaned.push(' ');
+                        continue;
+                    }
+                    if matches!(c, 'f' | 'F') && matches!(chars.peek(), Some('"' | '\'')) {
+                        chars.next(); // 吞引号，进 f-string
+                        state = PyScan::Str('"', true);
+                        cleaned.push(' ');
+                        cleaned.push(' ');
+                        continue;
+                    }
+                    if (c == 'r' || c == 'b' || c == 'R' || c == 'B')
+                        && matches!(chars.peek(), Some('"' | '\'' | 'f' | 'F' | 'r' | 'b'))
+                    {
+                        // 前缀组合（rb/rf…）首字符：留给下一轮处理
+                        continue;
+                    }
+                    cleaned.push(c);
+                }
+                PyScan::Str(q, is_f) => {
+                    if c == '\\' {
+                        chars.next(); // 转义对抹除
+                        cleaned.push(' ');
+                        cleaned.push(' ');
+                        continue;
+                    }
+                    if c == q {
+                        state = PyScan::Code;
+                        cleaned.push(' ');
+                        continue;
+                    }
+                    if is_f {
+                        match c {
+                            '{' if chars.peek() == Some(&'{') => {
+                                chars.next(); // {{ 字面转义
+                                cleaned.push(' ');
+                                cleaned.push(' ');
+                            }
+                            '{' => {
+                                state = PyScan::Placeholder(1, q);
+                                cleaned.push('{');
+                            }
+                            _ => cleaned.push(' '),
+                        }
+                    } else {
+                        cleaned.push(' '); // 普通串内容抹除
+                    }
+                }
+                PyScan::Placeholder(depth, q) => {
+                    match c {
+                        '{' => {
+                            state = PyScan::Placeholder(depth + 1, q);
+                            cleaned.push('{');
+                        }
+                        '}' => {
+                            if depth <= 1 {
+                                state = PyScan::Str(q, true); // 回 f-string 字面段
+                                cleaned.push('}');
+                            } else {
+                                state = PyScan::Placeholder(depth - 1, q);
+                                cleaned.push('}');
+                            }
+                        }
+                        _ => cleaned.push(c), // 占位表达式 = 代码，保留
+                    }
+                }
+            }
+        }
+        out.push_str(&cleaned);
+        out.push('\n');
+    }
+    out
+}
+
+/// 词边界引用探测（`X.attr` 形态的 attr 不算裸名使用 —— 属性访问经由
+/// 宿主对象解析，import 该名反而 F401「导入未用」，main.py 实测）
+fn py_word_used(code: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let bytes = code.as_bytes();
+    let w = word.as_bytes();
+    let mut i = 0;
+    while i + w.len() <= bytes.len() {
+        if &bytes[i..i + w.len()] == w {
+            // `.` 前缀 = 属性访问位（宿主对象已解析，裸名导入反而未用）
+            let before_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_' || bytes[i - 1] == b'.');
+            let after = i + w.len();
+            let after_ok = after >= bytes.len() || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// 头部重排：源映射注释头之后 = 导入块（既有 + 注入合并 isort 排序）→ 桩类 → 原文
+fn py_rebuild_head(
+    content: &str,
+    needed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    stubs: &[&str],
+) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    // 1. 头部：前导注释行（源映射围栏头 + generated 标记）
+    let mut head_end = 0;
+    while head_end < lines.len() && lines[head_end].trim_start().starts_with('#') {
+        head_end += 1;
+    }
+    // 2. 既有导入块（连续 from/import 行；其后空行归入分隔，不计入 rest）
+    let mut idx = head_end;
+    let mut existing_imports: Vec<String> = Vec::new();
+    while idx < lines.len() {
+        let t = lines[idx].trim_end();
+        if t.starts_with("from ") || t.starts_with("import ") {
+            existing_imports.push(t.to_string());
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    // 导入块后的空行（既有两空行约定）跳过
+    while idx < lines.len() && lines[idx].trim().is_empty() {
+        idx += 1;
+    }
+    // 3. 注入导入（按模块分组、名排序）
+    let mut injected: Vec<String> = Vec::new();
+    for (module, names) in needed {
+        let names_sorted: Vec<&String> = names.iter().collect();
+        injected.push(format!("from {} import {}", module, names_sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+    // 4. 合并 + isort 排序（按模块名）
+    let mut all_imports: Vec<String> = existing_imports;
+    all_imports.extend(injected);
+    all_imports.sort_by_key(|l| py_import_key(l));
+
+    // 5. 分区（isort 语义：stdlib 在前、本地/三方在后，区间一空行 ——
+    //    provider.py 实测：typing + prompt 混排单区被 I001 拒）
+    let (stdlib, local): (Vec<&String>, Vec<&String>) = all_imports
+        .iter()
+        .partition(|l| py_is_stdlib_import(l));
+    // 6. 重组
+    let mut out = String::new();
+    for l in &lines[..head_end] {
+        out.push_str(l);
+        out.push('\n');
+    }
+    for l in &stdlib {
+        out.push_str(l);
+        out.push('\n');
+    }
+    if !stdlib.is_empty() && !local.is_empty() {
+        out.push('\n'); // 区间一空行（isort 分区规范）
+    }
+    for l in &local {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push('\n'); // 导入块后两空行（isort 规范）
+    out.push('\n');
+    for v in stubs {
+        out.push_str(&format!(
+            "class {v}:\n    def __init__(self, *args):\n        self._fields = args\n    def __getitem__(self, index):\n        return self._fields[index]\n\n\n"
+        ));
+    }
+    for l in &lines[idx..] {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// isort 排序键：模块名（`from X import …` 取 X；`import X` 取 X）
+fn py_import_key(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("from ") {
+        rest.split(" import").next().unwrap_or(rest).trim().to_lowercase()
+    } else if let Some(rest) = line.strip_prefix("import ") {
+        rest.trim().to_lowercase()
+    } else {
+        line.to_lowercase()
+    }
+}
+
+/// isort 分区判定：本后端自产导入（dataclasses/typing/enum）与常见 stdlib
+fn py_is_stdlib_import(line: &str) -> bool {
+    const STDLIB: &[&str] = &[
+        "dataclasses", "typing", "enum", "math", "json", "collections", "itertools",
+        "functools", "re", "os", "sys", "time", "random", "pathlib", "__future__",
+    ];
+    let module = if let Some(rest) = line.strip_prefix("from ") {
+        rest.split(" import").next().unwrap_or(rest).trim().to_string()
+    } else if let Some(rest) = line.strip_prefix("import ") {
+        rest.trim().split(['.', ' ']).next().unwrap_or(rest).trim().to_string()
+    } else {
+        return false;
+    };
+    STDLIB.contains(&module.as_str())
 }

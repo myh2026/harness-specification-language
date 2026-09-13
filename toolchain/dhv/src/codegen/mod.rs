@@ -345,6 +345,9 @@ impl CodegenContext {
                 Err(e) => errors.push(e),
             }
         }
+        // v0.2.65：python 产物跨文件引用收尾 —— import 注入 + Ok/Err 桩类
+        //（一项一文件的裸跨引用 → F821 实测；与 dhv-ts finalizePython 同思路）
+        python::finalize_crossrefs(&mut outputs);
         if errors.is_empty() {
             Ok(outputs)
         } else {
