@@ -4346,6 +4346,129 @@ test('v0.2.63 回归', 'S-4：fn mut 参数被赋值 = 合法', () => {
 });
 
 // ---------------------------------------------------------------------------
+// v0.2.64 回归 —— python 产物 ruff 门禁（生成器卫生锁定）
+// ---------------------------------------------------------------------------
+// ruff 缺席时跳过 ruff 断言（本地裸跑不炸），CI 的 ruff-gate job 已装
+// ruff 0.16 —— 结构性断言（+== 回归 / 按需导入 / 桩类 / ENOENT）无条件跑。
+/** 定位 ruff：PATH > ~/.local/bin；缺席返回 null（跳过而非假红）。 */
+function findRuff(): string | null {
+  for (const c of process.env.PATH?.split(path.delimiter) ?? []) {
+    const p = path.join(c, 'ruff');
+    if (fs.existsSync(p)) return p;
+  }
+  const fallback = path.join(os.homedir(), '.local', 'bin', 'ruff');
+  return fs.existsSync(fallback) ? fallback : null;
+}
+function runRuffOn(dir: string): { ok: boolean; skipped: boolean; out: string } {
+  const ruff = findRuff();
+  if (!ruff) return { ok: true, skipped: true, out: '(ruff 未安装 —— 跳过，CI 侧已装)' };
+  const r = Bun.spawnSync([ruff, 'check', '--output-format', 'concise', dir], { stdout: 'pipe', stderr: 'pipe' });
+  return { ok: r.exitCode === 0, skipped: false, out: (r.stdout.toString() + r.stderr.toString()).trim() };
+}
+/** emit 一个语料到临时目录（返回目录；失败抛错）。 */
+function emitCorpus(hsl: string, tag: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `hsl-ruff-${tag}-`));
+  const r = run(['emit', hsl, '--out', dir]);
+  if (r.code !== 0) throw new Error(`emit 失败：${hsl}\n${r.stdout.slice(0, 300)}`);
+  return dir;
+}
+function collectPy(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.py')) out.push(p);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+test('v0.2.64 回归', 'kernel-tour emit（13 个 .py）+ ruff 全绿 —— 全特性语料', () => {
+  const dir = emitCorpus('dhv-ts/examples/kernel-tour.hsl', 'kern');
+  const pyFiles = collectPy(dir);
+  assert(pyFiles.length >= 11, `kernel-tour 应产出 ≥11 个 .py（实际 ${pyFiles.length}）`);
+  const r = runRuffOn(dir);
+  assert(r.ok, `kernel-tour ruff 失败：\n${r.out}`);
+});
+
+test('v0.2.64 回归', '复合赋值算符不翻倍（+== 回归锁定）', () => {
+  const dir = emitCorpus('dhv-ts/examples/kernel-tour.hsl', 'compound');
+  const text = collectPy(dir).map((f) => fs.readFileSync(f, 'utf-8')).join('');
+  assert(!text.includes('+=='), '生成文本出现 +==（复合赋值算符翻倍回归）');
+  assert(text.includes('+= 1'), '应有合法的复合赋值形态（+= 1）');
+});
+
+test('v0.2.64 回归', '按需导入：无 dataclass 的文件头部不出现 dataclasses 导入（F401 清零）', () => {
+  const dir = emitCorpus('dhv-ts/examples/kernel-tour.hsl', 'imports');
+  const verdict = fs.readFileSync(path.join(dir, 'verdict_note.py'), 'utf-8');
+  const importLines = verdict.split('\n').filter((l) => l.startsWith('from ') || l.startsWith('import '));
+  assert(!importLines.some((l) => l.includes('dataclasses')), 'verdict_note 不该导入 dataclasses（按需导入回归）');
+  assert(!importLines.some((l) => l.startsWith('import math')), 'verdict_note 不该导入 math（按需导入回归）');
+});
+
+test('v0.2.64 回归', '镜像注释不构成用量（F401 误判回归锁定）', () => {
+  const dir = emitCorpus('dhv-ts/examples/kernel-tour.hsl', 'mirror');
+  // @dhv:hsl-mirror 注释行里的名字不参与用量判定 —— 产物中导入的名字
+  // 必须在代码行（非注释）出现，否则 finalizePython 应已将其剔除
+  for (const f of collectPy(dir)) {
+    const src = fs.readFileSync(f, 'utf-8');
+    const imports = src.split('\n').filter((l) => l.startsWith('from ') || l.startsWith('import '));
+    for (const line of imports) {
+      const m = line.match(/^from\s+\S+\s+import\s+(.+)$/);
+      if (!m) continue;
+      for (const name of m[1]!.split(',').map((s) => s.trim().split(/\s+as\s+/)[0]!.trim()).filter(Boolean)) {
+        const codeNoComments = src.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+        // 排除 __future__ 与本行自身
+        if (line.includes('__future__')) continue;
+        assert(new RegExp(`\\b${name.replace(/\$/g, '\\$')}\\b`).test(codeNoComments.replace(line, '')),
+          `${path.basename(f)} 导入 ${name} 但代码行未用（注释剥离回归）`);
+      }
+    }
+  }
+});
+
+test('v0.2.64 回归', 'Result 模式桩类：first_ok 引用 Ok → 纯 class 桩注入（F821 清零）', () => {
+  const dir = emitCorpus('dhv-ts/examples/kernel-tour.hsl', 'stubs');
+  const text = fs.readFileSync(path.join(dir, 'first_ok.py'), 'utf-8');
+  assert(text.includes('class Ok:'), 'first_ok 应注入 Ok 桩类');
+  assert(text.includes('isinstance(r, Ok)'), 'first_ok 应用 isinstance(r, Ok)');
+});
+
+test('v0.2.64 回归', 'emit 零投射文件到不存在目录：manifest 兜底（ENOENT 回归）', () => {
+  const target = path.join(TMP, 'fresh-sub', 'out');
+  const r = run(['emit', 'dhv-ts/examples/smoke.hsl', '--out', target]);
+  assertEq(r.code, 0, `零投射 emit 应成功（exit=${r.code}）\n${r.stdout.slice(0, 200)}`);
+  assert(fs.existsSync(path.join(target, 'manifest.json')), 'manifest.json 兜底落盘缺失');
+});
+
+test('v0.2.64 回归', '真实 harness 语料（backends-demo/agent + dsh）ruff 全绿', () => {
+  const a = emitCorpus('examples/backends-demo/agent.hsl', 'agent');
+  const pyA = collectPy(a);
+  assert(pyA.length >= 9, `agent 应产出 ≥9 个 .py（实际 ${pyA.length}）`);
+  const ra = runRuffOn(a);
+  assert(ra.ok, `agent ruff 失败：\n${ra.out}`);
+  const d = emitCorpus('examples/dsh/dsh.hsl', 'dsh');
+  const rd = runRuffOn(d);
+  assert(rd.ok, `dsh ruff 失败：\n${rd.out}`);
+});
+
+test('v0.2.64 回归', 'DHV_LLM_DISABLE_SDK=1 零外联开关（LLM 车道可机械断言）', () => {
+  const src = path.join(TMP, 'zero-outbound.hsl');
+  fs.writeFileSync(src, [
+    'fn main() -> i32 { 0 }',
+    '',
+  ].join('\n'));
+  // 开关本身不改 check 语义 —— 只验证环境变量被消费的导出路径存在
+  const r = run(['check', src]);
+  assertEq(r.code, 0, 'check 不受开关影响');
+  // host.ts 源内含开关逻辑（结构断言；行为级由 ORG E2E 侧覆盖）
+  const hostSrc = fs.readFileSync(path.join(ROOT, 'dhv-ts/src/host.ts'), 'utf-8');
+  assert(hostSrc.includes('DHV_LLM_DISABLE_SDK'), 'host.ts 应消费 DHV_LLM_DISABLE_SDK');
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main(): Promise<number> {

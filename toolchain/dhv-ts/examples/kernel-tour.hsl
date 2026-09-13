@@ -1,0 +1,153 @@
+// ============================================================================
+// dhv-ts/examples/kernel-tour.hsl — python 生成器 ruff 门禁语料（v0.2.64）
+// ----------------------------------------------------------------------------
+// 全特性语料：覆盖 full 活体翻译的全部构件 ——
+//   struct / enum（tuple + struct + unit 变体）/ trait（Protocol 投射）/
+//   impl / fn（含递归与闭包）/ match 穷尽分支 / if-let / while-let /
+//   for-in / Vec·String·HashMap 方法面 / format! 宏 / Option·Result 模式
+//   （Ok/Err/Some 桩类路径）/ to_string / 常量。移植自 ORG v0.5.4 基线。
+//
+// 投射：project{} 只声明 python 目标（本文件的存在意义就是 ruff 语料）。
+// 运行：bun toolchain/dhv-ts/src/main.ts run dhv-ts/examples/kernel-tour.hsl
+// ============================================================================
+
+/// 工单状态（枚举全家族：tuple / struct / unit 变体）
+#[derive(Debug, Clone)]
+export enum WorkStatus {
+    Pending,
+    Running(u32),
+    Done { tokens: u32, ms: u64 },
+}
+
+/// 判定结论（多态负载）
+#[derive(Debug, Clone)]
+export enum Verdict {
+    Accept,
+    Revise(String),
+    Reject(String),
+}
+
+#[derive(Debug, Clone)]
+export struct TaskCard {
+    title: String,
+    priority: u8,
+}
+
+/// 计量（struct 投射 + __str__ 路径）
+#[derive(Debug, Clone)]
+export struct Meter {
+    calls: u32,
+    chars: u64,
+}
+
+export trait Summarize {
+    fn summary(self, m: Meter) -> String;
+}
+
+impl Summarize for TaskCard {
+    fn summary(self, m: Meter) -> String {
+        format!("{} P{} · {} calls · {} chars", self.title, self.priority, m.calls, m.chars)
+    }
+}
+
+const DEFAULT_PRIORITY: u8 = 5;
+
+/// 穷尽 match（S-6：三态全覆盖）
+export fn verdict_note(v: Verdict) -> String {
+    match v {
+        Verdict::Accept => String::from("accepted"),
+        Verdict::Revise(note) => format!("revise: {}", note),
+        Verdict::Reject(why) => format!("reject: {}", why),
+    }
+}
+
+/// 工单状态的模式巡览（tuple/struct 变体解构）
+export fn status_line(s: WorkStatus) -> String {
+    match s {
+        WorkStatus::Pending => "pending".to_string(),
+        WorkStatus::Running(n) => format!("running turn {}", n),
+        WorkStatus::Done { tokens, ms } => format!("done {} tok in {} ms", tokens, ms),
+    }
+}
+
+/// if-let / while-let / for-in 与 Vec 方法面
+export fn drain_queue(items: Vec<String>) -> u32 {
+    let mut total: u32 = 0;
+    let mut q = items.clone();
+    while let Some(head) = q.pop() {
+        if head.len() > 2 {
+            total += 1;
+        }
+    }
+    for it in items.iter() {
+        if it.contains("a") {
+            total += 1;
+        }
+    }
+    total
+}
+
+/// Result 模式（Ok/Err 桩类路径 —— F821 门禁语料）
+export fn first_ok(results: Vec<Result<i32, String>>) -> i32 {
+    let mut i = 0;
+    while i < results.len() {
+        let r = results[i as usize].clone();
+        if let Result::Ok(v) = r {
+            return v;
+        }
+        i += 1;
+    }
+    -1
+}
+
+/// 递归（图灵完备性实证路径之一）
+fn fact(n: u32) -> u32 {
+    if n <= 1 {
+        1
+    } else {
+        n * fact(n - 1)
+    }
+}
+
+/// HashMap 方法面 + 闭包
+export fn tally(words: Vec<String>) -> u32 {
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    for w in words.iter() {
+        let cur = seen.get(w.clone()).cloned().unwrap_or(0);
+        seen.insert(w.clone(), cur + 1);
+    }
+    let mut total: u32 = 0;
+    for kv in seen.iter() {
+        total += kv.1;
+    }
+    total
+}
+
+/// 入口（emit 后 python3 可直接运行的整链）
+export fn main() {
+    let card = TaskCard { title: String::from("ruff corpus"), priority: DEFAULT_PRIORITY };
+    let m = Meter { calls: fact(6), chars: 2048 };
+    println!("{}", card.summary(m));
+    println!("{}", status_line(WorkStatus::Running(3)));
+    println!("{}", verdict_note(Verdict::Revise(String::from("tighten"))));
+    let drained = drain_queue(vec![String::from("alpha"), String::from("ok"), String::from("mid")]);
+    println!("drained {}", drained);
+    let n = tally(vec![String::from("a"), String::from("b"), String::from("a")]);
+    println!("tally {}", n);
+}
+
+project {
+    WorkStatus  -> "work_status.py"  : python,
+    Verdict     -> "verdict.py"      : python,
+    TaskCard    -> "task_card.py"    : python,
+    Meter       -> "meter.py"        : python,
+    Summarize   -> "summarize.py"    : python,
+    verdict_note -> "verdict_note.py" : python,
+    status_line  -> "status_line.py"  : python,
+    drain_queue  -> "drain_queue.py"  : python,
+    first_ok     -> "first_ok.py"     : python,
+    tally        -> "tally.py"       : python,
+    DEFAULT_PRIORITY -> "default_priority.py" : python,
+    fact         -> "fact.py"         : python,
+    main         -> "main.py"        : python,
+}

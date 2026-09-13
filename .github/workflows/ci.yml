@@ -188,3 +188,38 @@ jobs:
         shell: bash
         run: bun tests/hsl/run-all.ts
         timeout-minutes: 20
+
+  # ── Job 7: python 产物 ruff 门禁（v0.2.64）────────────────
+  # 「所有产物 ruff 检测均可通过」的执行级门禁：四语料 emit → ruff 0.16
+  # 默认全规则集（E4/E7/E9/F/I001/PLR0124…）。生成器任何卫生回归
+  # （F401 按需导入 / E701 单行 if / UP034 多余括号 / 复合赋值翻倍）
+  # 在此 job 当场可见 —— 与 run-all.ts 内嵌断言（ruff 缺席跳过）互补：
+  # 本 job 保证 ruff 真的在跑。
+  ruff-gate:
+    name: Python artifact ruff gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # ruff 定位约定：scripts/ruff-gate.ts 找 PATH → ~/.local/bin
+      - name: Install ruff (uv tool)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv tool install ruff
+          ruff --version
+
+      - name: Run ruff gate (4 corpora → emit → ruff check)
+        run: bun scripts/ruff-gate.ts
+
+      # 带着真 ruff 再跑一遍套件 —— 让 run-all.ts 里「ruff 缺席时跳过」的
+      # 断言在 CI 侧真实执行（本地裸跑无法覆盖的路径）。
+      - name: Full suite with ruff on PATH
+        working-directory: toolchain
+        run: bun tests/hsl/run-all.ts
+        timeout-minutes: 15

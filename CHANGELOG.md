@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## v0.2.64（2026-09-13）—— python 产物 ruff 全绿 + 门禁基础设施（生成器九修）
+
+「所有产物 ruff 检测均可通过」从口号变为可执行门禁。ORG 侧（v0.5.4）
+驱动实测暴露的 python 生成器卫生问题全部回流上游，并以 CI job +
+套件用例 + 四语料三层锁定。
+
+**生成器修复（dhv-ts python 车道，九处）**：
+
+- **按需导入**（finalizePython）：头部 `dataclasses/math/typing` 族按
+  正文实际用量注入，不再全量倾倒（F401 清零）；
+- **导入卫生**：`from X import A, B` 跨文件收编去重、`__future__` 归位；
+- **变体桩类**：`Ok/Err/Some` 在被 `isinstance` 匹配的文件内注入纯
+  class 桩（`class Ok:`），消除 F821（未定义名）；
+- **空行约定**：顶层 def 间恰两空行（E303 清零）；
+- **复合赋值算符翻倍**：AST 的 op 已是完整算符（`'+='`），模板再追加
+  `'='` 生成 `i +== 1` 非法语法（python `py_compile` 实测抓到；
+  emit 一致性语料此前未覆盖复合赋值的活体翻译）；
+- **语句位括号剥离**（UP034）：二元/一元表达式全括号化发射在
+  return / 调用实参位产生冗余包裹；元组字面量顶层逗号探测保护
+  （括号是语义，绝不剥）；
+- **镜像注释剥离**（F401 误判）：`@dhv:hsl-mirror` 镜像注释里的名字
+  不构成导入用量 —— contract 回退文件引用全在镜像注释里，导入被
+  误判「已用」（main.py 实测）；
+- **emit ENOENT 兜底**：零投射文件的源 emit 到不存在目录时
+  `manifest.json` 先写即崩 —— 统一 mkdir 兜底（幂等）；
+- **类型映射补全**：python 车道 int 族（i8/i16/i128/u8/u16/u128）
+  此前缺映射，现与 i32/i64 同归 `int`。
+
+**LLM 零外联开关**：`DHV_LLM_DISABLE_SDK=1` 显式禁用 SDK 直连车道
+（CI / 离线环境机械保证「测试零外联」；此前只能靠「环境恰好没装
+SDK」的偶然前提，装了 SDK 的机器上负例测试反而假阴）。
+
+**门禁基础设施（三层锁定）**：
+
+- `scripts/ruff-gate.ts`：四语料 emit → `ruff check`（0.16 默认全规则
+  集），任何失败 exit 1 逐条列出；无 ruff 环境诚实报错（不静默跳过）；
+- 语料四份：`kernel-tour.hsl`（全特性，移植自 ORG v0.5.4 基线）+
+  `pattern-tour.hsl`（模式族）+ `backends-demo/agent.hsl`（真实
+  harness 规格）+ `dsh.hsl` —— 共 29 个 .py 产物；
+- CI 新 job `ruff-gate`（uv 装 ruff + 门禁 + 带真 ruff 跑全量套件，
+  让套件里「ruff 缺席跳过」的断言在 CI 真实执行）；run-all.ts 新增
+  v0.2.64 段 8 用例（复合赋值/按需导入/镜像剥离/桩类/ENOENT/
+  零外联开关的结构性回归锁定）。
+
+**本批合并入主线**：v0.2.62（实测驱动六修）、v0.2.63（S-4 双端一致）
+随本版本一并进入 main（此前只在 `fix/practical-fixes-0.2.62` 分支 /
+PR #19）。
+
+验证：dhv-ts **194/194**（186 + 8 新门禁用例）· ruff 四语料 29 个
+.py 全绿（修复前 134 项失败）· 版本联动 dhv(Rust) 0.2.64 = dhv-ts
+0.2.64（CI Version sync 守卫）。
+
 ## v0.2.63（2026-09-12）—— S-4 参数可变性双端一致（dhv-ts 漏报修复）
 
 外部实测发现的双端语义分歧（worklog 遗留观察 → 最小复现实锤）：
