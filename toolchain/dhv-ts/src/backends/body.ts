@@ -667,6 +667,8 @@ const METHOD_TABLE: Record<string, MethodEntry> = {
     python: (c) => `${c.recv}[(${c.args[0] ?? 0}):((${c.args[0] ?? 0}) + 1)]`,
     typescript: (c) => `(${c.recv}[${c.args[0] ?? 0}] ?? '')`,
     javascript: (c) => `(${c.recv}[${c.args[0] ?? 0}] ?? '')`,
+    // v0.2.66：rust 保真（chars().nth OOB → None → 空串，与 interp 越界返 '' 对齐）
+    rust: (c) => `${c.recv}.chars().nth(${c.args[0] ?? 0}).map(|ch| ch.to_string()).unwrap_or_default()`,
   },
   is_alphabetic: {
     python: (c) => `${c.recv}.isalpha()`,
@@ -927,7 +929,21 @@ export class Body {
       case 'index': {
         return `${this.expr(e.recv)}[${this.expr(e.index)}]`;
       }
-      case 'cast': return this.expr(e.expr);
+      case 'cast': {
+        // v0.2.66：rust 后端保真 as 转换（`x as usize`）—— 此前 cast 被
+        // 一律丢弃，i32 索引 Vec 在 rustc 下编译失败（[i32] cannot be
+        // indexed by i32）。python/ts/js 动态索引无需转换，维持丢弃。
+        if (L === 'rust') {
+          const t = e.ty;
+          if (t && t.kind === 'path' && t.segs.length > 0) {
+            const last = t.segs[t.segs.length - 1]!;
+            if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(last)) {
+              return `${this.expr(e.expr)} as ${last}`;
+            }
+          }
+        }
+        return this.expr(e.expr);
+      }
       case 'tuple': {
         if (e.items.length !== 2) throw new TranspileError('元组字面量');
         const a = this.expr(e.items[0]!), b = this.expr(e.items[1]!);
@@ -985,7 +1001,9 @@ export class Body {
         const hi = e.hi ? this.expr(e.hi) : undefined;
         if (L === 'python') {
           if (!hi) throw new TranspileError('值语境 range（无上界）');
-          return `range(${lo ?? '0'}, ${hi}${e.inclusive ? ' + 1' : ''})`;
+          // PIE808：字面量 0 起点省略（range(N) 同义且 ruff 全绿；非字面量起点不动）
+          if (!lo || lo === '0') return `range(${hi}${e.inclusive ? ' + 1' : ''})`;
+          return `range(${lo}, ${hi}${e.inclusive ? ' + 1' : ''})`;
         }
         if (L === 'rust') return `${lo ?? ''}..${hi ?? ''}${e.inclusive ? '=' : ''}`;
         // 其他语言：值语境 range 作为值暂不支持，for 内联由 forRangeLines 处理
@@ -1590,14 +1608,20 @@ export class Body {
 
     if (L === 'python') {
       let out = '';
+      let hasArg = false;
       for (const p of parts) {
         if (p.lit !== undefined) { out += escLit(p.lit); continue; }
+        hasArg = true;
         // v0.2.55 L-19：插值统一经 _dhv_str（interp display 规范：bool 小写、
         // 整值浮点 JS 风格 '3'、Vec 逗号连接无括号、Option/枚举 Debug 形态）。
         // 精度说明符（:.Nf）需裸值，不包裹。
-        out += p.prec !== undefined ? `{(${p.arg}):.${p.prec}f}` : `{_dhv_str(${p.arg})}`;
+        // F541/UP034（v0.2.66）：纯字面量 format → 无 f 前缀（F541）；
+        // 插值参数经 pyStripOuter 剥一层外括号 —— 二元全括号化发射的
+        // `(steps + 1)` 在 f-string 里触发 UP034（元组字面量受保护不剥）。
+        const bare = pyStripOuter(p.arg!);
+        out += p.prec !== undefined ? `{${bare}:.${p.prec}f}` : `{_dhv_str(${bare})}`;
       }
-      return `f"${out}"`;
+      return hasArg ? `f"${out}"` : `"${out}"`;
     }
     if (L === 'typescript' || L === 'javascript') {
       let out = '';
@@ -2249,9 +2273,31 @@ export class Body {
 
     // if/elif 链（python / 字面量 match / Option match / cpp 变体）
     // 大括号语言：每臂 opener 自带 '}' 前缀，整链只在末尾 close 一次
+    // SIM114（python）：连续「等值条件 + 无 guard + 无绑定 + 非块体同体」臂
+    // 合并为一条 elif x == a or x == b —— ruff 全绿且语义等价（保守子集：
+    // 只合并标识符等值臂；isinstance/None/变体通道一概不碰）。
+    let chain: Array<{ arm: A.MatchArm; info: (typeof infos)[number]['info']; cond: string | null }>;
+    if (L === 'python') {
+      chain = [];
+      for (const { arm, info } of infos) {
+        const last = chain[chain.length - 1];
+        const cond = info!.cond;
+        const eqCond = cond !== null && /^[A-Za-z_][A-Za-z0-9_]* == /.test(cond);
+        const bare = eqCond && !arm.guard && info!.binds.length === 0 && arm.body.kind !== 'block';
+        const lastBare = last !== undefined && last.cond !== null && !last.arm.guard
+          && last.info!.binds.length === 0 && last.arm.body.kind !== 'block';
+        if (bare && lastBare && this.expr(last.arm.body) === this.expr(arm.body)) {
+          last.cond = `${last.cond} or ${cond}`;
+          continue;
+        }
+        chain.push({ arm, info, cond });
+      }
+    } else {
+      chain = infos.map((x) => ({ arm: x.arm, info: x.info, cond: x.info!.cond }));
+    }
     let first = true;
-    for (const { arm, info } of infos) {
-      let cond = info!.cond;
+    for (const { arm, info, cond: mergedCond } of chain) {
+      let cond = mergedCond;
       const guard = arm.guard
         ? (L === 'python' ? ` and (${this.expr(arm.guard)})` : ` && (${this.expr(arm.guard)})`)
         : '';
@@ -2434,7 +2480,11 @@ export class Body {
     // v0.2.28: 支持半开 range（..n / n..）
     const loStr = lo ?? '0';
     if (!hi) throw new TranspileError('for range 无上界');
-    if (L === 'python') return `${i}for ${n} in range(${loStr}, ${hi}${inc ? ' + 1' : ''}):`;
+    if (L === 'python') {
+      // PIE808：字面量 0 起点省略（range(N) 同义且 ruff 全绿；非字面量起点不动）
+      if (!lo || lo === '0') return `${i}for ${n} in range(${hi}${inc ? ' + 1' : ''}):`;
+      return `${i}for ${n} in range(${loStr}, ${hi}${inc ? ' + 1' : ''}):`;
+    }
     if (L === 'rust') return `${i}for ${n} in ${lo ?? ''}..${inc ? '=' : ''}${hi} {`;
     if (L === 'go') return `${i}for ${n} := ${loStr}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++ {`;
     if (L === 'typescript' || L === 'javascript') return `${i}for (let ${n} = ${loStr}; ${n} < ${hi}${inc ? ' + 1' : ''}; ${n}++) {`;
