@@ -1,4 +1,4 @@
 // 期望 E-1：同文件顶层重复项名（函数与结构体重名）。
-// conformance: codes-exempt —— 码体系分歧：rust 端报 M-E1（模块域前缀），ts 端报 E-1；对齐方向见 issues/03
+// v0.2.68（issue #18）：rust 端 M-E1 域前缀已去除，双端码集合一致（豁免解除）。
 export fn Foo() -> i64 { 0 }
 export struct Foo { x: i64 }

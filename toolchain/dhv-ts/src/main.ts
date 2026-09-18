@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadProgram, LinkError, parseHslFile } from './linker';
+import { LexError } from './lexer';
 import { Interp } from './interp';
 import { Host } from './host';
 import { checkProgram, formatDiags } from './checker';
@@ -155,7 +156,10 @@ async function cmdCheck(args: CliArgs): Promise<number> {
     if (diags.length === 0) console.log(`✓ ${program.order.length} 个模块全部通过检查`);
     return diags.some((d) => d.severity === 'error') ? 1 : 0;
   } catch (err) {
-    console.error(`error[E-0]: ${(err as Error).message}`);
+    // v0.2.68 L-12（issue #18）：\u{...} 词法域违例带专用码（与 dhv 同码同层）；
+    // 其余 LexError 维持通用 E-0（对应 rust 通用 E0001）。
+    const code = err instanceof LexError && err.code ? err.code : 'E-0';
+    console.error(`error[${code}]: ${(err as Error).message}`);
     return 1;
   }
 }
@@ -398,6 +402,9 @@ export async function cliMain(cliArgv: string[]): Promise<number> {
   } catch (err) {
     if (err instanceof LinkError) {
       console.error(`error[L-0]: ${err.message}`);
+    } else if (err instanceof LexError && err.code) {
+      // v0.2.68 L-12（issue #18）：\u{...} 词法域专用码（与 dhv 同码同层）
+      console.error(`error[${err.code}]: ${err.message}`);
     } else {
       console.error(`error[E-0]: ${(err as Error).message}`);
     }

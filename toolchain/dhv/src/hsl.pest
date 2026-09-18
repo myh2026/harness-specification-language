@@ -85,11 +85,11 @@ float_literal  = @{
 escape = @{
       "\\n" | "\\r" | "\\t" | "\\\\" | "\\0" | "\\'" | "\\\""
     | "\\x" ~ hex_digit ~ hex_digit
-    // v0.2.56 L-12：码点域收紧 —— Unicode 标量值上限 0x10FFFF。
-    // 1-5 位 hex 任意（≤ 0xFFFFF）；6 位时「首位 0」或「首位 1 且第二位 0」
-    // （≤ 0x10FFFF）。此前 `\u{110000}` 语法层放行、unescape 静默丢内容（值损坏）。
-    | "\\u{" ~ (hex_digit){1,5} ~ "}"
-    | "\\u{" ~ ("0" ~ hex_digit | "1" ~ "0") ~ hex_digit ~ hex_digit ~ hex_digit ~ hex_digit ~ "}"
+    // v0.2.68 L-12（issue #18）：码点域校验收敛到 parser 词法层（L-12 专用码，
+    // 与 dhv-ts lexer 同码同层）。语法层放宽为「{ 内任意内容到首个 }」——
+    // v0.2.56 的「域收紧」语义不变（非法转义仍是硬错误），只是拦截点从
+    // pest 通用 E0001 升级为 parser 域校验的 L-12（双端码集合一致）。
+    | "\\u{" ~ (!"}" ~ ANY)* ~ "}"
 }
 
 char_literal    = @{ "'" ~ (escape | !("'" | "\\" | NEWLINE) ~ ANY) ~ "'" }
@@ -739,7 +739,11 @@ native_text = @{ ( !("{") ~ !("}") ~ !("\"") ~ !("'") ~ !("`") ~ !"//" ~ !("#") 
 project_block = { "project" ~ "{" ~ (projection_item | rules_block)* ~ "}" }
 projection_item = { path_in_expr ~ "->" ~ string_literal ~ ":" ~ lang_ident ~ ","? }
 rules_block     = { "rules" ~ "{" ~ rules_item* ~ "}" }
-rules_item      = { item_kind ~ "->" ~ string_literal ~ ":" ~ lang_ident ~ ","? }
+// v0.2.68（issue #18）：规则类型语法层放宽 —— ItemKind 关键字或任意标识符均可
+// （与 dhv-ts parser 同构：kw/ident 均收）。未知类型不再于文法层以通用 E0001
+// 拒绝，域校验归 R4 语义层 → P-5（typecheck check_projection_rules 的 KNOWN 表）。
+rules_item      = { rule_kind ~ "->" ~ string_literal ~ ":" ~ lang_ident ~ ","? }
+rule_kind       = { item_kind | identifier }
 item_kind       = {
       "graph" | "fn" | "struct" | "enum" | "trait"
     | "const" | "type" | "block" | "static"

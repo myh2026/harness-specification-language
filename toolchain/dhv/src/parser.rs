@@ -40,6 +40,12 @@ pub fn parse(file_id: FileId, src: &str) -> Result<SourceFile, Diagnostics> {
             let mut sess = ParseSession { file_id, src, diags: Diagnostics::new() };
             let root = pairs.next().expect("source_file yields one pair");
             let span = sp(root.as_span(), file_id);
+            // v0.2.68 L-12（issue #18）：\u{...} 词法域校验 —— escape 文法已放宽为
+            // 「{ 内任意内容到首个 }」，码点域（纯十六进制 + ≤ 0x10FFFF）在此拦截，
+            // 与 dhv-ts lexer 同码同层（不再落进 pest 通用 E0001）。
+            for p in root.clone().into_inner() {
+                scan_unicode_escapes(p, &mut sess);
+            }
             let items = root
                 .into_inner()
                 // EOI 为 pest 内置 named 规则，会出现在 pair 树中，需过滤
@@ -86,6 +92,76 @@ fn byte_offset(src: &str, line: usize, col: usize) -> (usize, usize) {
     }
     off += col.saturating_sub(1);
     (off.min(src.len()), off.min(src.len()))
+}
+
+// ---------------------------------------------------------------------------
+// v0.2.68 L-12（issue #18）：\u{...} 词法域校验
+// ---------------------------------------------------------------------------
+// escape 文法放宽后（`"\u{" ~ (!"}" ~ ANY)* ~ "}"`），码点域违例不再落进
+// pest 通用 E0001，而是由本扫描以专用码 L-12 拦截 —— 与 dhv-ts lexer 的
+// `case 'u'` 两处 LexError（非十六进制 / 超出 0x10FFFF）同码同层。
+// 判定口径与 dhv-ts 逐位对齐：空或含非十六进制字符 → 「必须是十六进制」；
+// 纯十六进制但超出 Unicode 标量值上限（含超 u32 容量）→ 「超出上限」。
+// ---------------------------------------------------------------------------
+
+/// 遍历 pair 树，对全部字符串/字符字面量做 `\u{...}` 码点域校验。
+/// 原始字符串（raw_string_lit）不走 escape，天然不在扫描面内。
+fn scan_unicode_escapes(pair: Pair<'_, Rule>, sess: &mut ParseSession) {
+    match pair.as_rule() {
+        Rule::string_literal | Rule::char_literal => {
+            check_unicode_escapes(pair.as_str(), pair.as_span(), sess);
+        }
+        _ => {
+            for inner in pair.into_inner() {
+                scan_unicode_escapes(inner, sess);
+            }
+        }
+    }
+}
+
+/// 对单个字面量的原始文本（含定界引号）校验全部 `\u{...}` 出现。
+/// 字节级扫描是 UTF-8 安全的：`\` `u` `{` `}` 均为 ASCII，不会出现在多字节
+/// 序列的续字节（≥ 0x80）中。
+fn check_unicode_escapes(text: &str, lit_span: pest::Span<'_>, sess: &mut ParseSession) {
+    let f = sess.file_id;
+    let b = text.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < b.len() {
+        if b[i] == b'\\' && b[i + 1] == b'u' && b[i + 2] == b'{' {
+            let esc_start = lit_span.start() + i;
+            let mut j = i + 3;
+            while j < b.len() && b[j] != b'}' {
+                j += 1;
+            }
+            // 防御：无闭合 }（escape 文法保证不会发生）——交回通用文法错误路径
+            if j >= b.len() {
+                break;
+            }
+            let hex = &text[i + 3..j];
+            let esc_span = Span::new(f, esc_start, lit_span.start() + j + 1);
+            if hex.is_empty() || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+                sess.diags.push(Diagnostic::error(
+                    DiagCode::LexLiteral("12"),
+                    format!("\\u{{{hex}}} 转义必须是 1-6 位十六进制（不含下划线）"),
+                    esc_span,
+                ));
+            } else {
+                match u32::from_str_radix(hex, 16) {
+                    Ok(cp) if cp <= 0x10FFFF => {}
+                    _ => {
+                        sess.diags.push(Diagnostic::error(
+                            DiagCode::LexLiteral("12"),
+                            format!("\\u{{{hex}}} 超出 Unicode 标量值上限 0x10FFFF"),
+                            esc_span,
+                        ));
+                    }
+                }
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
 }
 
 /// 将 pest 规则名映射为用户友好的中文名称（对齐 dhv-ts 期望/得到格式）。

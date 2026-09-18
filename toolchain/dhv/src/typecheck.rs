@@ -364,7 +364,9 @@ impl TypeChecker {
     }
 
     // ------------------------------------------------------------------
-    // E-1: 顶层重名检查（对齐 dhv-ts checker.ts E-001）
+    // E-1: 顶层重名检查（对齐 dhv-ts checker.ts E-1；v0.2.68 issue #18：
+    // 此前用 NameResolution("E1") 渲染为 M-E1 —— 以 guide 第十章码表为准
+    // 统一为 E-1，双端同码）
     // ------------------------------------------------------------------
 
     /// 检查同一文件内是否存在重复的顶层项名。
@@ -388,7 +390,7 @@ impl TypeChecker {
                 if seen.contains(&ident.name) {
                     self.diags.push(
                         Diagnostic::error(
-                            DiagCode::NameResolution("E1"),
+                            DiagCode::Duplicate("1"),
                             format!("重复定义顶层项 \"{}\"", ident.name),
                             ident.span,
                         )
