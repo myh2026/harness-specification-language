@@ -14,6 +14,11 @@ import { execFileSync } from 'node:child_process';
 import { parseFileSource } from '../../dhv-ts/src/parser';
 import { balanceCheck } from '../../dhv-ts/src/backends/validate';
 import { Host } from '../../dhv-ts/src/host';
+import { STD_METHOD_RET } from '../../dhv-ts/src/checker';
+import {
+  STRING_METHODS, CHAR_METHODS, VEC_METHODS, MAP_METHODS,
+  OPTION_METHODS, RESULT_METHODS,
+} from '../../dhv-ts/src/builtins';
 
 const ROOT = path.resolve(import.meta.dir, '../..');
 const DHV = path.join(ROOT, 'dhv-ts/src/main.ts');
@@ -4466,6 +4471,138 @@ test('v0.2.64 回归', 'DHV_LLM_DISABLE_SDK=1 零外联开关（LLM 车道可机
   // host.ts 源内含开关逻辑（结构断言；行为级由 ORG E2E 侧覆盖）
   const hostSrc = fs.readFileSync(path.join(ROOT, 'dhv-ts/src/host.ts'), 'utf-8');
   assert(hostSrc.includes('DHV_LLM_DISABLE_SDK'), 'host.ts 应消费 DHV_LLM_DISABLE_SDK');
+});
+
+// ---------------------------------------------------------------------------
+// v0.2.67 回归（issue #13）：S-19 由 warning 升级为 error + 接收者类型可知面
+// 扩到注解/字面量/构造器/链式返回类型 —— check/run 方法面对齐「check 过 = run 不炸」。
+// 双端（dhv Rust / dhv-ts）行为由 conformance 的 S19_* fixtures 对拍锁定。
+// ---------------------------------------------------------------------------
+test('v0.2.67 回归', 'S-19 升级为 error：注解 String 调 as_bytes/substring（#13 原始复现）', () => {
+  const out = checkSrc(`fn main() -> i64 {
+    let s: String = "hello world";
+    let b = s.as_bytes();
+    let sub = s.substring(0, 5);
+    println!("{} {}", b.len(), sub);
+    0
+}`);
+  assert(out.includes('error[S-19]'), `应触发 error 级 S-19（原为 warning）：${out.slice(0, 200)}`);
+  assert(out.includes('as_bytes') && out.includes('substring'), `应点名两个未知方法：${out.slice(0, 300)}`);
+  assert(out.includes('String 没有方法'), `错误信息应与运行期同源（run 报「String 没有方法」）：${out.slice(0, 300)}`);
+});
+
+test('v0.2.67 回归', 'S-19 无注解推断：let s = "hello" + 字面量接收者 + 多字符 char 方法', () => {
+  const out = checkSrc(`fn main() -> i64 {
+    let s = "hello world";
+    let sub = s.substring(0, 5);
+    let b = "abc".as_bytes();
+    let alpha = "abc".is_alphabetic();
+    println!("{} {} {}", sub, b, alpha);
+    0
+}`);
+  const hits = out.split('error[S-19]').length - 1;
+  assert(hits === 3, `应触发 3 处 S-19（推断/字面量/char 越面），实际 ${hits}：${out.slice(0, 300)}`);
+  // 单字符字面量的 char 方法合法（运行期 char 回退面按 UTF-16 长度 ≤1 判定）
+  const ok = checkSrc(`fn main() -> i64 { let a = "a".is_alphabetic(); println!("{}", a); 0 }`);
+  assert(ok.includes('0 error'), `单字符 char 方法不应误报：${ok.slice(0, 200)}`);
+});
+
+test('v0.2.67 回归', 'S-19 链式追踪：cs.iter().take(n).cloned() 的 Vec 接收者（#13 附带发现）', () => {
+  const out = checkSrc(`fn main() -> i64 {
+    let out = "hello".chars().take(2).cloned().collect::<Vec<String>>();
+    out.len()
+}`);
+  assert(out.includes('error[S-19]') && out.includes('cloned'), `链式 cloned 应触发 S-19：${out.slice(0, 300)}`);
+  // 正牌链（无 cloned）零误报 + collect turbofish 归一
+  const ok = checkSrc(`fn main() -> i64 {
+    let a = "hello".chars().take(2).collect::<String>();
+    let b = "a,b".split(",").join("-");
+    let c = "3".parse::<i64>().is_ok();
+    println!("{} {} {}", a.len(), b, c);
+    0
+}`);
+  assert(ok.includes('0 error'), `正牌链式族不应误报：${ok.slice(0, 300)}`);
+});
+
+test('v0.2.67 回归', 'S-19 fn/闭包参数注解：fn f(s: String) { s.as_bytes() }', () => {
+  const out = checkSrc(`fn probe(s: String) -> i64 { s.as_bytes().len() }
+fn main() -> i64 { probe(String::from("x")) }`);
+  assert(out.includes('error[S-19]'), `fn 参数注解接收者应触发 S-19：${out.slice(0, 200)}`);
+  const out2 = checkSrc(`fn main() -> i64 {
+    let f = |s: String| s.as_bytes().len();
+    f(String::from("x"))
+}`);
+  assert(out2.includes('error[S-19]'), `闭包参数注解接收者应触发 S-19：${out2.slice(0, 200)}`);
+});
+
+test('v0.2.67 回归', 'S-19 impl 豁免（Option/Result 用户 impl 运行期真实可用）+ run 全通', () => {
+  // 运行期 interp 按 __enum 标记经 impls 注册表派发 —— 实测 run 输出 42；
+  // check 的豁免面必须与之同源（String/Vec/HashMap 是原始值，impl 永不派发）。
+  const src = `impl Option {
+    fn doubled(&self) -> i64 {
+        match self { Some(x) => x * 2, None => 0 }
+    }
+}
+fn main() -> i64 {
+    let v: Option<i64> = Some(21);
+    let d = v.doubled();
+    println!("{}", d);
+    0
+}`;
+  const p = path.join(TMP, 's19-impl-exempt.hsl');
+  fs.writeFileSync(p, src);
+  const c = run(['check', p]);
+  assertEq(c.code, 0, `impl Option 方法应豁免 S-19：${c.stdout.slice(0, 300)}`);
+  const r = run(['run', p, '--quiet']);
+  assertEq(r.code, 0, `impl Option 方法运行期应真实可用：${(r.stdout + r.stderr).slice(0, 300)}`);
+  assert(r.stdout.includes('42'), `run 应输出 42：${r.stdout.slice(0, 120)}`);
+  // 对照组：impl String 的方法运行期永不派发（实测 run 崩）→ check 不豁免
+  const bad = `impl String {
+    fn shout(&self) -> i64 { 42 }
+}
+fn main() -> i64 {
+    let s: String = "hi";
+    println!("{}", s.shout());
+    0
+}`;
+  const p2 = path.join(TMP, 's19-impl-string.hsl');
+  fs.writeFileSync(p2, bad);
+  const c2 = run(['check', p2]);
+  assert(c2.code !== 0 && c2.stdout.includes('S-19'), `impl String 方法不应豁免（运行期必炸）：${c2.stdout.slice(0, 300)}`);
+});
+
+test('v0.2.67 回归', 'S-19 重赋值更新推断事实（先 Vec 后 String 不误报）', () => {
+  const out = checkSrc(`fn main() -> i64 {
+    let mut parts = "a,b".split(",");
+    parts = "c";
+    let n = parts.len();
+    println!("{}", n);
+    0
+}`);
+  assert(out.includes('0 error'), `重赋值后推断事实应更新为 String（len 合法）：${out.slice(0, 200)}`);
+});
+
+test('v0.2.67 回归', 'S-19 RET/方法面自洽：STD_METHOD_RET 每项都在运行期方法面内', () => {
+  // 防 checker 的返回类型表与 builtins.ts 运行期表脱钩（表间漂移守卫）：
+  // RET 表里登记的 (方法, 接收者类型) 必须真的存在于对应运行期方法面；
+  // String 面含 char 回退（单字符接收者）—— CHAR_METHODS 一并校验。
+  const tables: Record<string, Record<string, unknown>> = {
+    String: { ...STRING_METHODS, ...CHAR_METHODS },
+    Vec: VEC_METHODS as unknown as Record<string, unknown>,
+    HashMap: MAP_METHODS as unknown as Record<string, unknown>,
+    Option: OPTION_METHODS as unknown as Record<string, unknown>,
+    Result: RESULT_METHODS as unknown as Record<string, unknown>,
+  };
+  let checked = 0;
+  for (const [method, perTy] of Object.entries(STD_METHOD_RET)) {
+    for (const [ty, ret] of Object.entries(perTy)) {
+      if (ret === undefined) continue;
+      const table = tables[ty]!;
+      assert(method in table, `STD_METHOD_RET 登记 ${ty}.${method} 但运行期 ${ty} 方法面没有它（表间漂移）`);
+      checked++;
+    }
+  }
+  assert(checked >= 40, `RET 表应覆盖 ≥40 个登记项（实际 ${checked}）—— 覆盖面缩水即回归`);
 });
 
 // ---------------------------------------------------------------------------

@@ -250,6 +250,21 @@ export const VEC_METHODS: Record<string, BuiltinMethod> = {
   // `for t in v.iter_mut() { t.field = ... }` 的字段写按引用透传（与 interp 的对象
   // 透明共享模型一致）；primitive 元素的写不透传 —— 解释器透明性已记录的边界。
   iter_mut: { fn: (r) => r },
+  // v0.2.67（#13）：into_iter / to_vec / next 补齐 —— 与 iter_mut 同类的
+  // 「语料在用 / 运行期缺席」断层（check 语料 s6_exhaustive_enum_in_loop 等 +
+  // range_expression 的切片 to_vec；S-19 升级为 error 后由语料复现暴露）。
+  // into_iter 与 iter 同为恒等（解释器数组即值，无消耗语义差）；to_vec = clone
+  //（Rust slice→owned 拷贝的对应物）；next = 头部取元素并推进（pop 的镜像：
+  // pop 尾部 / next 头部，原地 splice + 返回 Option —— Rust Iterator::next）。
+  into_iter: { fn: (r) => r },
+  to_vec: { fn: (r) => cloneValue(r) },
+  next: {
+    fn: (r) => {
+      const arr = r as unknown[];
+      if (arr.length === 0) return noneV();
+      return someV(arr.splice(0, 1)[0]);
+    },
+  },
   map: {
     fn: async (r, a, ctx) => {
       const out: unknown[] = [];

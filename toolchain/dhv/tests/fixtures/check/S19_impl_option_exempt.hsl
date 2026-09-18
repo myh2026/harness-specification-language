@@ -1,0 +1,18 @@
+// 回归锁定 S19 豁免面（零假阳性证明）：用户 impl 对 Option/Result 的方法
+// 在运行期真实可用（interp 按 __enum 标记经 impls 注册表派发 —— 实测 run
+// 输出 42），check 必须放行。String/Vec/HashMap 是原始值（无类型标记），
+// impl 永不派发 → 不豁免（impl String 的方法 run 仍报「String 没有方法」）。
+// 本文件双端必须 0 error（豁免与运行期派发同源）。
+
+impl Option {
+    fn doubled(&self) -> i64 {
+        match self { Some(x) => x * 2, None => 0 }
+    }
+}
+
+fn main() -> i64 {
+    let v: Option<i64> = Some(21);
+    let d = v.doubled();
+    println!("{}", d);
+    0
+}

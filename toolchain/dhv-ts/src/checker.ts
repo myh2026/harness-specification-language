@@ -7,6 +7,9 @@
 //   S-6  match 穷尽性（枚举注册表）+ graph AgentLoop 内 _ 通配兜底
 //   S-7  未使用的 let / import
 //   S-8  同作用域遮蔽
+//   S-19 内建值类型（String/Vec/HashMap/Option/Result）方法面白名单 —— 未知方法
+//        check 期即 error（v0.2.67 #13：原 v0.2.58 的 warning 升级，check/run
+//        对齐「check 过 = run 不炸」；接收者类型可知面扩到注解/字面量/构造器/链式）
 //   S-20 struct/变体字面量字段校验（未知/缺失/重复 —— 与运行期
 //        evalStructExpr 同口径，提前到 check；实测：构造不存在字段 check
 //        全绿、run 静默收下，类型安全闸门缺位）
@@ -73,12 +76,32 @@ let knownStructs: Set<string> = new Set();
 let structFieldNames: Map<string, string[]> = new Map();
 let enumVariantFieldNames: Map<string, Map<string, string[]>> = new Map();
 
+// v0.2.67 S-19（#13）：用户 impl 方法名注册表（typeName → 方法名集合）——
+// 与 interp registerItem 的注册面同源（各模块顶层 impl 项，inherent + trait
+// 方法合并）。运行期只有 Option/Result（__enum 标记的枚举值）会经 impls
+// 派发用户方法；String/Vec/HashMap 是原始值（无类型标记），impl 永不派发
+//（实测：impl String 的方法 run 仍报「String 没有方法」）—— 因此豁免只对
+// Option/Result 生效，这正是 builtinMethodFor || impls 派发的静态镜像。
+let implMethods: Map<string, Set<string>> = new Map();
+
 export function checkProgram(program: LoadedProgram): Diag[] {
   const diags: Diag[] = [];
   const enums = new Map<string, string[]>(); // name -> variants
   knownStructs = new Set<string>();
   structFieldNames = new Map<string, string[]>(); // S-20：进程内多轮 check 防脏状态
   enumVariantFieldNames = new Map<string, Map<string, string[]>>();
+  // S-19（#13）：先于任何检查收集全部模块顶层 impl 的方法名（运行期
+  // registerItem 在模块加载时注册，跨模块可见 —— check 侧同序预收集）
+  implMethods = new Map<string, Set<string>>();
+  for (const [, ast] of program.files) {
+    for (const item of ast.items) {
+      if (item.kind === 'impl') {
+        let set = implMethods.get(item.typeName);
+        if (!set) { set = new Set<string>(); implMethods.set(item.typeName, set); }
+        for (const m of item.methods) set.add(m.name);
+      }
+    }
+  }
   for (const [, ast] of program.files) {
     for (const item of ast.items) {
       if (item.kind === 'enum') {
@@ -468,7 +491,7 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   // v0.2.63：参数可变性传入作用域表（GraphParam.mut）—— 此前恒 mut:true，
   // 对非 mut 参数赋值漏报 S-4（dhv(Rust) 端同源码正确拦截，双端分歧）。
   const gscope: Scope = { vars: new Map(), used: new Set() };
-  for (const p of g.params) declareParam(gscope, p.name, p.mut);
+  for (const p of g.params) declareParam(gscope, p.name, p.mut, stdTyOf(p.ty) ?? undefined);
   for (const gs of g.body) {
     if (gs.t === 'stmt') {
       // let 声明由 checkStmt 内部完成（此处不再重复 declare —— 否则 S-8 误报）
@@ -478,9 +501,9 @@ function checkGraph(g: A.GraphDef, enums: Map<string, string[]>, diags: Diag[], 
   }
 }
 
-// ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2）----
+// ---- 语句/表达式检查（S2/S4/S6/S7/S8 + N1 + E2 + S19）----
 interface Scope {
-  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy; litVal?: bigint; dom?: string; stdTy?: StdTy }>;  // stdTy：注解为 String/Vec/HashMap/Option/Result 的绑定（S-19 方法面预警用）
+  vars: Map<string, { mut: boolean; span: A.Span; param?: boolean; litTy?: LitTy; litVal?: bigint; dom?: string; stdTy?: StdTy; stdTyAnnot?: boolean }>;  // stdTy：String/Vec/HashMap/Option/Result 静态可知的绑定（S-19 方法面校验用）；stdTyAnnot：来自注解（重赋值不清洗）还是推断（随 RHS 更新）
   parent?: Scope;
   used: Set<string>;
 }
@@ -504,15 +527,156 @@ function stdTyOf(ty: A.HType | undefined): StdTy | null {
   return null;
 }
 
-/** S-19 判定：内建值类型上的方法是否在运行期方法面（与 builtinMethodFor 同表）。 */
-function stdMethodOnSurface(ty: StdTy, name: string): boolean {
+/**
+ * v0.2.67 S-19（#13）：std 方法的静态返回类型表 —— 方法链接收者类型追踪用。
+ * 只登记「返回内建值类型」的方法（与 builtins.ts 逐个对照）；返回数值/bool/
+ * 负载类型（unwrap 的 T、fold 的累加值等）一律不登记 → 链式追踪终止（保守，
+ * 假阴性可接受、假阳性不可接受）。turbofish 泛型实参可改写返回类型：
+ * collect::<String>() → String（默认 Vec）、parse::<T>() 恒 Result。
+ */
+export const STD_METHOD_RET: Record<string, Partial<Record<StdTy, StdTy | 'infer'>>> = {
+  // String 方法面（builtins.ts STRING_METHODS）
+  as_str: { String: 'String' }, clone: { String: 'String', Vec: 'Vec', HashMap: 'HashMap', Option: 'Option', Result: 'Result' },
+  to_string: { String: 'String' }, trim: { String: 'String' }, trim_start: { String: 'String' },
+  trim_end: { String: 'String' }, to_lowercase: { String: 'String' }, to_uppercase: { String: 'String' },
+  repeat: { String: 'String' }, replace: { String: 'String' }, char_at: { String: 'String' },
+  take: { String: 'String', Vec: 'Vec' }, remove: { String: 'String', HashMap: 'Option' }, join: { String: 'String', Vec: 'String' },
+  split: { String: 'Vec' }, split_whitespace: { String: 'Vec' }, lines: { String: 'Vec' }, chars: { String: 'Vec' },
+  strip_prefix: { String: 'Option' }, strip_suffix: { String: 'Option' },
+  find: { String: 'Option', Vec: 'Option' }, split_once: { String: 'Option' }, rsplit_once: { String: 'Option' },
+  parse: { String: 'Result' },
+  // Vec 方法面（VEC_METHODS）
+  iter: { Vec: 'Vec', HashMap: 'Vec' }, iter_mut: { Vec: 'Vec' }, into_iter: { Vec: 'Vec' }, to_vec: { Vec: 'Vec' }, next: { Vec: 'Option' }, map: { Vec: 'Vec', Option: 'Option', Result: 'Result' },
+  filter: { Vec: 'Vec', Option: 'Option' }, enumerate: { Vec: 'Vec' }, skip: { Vec: 'Vec' },
+  rev: { Vec: 'Vec' }, chain: { Vec: 'Vec' }, zip: { Vec: 'Vec' }, flat_map: { Vec: 'Vec' },
+  flatten: { Vec: 'Vec' }, filter_map: { Vec: 'Vec' }, step_by: { Vec: 'Vec' }, chunks: { Vec: 'Vec' },
+  collect: { Vec: 'infer' },
+  pop: { Vec: 'Option' }, first: { Vec: 'Option' }, last: { Vec: 'Option' }, get: { Vec: 'Option', HashMap: 'Option' },
+  min: { Vec: 'Option' }, max: { Vec: 'Option' }, position: { Vec: 'Option' },
+  // HashMap 方法面（MAP_METHODS）
+  keys: { HashMap: 'Vec' }, values: { HashMap: 'Vec' },
+  // Option / Result 方法面
+  and: { Option: 'Option' }, or: { Option: 'Option' }, cloned: { Option: 'Option' },
+  ok_or: { Option: 'Result' }, ok: { Result: 'Option' }, err: { Result: 'Option' },
+  map_err: { Result: 'Result' }, or_else: { Result: 'Result' },
+};
+
+/** collect 的 turbofish 改写：generics[0]=String → String，其余 → Vec */
+function turbofishOf(e: A.Expr & { kind: 'method' }): string | null {
+  const g = e.generics?.[0];
+  if (!g || g.kind !== 'path' || g.segs.length !== 1) return null;
+  return g.segs[0]!;
+}
+
+/**
+ * v0.2.67 S-19（#13）：表达式静态内建值类型（可判则判，不可判 → null 保守放行）。
+ * 覆盖：字面量（str/char→String，数组/arrayrep→Vec）/ 单段路径（绑定 stdTy）/
+ * 构造器（Some/Ok/Err/String::from/Vec::new/HashMap::new…）/ vec!·format! 宏 /
+ * 方法链（STD_METHOD_RET）/ 切片与下标 / 显式 cast / str+str 拼接。
+ */
+function stdTyOfExpr(e: A.Expr | undefined, scope: Scope): StdTy | null {
+  if (!e) return null;
+  switch (e.kind) {
+    case 'lit':
+      return e.lit.t === 'str' || e.lit.t === 'char' ? 'String' : null;
+    case 'array':
+    case 'arrayrep':
+      return 'Vec';
+    case 'path': {
+      if (e.segs.length !== 1) return null;
+      return lookupVarInfo(scope, e.segs[0]!)?.stdTy ?? null;
+    }
+    case 'method': {
+      const recvTy = stdTyOfExpr(e.recv, scope);
+      if (!recvTy) return null;
+      const ret = STD_METHOD_RET[e.name]?.[recvTy];
+      if (ret === undefined) return null;
+      if (ret === 'infer') {
+        // collect：turbofish::<String> 生成端与运行期都归一为 String（其余 → Vec）
+        if (e.name === 'collect') return turbofishOf(e) === 'String' ? 'String' : 'Vec';
+        return null;
+      }
+      return ret;
+    }
+    case 'call': {
+      if (e.callee.kind !== 'path') return null;
+      const segs = e.callee.segs;
+      if (segs.length === 1) {
+        if (segs[0] === 'Some') return 'Option';
+        if (segs[0] === 'Ok' || segs[0] === 'Err') return 'Result';
+        return null;
+      }
+      if (segs.length === 2) {
+        const [a, b] = segs as [string, string];
+        if (a === 'Option' && b === 'Some') return 'Option';
+        if (a === 'Result' && (b === 'Ok' || b === 'Err')) return 'Result';
+        if (a === 'String' && (b === 'from' || b === 'new' || b === 'with_capacity')) return 'String';
+        if (a === 'Vec' && (b === 'new' || b === 'with_capacity')) return 'Vec';
+        if (a === 'HashMap' && (b === 'new' || b === 'with_capacity')) return 'HashMap';
+      }
+      return null;
+    }
+    case 'macro': {
+      const head = e.path[e.path.length - 1]!;
+      if (head === 'vec') return 'Vec';
+      if (head === 'format') return 'String';
+      return null;
+    }
+    case 'slice': {
+      const recvTy = stdTyOfExpr(e.recv, scope);
+      if (recvTy === 'String') return 'String';
+      if (recvTy === 'Vec') return 'Vec';
+      return null;
+    }
+    case 'index': {
+      // String 下标 → 单字符 String；Vec 下标 → 元素类型不可判
+      return stdTyOfExpr(e.recv, scope) === 'String' ? 'String' : null;
+    }
+    case 'cast':
+      return stdTyOf(e.ty);
+    case 'binary': {
+      // str + str 拼接 → String（其余二元结果不可判）
+      if (e.op === '+') {
+        const l = stdTyOfExpr(e.lhs, scope);
+        const r = stdTyOfExpr(e.rhs, scope);
+        return l === 'String' && r === 'String' ? 'String' : null;
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * S-19 判定：内建值类型上的方法是否在运行期方法面（与 builtinMethodFor 同表）。
+ * v0.2.67（#13）：字面量接收者带长度 —— 运行期 char 回退面按 UTF-16 长度 ≤1
+ * 判定（builtinMethodFor 同款），多字符字面量直呼 char 方法（"ab".is_alphabetic()）
+ * check 即拦；绑定/链式接收者不可知长度 → STRING ∪ CHAR 保守并集（零假阳性）。
+ */
+function stdMethodOnSurface(ty: StdTy, name: string, recv?: A.Expr): boolean {
   switch (ty) {
-    case 'String': return name in STRING_METHODS || name in CHAR_METHODS;
+    case 'String': {
+      if (recv?.kind === 'lit' && recv.lit.t === 'str' && String(recv.lit.v).length > 1) {
+        return name in STRING_METHODS;
+      }
+      return name in STRING_METHODS || name in CHAR_METHODS;
+    }
     case 'Vec': return name in VEC_METHODS;
     case 'HashMap': return name in MAP_METHODS;
     case 'Option': return name in OPTION_METHODS;
     case 'Result': return name in RESULT_METHODS;
   }
+}
+
+/**
+ * v0.2.67 S-19（#13）：用户 impl 豁免 —— 仅 Option/Result（运行期枚举值经
+ * impls 注册表派发；实测 impl Option 的方法 run 可用）。String/Vec/HashMap
+ * 是原始值（无 __struct/__enum 标记），impl 永不派发 → 不豁免。
+ */
+function implProvides(ty: StdTy, name: string): boolean {
+  if (ty !== 'Option' && ty !== 'Result') return false;
+  return implMethods.get(ty)?.has(name) ?? false;
 }
 
 /** 沿作用域链查找绑定（返回变量信息，含 stdTy）。 */
@@ -526,10 +690,10 @@ function lookupVarInfo(scope: Scope, name: string): { mut: boolean; span: A.Span
   return undefined;
 }
 
-function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramBindings?: Array<{ name: string; mut: boolean }>): void {
+function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[], file: string, inAgentLoop?: boolean, paramBindings?: Array<{ name: string; mut: boolean; stdTy?: StdTy }>): void {
   
   const scope: Scope = { vars: new Map(), used: new Set() };
-  if (paramBindings) for (const b of paramBindings) declareParam(scope, b.name, b.mut);
+  if (paramBindings) for (const b of paramBindings) declareParam(scope, b.name, b.mut, b.stdTy);
   checkStmts(stmts, scope, enums, diags, file, inAgentLoop ?? false);
 }
 
@@ -538,23 +702,27 @@ function checkBody(stmts: A.Stmt[], enums: Map<string, string[]>, diags: Diag[],
  * v0.2.63：mut 按声明处传入（参数默认不可变，显式 `mut` 才可变，与 dhv(Rust)
  * 及 BNF 语义一致）—— 此前恒 mut:true，非 mut 参数被赋值时 S-4 漏报。
  */
-function declareParam(scope: Scope, name: string, mut: boolean): void {
+function declareParam(scope: Scope, name: string, mut: boolean, stdTy?: StdTy): void {
   if (name === '_' || name.startsWith('_')) return;
   if (scope.vars.has(name)) return;
-  scope.vars.set(name, { mut, span: { line: 0, col: 0, file: '' }, param: true });
+  scope.vars.set(name, { mut, span: { line: 0, col: 0, file: '' }, param: true, stdTy, stdTyAnnot: stdTy ? true : undefined });
 }
 
 /**
  * v0.2.63：FnParam → 参数绑定（name + mut）。
  * - self 参数：mut 由 self kind 映射（mutvalue/refmut 可变，value/ref 不可变）；
  * - 普通参数：以 FnParam.mut 为准（parser 已把声明处 `mut x` 记入顶层字段）；
- * - 解构模式：patternNames 展开的全部名字共用参数级 mut。
+ * - 解构模式：patternNames 展开的全部名字共用参数级 mut（stdTy 仅限单绑定
+ *   参数 —— 解构各名字类型不同，批量复制注解会误标）；
+ * - v0.2.67 S-19（#13）：注解为内建值类型的参数记入 stdTy（fn 参数是
+ *   方法调用接收者的最大聚集面，仅 let 口径会漏掉 fn f(s: String) { s.as_bytes() }）。
  */
-function fnParamBindings(params: A.FnParam[]): Array<{ name: string; mut: boolean }> {
+function fnParamBindings(params: A.FnParam[]): Array<{ name: string; mut: boolean; stdTy?: StdTy }> {
   return params.flatMap((p) => {
     const names = patternNames(p.pat);
     const mut = p.self ? p.self === 'mutvalue' || p.self === 'refmut' : (p.mut ?? false);
-    return names.map((name) => ({ name, mut }));
+    const stdTy = p.pat.kind === 'binding' ? stdTyOf(p.ty) ?? undefined : undefined;
+    return names.map((name) => ({ name, mut, stdTy }));
   });
 }
 
@@ -601,15 +769,25 @@ function checkStmt(st: A.Stmt, scope: Scope, enums: Map<string, string[]>, diags
       
       for (const n of patternNames(st.pat)) declareVar(scope, n, st.mut, diags, st.span, file);
       if (st.init) checkExpr(st.init, scope, enums, diags, file, inAgentLoop);
-      // v0.2.58 S-19：注解为内建值类型（String/Vec/HashMap/Option/Result）的
-      // 绑定记入作用域 —— 后续 .method() 调用可对运行期方法面做静态预警
-      // （B-1 类「check 过 / run 崩」断层的前置暴露）。仅注解口径：无注解的
-      // 绑定（含闭包参数/函数参数）不判 —— 追踪不到类型时不冒险。
+      // v0.2.58 S-19 → v0.2.67（#13）升级：内建值类型（String/Vec/HashMap/
+      // Option/Result）绑定记入作用域 —— 注解优先（契约语义，重赋值不清洗）；
+      // 无注解则按初始化器推断（字面量/构造器/方法链，stdTyOfExpr）。推断口径
+      // 覆盖 issue #13 的无注解复现（`let s = "hello"; s.substring(1, 2)`）；
+      // 追踪不到类型（native 块/函数调用等动态值）→ 不记，保守放行。
       if (st.pat.kind === 'binding') {
-        const stdTy = stdTyOf(st.ty);
-        if (stdTy) {
-          const cur = scope.vars.get(st.pat.name);
-          if (cur) cur.stdTy = stdTy;
+        const annot = stdTyOf(st.ty);
+        const cur = scope.vars.get(st.pat.name);
+        if (cur) {
+          if (annot) {
+            cur.stdTy = annot;
+            cur.stdTyAnnot = true;
+          } else if (st.init) {
+            const inferred = stdTyOfExpr(st.init, scope);
+            if (inferred) {
+              cur.stdTy = inferred;
+              cur.stdTyAnnot = false;
+            }
+          }
         }
       }
       // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入作用域 ——
@@ -1121,6 +1299,12 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
             if (e.op === '=') {
               const t = litTypeOf(e.value, scope);
               cur.litTy = t ?? undefined;
+              // v0.2.67 S-19（#13）：推断来源的 stdTy 随 RHS 更新（可判 → 记
+              // 新类型；不可判 → 清除，防「先 Vec 后 String」的陈旧事实假阳性）；
+              // 注解来源不清洗（注解是契约 —— 违约重赋值本身已超出静态检查边界）
+              if (!cur.stdTyAnnot) {
+                cur.stdTy = stdTyOfExpr(e.value, scope) ?? undefined;
+              }
               if (t === 'int') {
                 cur.litVal = intValOf(e.value, scope) ?? undefined;
                 const d = intDomainOf(e.value, scope) ?? cur.dom ?? undefined;
@@ -1201,16 +1385,19 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
       if (e.name === 'unwrap' && e.args.length === 0) {
         diags.push(warn('S-2', '裸 .unwrap()：非空默认建议使用 unwrap_or / match / ?（S2）', e.span, file));
       }
-      // v0.2.58 S-19（B-7）：内建值类型方法面断层预警 —— 接收者是单段路径且
-      // 其绑定有 String/Vec/HashMap/Option/Result 注解时，方法名不在运行期
-      // 方法面 → warning（不阻断：重赋值换类型等保守边界由 warning 语义兼容）。
-      // B-1 实录：nova 的 `self.tasks.iter_mut()` check 全绿、run 才崩 ——
-      // 此类断层首次在 check 阶段可见（作用域链穿闭包/match/分支）。
-      if (e.recv.kind === 'path' && e.recv.segs.length === 1) {
-        const info = lookupVarInfo(scope, e.recv.segs[0]!);
-        if (info?.stdTy && !stdMethodOnSurface(info.stdTy, e.name)) {
-          const surface = info.stdTy === 'String' ? 'STRING_METHODS' : info.stdTy === 'Vec' ? 'VEC_METHODS' : info.stdTy === 'HashMap' ? 'MAP_METHODS' : info.stdTy === 'Option' ? 'OPTION_METHODS' : 'RESULT_METHODS';
-          diags.push(warn('S-19', `绑定 "${e.recv.segs[0]}" 注解为 ${info.stdTy}，但 ${surface} 没有 "${e.name}" —— check 不拦截，run 将报「${info.stdTy} 没有方法 ${e.name}」（B-1 类断层；若为自定义 impl 方法请忽略本警告）`, e.span, file));
+      // v0.2.67 S-19（#13，升级自 v0.2.58 B-7 的 warning）：内建值类型方法面
+      // 白名单 —— 接收者静态类型可判（注解/字面量/构造器/链式返回类型，stdTyOfExpr）
+      // 且方法名不在运行期方法面（与 interp builtinMethodFor 同表），也不在用户
+      // impl 豁免面（Option/Result 枚举值运行期经 impls 派发）→ check 期 error。
+      // 历史：B-7 时代仅覆盖「单段路径 + 注解」且为 warning（check 仍 0 error
+      // 通过、错误推迟到 run 才暴露 —— issue #13 实录）；本轮把 check 过 = run
+      // 不炸落到方法面维度。保守边界：native/foreign 值、动态函数返回值等
+      // 静态不可判接收者不判（零假阳性优先）。
+      {
+        const recvTy = stdTyOfExpr(e.recv, scope);
+        if (recvTy && !stdMethodOnSurface(recvTy, e.name, e.recv) && !implProvides(recvTy, e.name)) {
+          const surface = recvTy === 'String' ? 'STRING_METHODS' : recvTy === 'Vec' ? 'VEC_METHODS' : recvTy === 'HashMap' ? 'MAP_METHODS' : recvTy === 'Option' ? 'OPTION_METHODS' : 'RESULT_METHODS';
+          diags.push(err('S-19', `接收者类型为 ${recvTy}，但运行期方法面 ${surface} 没有 "${e.name}" —— run 将报「${recvTy} 没有方法 "${e.name}"」（#13 check/run 对齐：S-19 自 v0.2.67 起为 error；正牌 API 见 BNF 附录 A / builtins.ts）`, e.span, file));
         }
       }
       break;
@@ -1303,7 +1490,16 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
     }
     case 'closure': {
       const child: Scope = { vars: new Map(), used: new Set(), parent: scope };
-      for (const p of e.params) for (const n of patternNames(p.pat)) declareVar(child, n, false, diags, e.span, file);
+      // v0.2.67 S-19（#13）：闭包参数注解同样记入 stdTy（|s: String| s.as_bytes()）
+      //（仅单绑定参数 —— 解构各名字类型不同，批量复制注解会误标）
+      for (const p of e.params) {
+        const cstd = p.pat.kind === 'binding' ? stdTyOf(p.ty) ?? undefined : undefined;
+        for (const n of patternNames(p.pat)) {
+          declareVar(child, n, false, diags, e.span, file);
+          const cur = child.vars.get(n);
+          if (cur && cstd) { cur.stdTy = cstd; cur.stdTyAnnot = true; }
+        }
+      }
       checkExpr(e.body, child, enums, diags, file, inAgentLoop);
       break;
     }

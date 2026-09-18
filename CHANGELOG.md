@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## v0.2.67（2026-09-18）—— S-19 方法面收紧（#13 check/run 对齐）+ Vec 迭代器协议三件套
+
+issue #13 实录：`s.as_bytes()` / `s.substring(a, b)` 双端 check 0 error 通过、
+`dhv-ts run` 运行期才报「String 没有方法」。根因是双端 checker 对未知方法放行
+（宽松策略），而 interp 的方法表不含这些名字。本批按 issue 建议的方向 1 落实
+「check 过 = run 不炸」的工具链承诺（与 B-6 修复哲学一致），双端同步。
+
+**S-19 由 warning 升级为 error（dhv-ts checker.ts + dhv typecheck.rs 双端）**：
+
+- **接收者类型可知面扩展**（v0.2.58 B-7 时代仅「单段路径 + let 注解」）：
+  let 注解（原口径）/ **无注解绑定的初始化器推断**（`let s = "hello"` →
+  String，字面量/构造器 Some·Ok·String::from·vec!·format!·方法链）/
+  **fn · graph · 闭包参数注解**（`fn f(s: String)` 是接收者最大聚集面）/
+  **字面量接收者**（`"abc".as_bytes()`）/**方法链返回类型追踪**
+  （`chars()→Vec → take→Vec → cloned→error`，#13 附带发现的迭代器适配器链）/
+  切片·下标·cast·str+str 拼接。静态不可判（native/foreign 值、动态函数
+  返回值等）不判 —— 零假阳性优先。
+- **char 回退面精确化**：运行期 `builtinMethodFor` 对单字符 String 回退
+  CHAR_METHODS（UTF-16 长度 ≤1）；check 对**字面量接收者**按同款长度判定
+  （`"ab".is_alphabetic()` check 即拦，`"a".is_alphabetic()` 合法），绑定
+  接收者保守取并集。
+- **用户 impl 豁免与运行期派发同源**：Option/Result 枚举值运行期经 impls
+  注册表派发用户方法（实测 `impl Option { fn doubled }` run 可用）→ check
+  豁免；String/Vec/HashMap 是原始值（无 __struct/__enum 标记），impl 永不
+  派发（实测 `impl String` 的方法 run 仍报错）→ 不豁免。impl 方法名跨模块
+  预收集（根文件 + 依赖闭包），与 registerItem 的注册时序对齐。
+- **错误信息与运行期同源**：报文直接引用运行期措辞「run 将报『String 没有
+  方法 "as_bytes"』」，错误码沿用 S-19（不引入新码，#18 诊断码体系兼容）。
+- **重赋值语义**：注解来源的 stdTy 是契约（重赋值不清洗）；推断来源随 RHS
+  更新（可判 → 新类型，不可判 → 清除），防「先 Vec 后 String」陈旧事实。
+
+**运行期方法面补齐三件（Vec，语料在用 / 运行期缺席的同类断层）**：
+`into_iter`（与 iter 同为恒等）/ `to_vec`（= clone，Rust slice→owned 对应物）/
+`next`（头部取元素并原地推进，pop 的镜像 —— Rust Iterator::next）。S-19 收紧
+后由 check 语料（s6_exhaustive_enum_in_loop 等 + range_expression 的切片
+to_vec）复现暴露 —— 此前这些语料 check 全绿、真 run 必崩。
+
+**保守边界（诚实清单）**：match/if-let/for 模式绑定不追类型（解构与迭代元素
+类型待完整类型推导）；数值方法面（NUM_METHODS）未纳入 S-19（本批聚焦
+String/Vec/HashMap/Option/Result 五类，#13 主诉面）；注解违约重赋值
+（`let mut s: String = "a"; s = vec![]`）本身仍是静态检查盲区（无完整类型
+推导），但其上的方法调用按注解契约判。
+
+验证：run-all 194→**201 全绿**（+7 个 v0.2.67 回归：error 升级/推断/链式/
+参数注解/impl 豁免+run 全通/重赋值/RET-方法面自洽守卫）；conformance 100→
+**105 全过**（+errors/S19_* 三件码集合双端一致 + check/S19_* 两件零误报双端
+绿）；cargo test 15/15；nova（2000+ 行）/dsh/backends-demo/五巡览语料全量
+check 零新告警。
+
 ## v0.2.66（2026-09-15）—— python 产物 ruff 四修 + rust 后端保真（图灵语料对拍驱动）
 
 > 发布卫生补齐（2026-09-18）：v0.2.66 原提交（7ce294a）只更新了 dhv-ts 侧

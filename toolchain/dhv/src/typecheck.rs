@@ -126,6 +126,10 @@ pub struct Symbol {
     pub lit_val: Option<i128>,
     /// v0.2.54 S-15：整型域事实（注解名，如 "u8"/"i64"；来源：let 注解/字面量后缀/cast）
     pub dom: Option<String>,
+    /// v0.2.67 S-19（#13）：内建值类型静态事实（let 注解优先 / 初始化器推断 /
+    /// 参数注解）；std_ty_annot = 来自注解（重赋值不清洗 —— 注解是契约）
+    pub std_ty: Option<StdTy>,
+    pub std_ty_annot: bool,
 }
 
 /// S-14 字面量类型域（与 dhv-ts LitTy 同构）
@@ -136,6 +140,160 @@ pub enum SymbolLitTy {
     Bool,
     Str,
     Char,
+}
+
+// ---------------------------------------------------------------------------
+// v0.2.67 S-19（#13）：内建值类型方法面 —— dhv-ts `src/builtins.ts` 的静态镜像。
+// check 与 run 对齐（「check 过 = run 不炸」）：接收者静态类型可判（注解 /
+// 字面量 / 构造器 / 方法链返回类型）且方法名不在运行期方法面 → check 期 error。
+// 两端表面由 conformance 语料（errors/S19_*）对拍锁定，防表间漂移。
+// ---------------------------------------------------------------------------
+
+/// S-19：内建值类型（运行期 builtinMethodFor 的判别集）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdTy {
+    String,
+    Vec,
+    HashMap,
+    Option,
+    Result,
+}
+
+impl StdTy {
+    pub fn name(self) -> &'static str {
+        match self {
+            StdTy::String => "String",
+            StdTy::Vec => "Vec",
+            StdTy::HashMap => "HashMap",
+            StdTy::Option => "Option",
+            StdTy::Result => "Result",
+        }
+    }
+    /// 诊断文案里的方法表名（与 dhv-ts checker 的 surface 命名一致）
+    pub fn surface_name(self) -> &'static str {
+        match self {
+            StdTy::String => "STRING_METHODS",
+            StdTy::Vec => "VEC_METHODS",
+            StdTy::HashMap => "MAP_METHODS",
+            StdTy::Option => "OPTION_METHODS",
+            StdTy::Result => "RESULT_METHODS",
+        }
+    }
+}
+
+/// String 方法面（builtins.ts STRING_METHODS 的 36 键）
+const STRING_METHOD_NAMES: &[&str] = &[
+    "len", "is_empty", "push_str", "push", "as_str", "clone", "to_string", "trim",
+    "trim_start", "trim_end", "contains", "starts_with", "ends_with", "replace", "split",
+    "split_whitespace", "lines", "to_lowercase", "to_uppercase", "chars", "repeat",
+    "strip_prefix", "strip_suffix", "find", "parse", "char_at", "char_count", "take",
+    "join", "split_once", "rsplit_once", "clear", "truncate", "retain", "insert", "remove",
+];
+
+/// char 方法面（单字符 String 接收者的运行期回退面，CHAR_METHODS 4 键）
+const CHAR_METHOD_NAMES: &[&str] = &["to_string", "is_alphabetic", "is_numeric", "clone"];
+
+/// Vec 方法面（VEC_METHODS 53 键，含 v0.2.67 补齐的 into_iter/to_vec/next）
+const VEC_METHOD_NAMES: &[&str] = &[
+    "len", "is_empty", "push", "pop", "clone", "first", "last", "get", "contains", "join",
+    "iter", "iter_mut", "into_iter", "to_vec", "next", "map", "filter", "for_each", "any",
+    "all", "fold", "enumerate", "take", "skip", "rev", "sort", "sort_by", "append", "extend",
+    "sum", "collect", "clear", "is_sorted", "sort_desc", "position", "insert", "remove",
+    "find", "filter_map", "flat_map", "flatten", "count", "min", "max", "zip", "chain",
+    "step_by", "reverse", "dedup", "retain", "truncate", "chunks",
+];
+
+/// HashMap 方法面（MAP_METHODS 13 键）
+const MAP_METHOD_NAMES: &[&str] = &[
+    "insert", "get", "contains_key", "len", "is_empty", "remove", "clear", "keys",
+    "values", "clone", "iter",
+];
+
+/// Option 方法面（OPTION_METHODS 14 键）
+const OPTION_METHOD_NAMES: &[&str] = &[
+    "unwrap", "expect", "unwrap_or", "unwrap_or_else", "is_some", "is_none", "map",
+    "and_then", "ok_or", "or", "and", "cloned", "clone", "filter",
+];
+
+/// Result 方法面（RESULT_METHODS 14 键）
+const RESULT_METHOD_NAMES: &[&str] = &[
+    "unwrap", "expect", "is_ok", "is_err", "ok", "err", "map", "map_err", "unwrap_or",
+    "clone", "and_then", "or_else", "unwrap_or_else", "unwrap_err",
+];
+
+/// S-19 判定：内建值类型上的方法是否在运行期方法面。literal_len = 字面量接收者
+/// 的 UTF-16 长度（运行期 char 回退面按 ≤1 判定，builtinMethodFor 同款；多字符
+/// 字面量直呼 char 方法 check 即拦）；None = 非字面量接收者 → String∪Char 并集。
+fn std_method_on_surface(ty: StdTy, name: &str, literal_utf16_len: Option<usize>) -> bool {
+    match ty {
+        StdTy::String => {
+            let in_str = STRING_METHOD_NAMES.contains(&name);
+            if literal_utf16_len.map(|n| n > 1).unwrap_or(false) {
+                in_str
+            } else {
+                in_str || CHAR_METHOD_NAMES.contains(&name)
+            }
+        }
+        StdTy::Vec => VEC_METHOD_NAMES.contains(&name),
+        StdTy::HashMap => MAP_METHOD_NAMES.contains(&name),
+        StdTy::Option => OPTION_METHOD_NAMES.contains(&name),
+        StdTy::Result => RESULT_METHOD_NAMES.contains(&name),
+    }
+}
+
+/// S-19：std 方法的静态返回类型（与 dhv-ts checker.ts STD_METHOD_RET 同表）。
+/// 只登记「返回内建值类型」的方法；返回数值/bool/负载类型（unwrap 的 T、fold
+/// 的累加值等）→ None（链式追踪终止，保守防假阳性）。turbofish 改写：collect
+/// 的泛型实参 String → String（默认 Vec）。
+fn std_method_ret(ty: StdTy, name: &str, turbofish: Option<&str>) -> Option<StdTy> {
+    match (ty, name) {
+        // String 方法面
+        (StdTy::String, "as_str" | "clone" | "to_string" | "trim" | "trim_start" | "trim_end"
+            | "to_lowercase" | "to_uppercase" | "repeat" | "replace" | "char_at" | "take"
+            | "remove" | "join") => Some(StdTy::String),
+        (StdTy::String, "split" | "split_whitespace" | "lines" | "chars") => Some(StdTy::Vec),
+        (StdTy::String, "strip_prefix" | "strip_suffix" | "find" | "split_once" | "rsplit_once") => Some(StdTy::Option),
+        (StdTy::String, "parse") => Some(StdTy::Result),
+        // Vec 方法面
+        (StdTy::Vec, "clone" | "iter" | "iter_mut" | "into_iter" | "to_vec" | "map" | "filter"
+            | "enumerate" | "take" | "skip" | "rev" | "chain" | "zip" | "flat_map" | "flatten"
+            | "filter_map" | "step_by" | "chunks") => Some(StdTy::Vec),
+        (StdTy::Vec, "collect") => {
+            if turbofish == Some("String") { Some(StdTy::String) } else { Some(StdTy::Vec) }
+        }
+        (StdTy::Vec, "pop" | "first" | "last" | "get" | "min" | "max" | "find" | "position" | "next") => Some(StdTy::Option),
+        (StdTy::Vec, "join") => Some(StdTy::String),
+        // HashMap 方法面
+        (StdTy::HashMap, "clone" | "iter" | "keys" | "values") => Some(StdTy::Vec),
+        (StdTy::HashMap, "get" | "remove") => Some(StdTy::Option),
+        // Option / Result 方法面
+        (StdTy::Option, "map" | "filter" | "and" | "or" | "cloned" | "clone") => Some(StdTy::Option),
+        (StdTy::Option, "ok_or") => Some(StdTy::Result),
+        (StdTy::Result, "ok" | "err") => Some(StdTy::Option),
+        (StdTy::Result, "map" | "map_err" | "or_else" | "clone") => Some(StdTy::Result),
+        _ => None,
+    }
+}
+
+/// S-19：类型注解 → 内建值类型（解包 ref/paren；`Vec<T>` 看首段 —— 与 dhv-ts stdTyOf 同构）
+fn std_ty_of_type(ty: &Type) -> Option<StdTy> {
+    match &ty.kind {
+        TypeKind::Path(pt) => {
+            if pt.path.leading_colon || pt.path.segments.is_empty() {
+                return None;
+            }
+            match pt.path.segments[0].name.as_str() {
+                "String" => Some(StdTy::String),
+                "Vec" => Some(StdTy::Vec),
+                "HashMap" => Some(StdTy::HashMap),
+                "Option" => Some(StdTy::Option),
+                "Result" => Some(StdTy::Result),
+                _ => None,
+            }
+        }
+        TypeKind::Ref { inner, .. } | TypeKind::Paren(inner) => std_ty_of_type(inner),
+        _ => None,
+    }
 }
 
 /// import 符号（S7 追踪；glob `import * as m` 豁免）
@@ -174,6 +332,8 @@ impl SymbolTable {
                     lit_ty: None,
                     lit_val: None,
                     dom: None,
+                    std_ty: None,
+                    std_ty_annot: false,
                 },
             );
         }
@@ -245,6 +405,31 @@ impl SymbolTable {
             }
         }
     }
+    /// v0.2.67 S-19（#13）：只查 std_ty 不标记 used（类型检查非使用语义）
+    pub fn peek_std_ty(&self, name: &str) -> Option<StdTy> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).and_then(|sym| sym.std_ty)
+    }
+    /// v0.2.67 S-19（#13）：写入 std_ty 事实（annot = 注解来源，重赋值不清洗）
+    pub fn set_std_ty(&mut self, name: &str, std_ty: Option<StdTy>, annot: bool) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                sym.std_ty = std_ty;
+                sym.std_ty_annot = annot;
+                return;
+            }
+        }
+    }
+    /// v0.2.67 S-19（#13）：推断来源的 std_ty 随重赋值更新（注解来源不动）
+    pub fn update_inferred_std_ty(&mut self, name: &str, std_ty: Option<StdTy>) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(sym) = scope.get_mut(name) {
+                if !sym.std_ty_annot {
+                    sym.std_ty = std_ty;
+                }
+                return;
+            }
+        }
+    }
     pub fn current_scope_has(&self, name: &str) -> bool {
         self.scopes.last().map(|s| s.contains_key(name)).unwrap_or(false)
     }
@@ -280,6 +465,11 @@ pub struct TypeChecker {
     imports: Vec<ImportSym>,
     /// graph AgentLoop 嵌套深度（S6 强化上下文）
     in_agent_loop: usize,
+    /// v0.2.67 S-19（#13）：用户 impl 方法名注册表（typeName → 方法名集合）——
+    /// 与 dhv-ts interp registerItem 同源（各模块顶层 impl 项，inherent + trait
+    /// 合并）。运行期只有 Option/Result（__enum 标记）经 impls 派发用户方法；
+    /// String/Vec/HashMap 是原始值，impl 永不派发 → 豁免只对 Option/Result 生效。
+    impl_methods: HashMap<String, HashSet<String>>,
 }
 
 impl TypeChecker {
@@ -295,6 +485,50 @@ impl TypeChecker {
             module_exports: HashMap::new(),
             imports: Vec::new(),
             in_agent_loop: 0,
+            impl_methods: HashMap::new(),
+        }
+    }
+
+    /// v0.2.67 S-19（#13）：收集一个文件的顶层 impl 方法名（根文件与依赖模块
+    /// 都在体级检查前预收集 —— 运行期 registerItem 在模块加载时注册，跨文件可见）。
+    pub fn harvest_impl_methods(&mut self, file: &SourceFile) {
+        for top in &file.items {
+            if let TopLevel::Item(Item::Impl(imp)) = top {
+                let ty_name = Self::impl_type_name(&imp.self_ty);
+                if let Some(n) = ty_name {
+                    let set = self.impl_methods.entry(n).or_default();
+                    for it in &imp.items {
+                        if let ImplItem::Fn(f) = it {
+                            set.insert(f.name.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// S-19（#13）：impl 目标类型名（单段路径；多段/非路径 → None 不豁免）
+    fn impl_type_name(ty: &Type) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Path(pt) => {
+                if pt.path.leading_colon || pt.path.segments.len() != 1 {
+                    return None;
+                }
+                Some(pt.path.segments[0].name.clone())
+            }
+            TypeKind::Ref { inner, .. } | TypeKind::Paren(inner) => Self::impl_type_name(inner),
+            _ => None,
+        }
+    }
+
+    /// S-19（#13）：用户 impl 豁免 —— 仅 Option/Result（运行期枚举值经 impls
+    /// 注册表派发；与 dhv-ts implProvides 同构）
+    fn impl_provides(&self, ty: StdTy, name: &str) -> bool {
+        match ty {
+            StdTy::Option | StdTy::Result => {
+                self.impl_methods.get(ty.name()).map(|s| s.contains(name)).unwrap_or(false)
+            }
+            _ => false,
         }
     }
 
@@ -656,6 +890,14 @@ impl TypeChecker {
         }
     }
 
+    /// v0.2.67 S-19（#13）：参数注解的内建值类型记入符号表（fn/graph/闭包参数
+    /// 是方法调用接收者的最大聚集面；仅 ident 模式 —— 解构模式不追）
+    fn set_param_std_ty(&mut self, ty: &Type, pat: &Pattern) {
+        if let (Some(std_ty), PatternKind::Ident { name, .. }) = (std_ty_of_type(ty), &pat.kind) {
+            self.symbols.set_std_ty(&name.name, Some(std_ty), true);
+        }
+    }
+
     /// S1/S2/S4/S7/S8: 函数体检查
     fn check_fn(&mut self, f: &FnDef) {
         self.symbols.push_scope();
@@ -663,6 +905,8 @@ impl TypeChecker {
             self.walk_type(&p.ty);
             if let ParamKind::Pattern(pat) = &p.kind {
                 self.walk_pattern(pat, SymbolKind::Param);
+                // v0.2.67 S-19（#13）：参数注解 std_ty（fn f(s: String) { s.as_bytes() }）
+                self.set_param_std_ty(&p.ty, pat);
             }
         }
         if let Some(ret) = &f.ret {
@@ -682,6 +926,8 @@ impl TypeChecker {
             self.walk_type(&p.ty);
             if let ParamKind::Pattern(pat) = &p.kind {
                 self.walk_pattern(pat, SymbolKind::Param);
+                // v0.2.67 S-19（#13）：graph 参数注解 std_ty
+                self.set_param_std_ty(&p.ty, pat);
             }
         }
         if let Some(ret) = &graph.ret {
@@ -705,6 +951,10 @@ impl TypeChecker {
                         SymbolKind::GraphNode,
                         n.name.span,
                     );
+                    // v0.2.67 S-19（#13）：node 声明注解 std_ty（node buf: Vec<String> = ...）
+                    if let Some(std_ty) = std_ty_of_type(&n.ty) {
+                        self.symbols.set_std_ty(&n.name.name, Some(std_ty), true);
+                    }
                     if let Some(init) = &n.init {
                         self.walk_expr(init);
                     }
@@ -1161,6 +1411,86 @@ impl TypeChecker {
         }
     }
 
+    /// v0.2.67 S-19（#13）：表达式的静态内建值类型（与 dhv-ts checker.ts
+    /// stdTyOfExpr 同构）。覆盖：字面量（str/char→String，数组→Vec）/ 单段
+    /// 路径（绑定 std_ty）/ 构造器（Some/Ok/Err/String::from/Vec::new/
+    /// HashMap::new）/ vec!·format! 宏 / 方法链（std_method_ret，含 collect
+    /// turbofish 改写）/ 切片与下标 / 显式 cast / str+str 拼接。不可判 → None
+    ///（保守放行，零假阳性优先）。
+    fn std_ty_of_expr(&self, e: &Expr) -> Option<StdTy> {
+        match &e.kind {
+            ExprKind::Literal(l) => match &l.kind {
+                LiteralKind::Str { .. } | LiteralKind::Char(_) => Some(StdTy::String),
+                _ => None,
+            },
+            ExprKind::Array(_) | ExprKind::ArrayRepeat { .. } => Some(StdTy::Vec),
+            ExprKind::Path(p) if p.segments.len() == 1 && !p.leading_colon => {
+                self.symbols.peek_std_ty(&p.segments[0].name)
+            }
+            ExprKind::MethodCall { receiver, method, generic_args, .. } => {
+                let recv_ty = self.std_ty_of_expr(receiver)?;
+                let turbofish = generic_args.iter().find_map(|g| match g {
+                    GenericArg::Type(t) => {
+                        let TypeKind::Path(pt) = &t.kind else { return None };
+                        if pt.path.segments.len() == 1 && !pt.path.leading_colon {
+                            Some(pt.path.segments[0].name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                });
+                std_method_ret(recv_ty, &method.name, turbofish.as_deref())
+            }
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Path(p) = &callee.kind else { return None };
+                if p.leading_colon {
+                    return None;
+                }
+                let segs: Vec<&str> = p.segments.iter().map(|s| s.name.as_str()).collect();
+                match segs.as_slice() {
+                    ["Some"] => Some(StdTy::Option),
+                    ["Ok"] | ["Err"] => Some(StdTy::Result),
+                    ["Option", "Some"] => Some(StdTy::Option),
+                    ["Result", "Ok"] | ["Result", "Err"] => Some(StdTy::Result),
+                    ["String", "from" | "new" | "with_capacity"] => Some(StdTy::String),
+                    ["Vec", "new" | "with_capacity"] => Some(StdTy::Vec),
+                    ["HashMap", "new" | "with_capacity"] => Some(StdTy::HashMap),
+                    _ => None,
+                }
+            }
+            ExprKind::Macro { path, .. } => {
+                let head = path.segments.last().map(|s| s.name.as_str()).unwrap_or("");
+                match head {
+                    "vec" => Some(StdTy::Vec),
+                    "format" => Some(StdTy::String),
+                    _ => None,
+                }
+            }
+            ExprKind::Slice { base, .. } => match self.std_ty_of_expr(base)? {
+                StdTy::String => Some(StdTy::String),
+                StdTy::Vec => Some(StdTy::Vec),
+                _ => None,
+            },
+            ExprKind::Index { base, .. } => {
+                // String 下标 → 单字符 String；Vec 下标 → 元素类型不可判
+                match self.std_ty_of_expr(base) {
+                    Some(StdTy::String) => Some(StdTy::String),
+                    _ => None,
+                }
+            }
+            ExprKind::Cast { ty, .. } => std_ty_of_type(ty),
+            ExprKind::Binary { op: BinaryOp::Add, lhs, rhs, .. } => {
+                // str + str 拼接 → String（其余二元结果不可判）
+                match (self.std_ty_of_expr(lhs), self.std_ty_of_expr(rhs)) {
+                    (Some(StdTy::String), Some(StdTy::String)) => Some(StdTy::String),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// v0.2.53 S-14：表达式的静态字面量类型（lit / 一元负号包裹 / 显式 cast 目标 /
     /// 单段 path 查符号表 lit_ty）—— 与 dhv-ts litTypeOf 同构。不可判 → None。
     fn expr_lit_ty(&self, e: &Expr) -> Option<SymbolLitTy> {
@@ -1376,6 +1706,16 @@ impl TypeChecker {
         let init_lit_ty = l.init.as_ref().and_then(|init| self.expr_lit_ty(init));
         if let PatternKind::Ident { name, .. } = &l.pattern.kind {
             self.declare_binding(name, l.mutable, SymbolKind::Let);
+            // v0.2.67 S-19（#13）：内建值类型静态事实 —— 注解优先（契约语义，
+            // 重赋值不清洗）；无注解则按初始化器推断（字面量/构造器/方法链，
+            // std_ty_of_expr —— 覆盖 `let s = "hello"; s.substring(1, 2)` 类
+            // 无注解复现）。追踪不到 → None 保守放行。
+            let std_ty = l.ty.as_ref().and_then(std_ty_of_type);
+            let (std_ty, annot) = match std_ty {
+                Some(t) => (Some(t), true),
+                None => (l.init.as_ref().and_then(|i| self.std_ty_of_expr(i)), false),
+            };
+            self.symbols.set_std_ty(&name.name, std_ty, annot);
             // v0.2.53 S-14（v2）：let 声明的静态字面量类型记入符号表 ——
             // 后续 path 引用可判（变量中转场景）。
             // v0.2.54 S-14（v3）+ S-15：赋值更新已追踪（见 Assign 臂）；整型
@@ -1610,6 +1950,40 @@ impl TypeChecker {
                 for a in args {
                     self.walk_expr(a);
                 }
+                // v0.2.67 S-19（#13）：内建值类型方法面白名单 —— 接收者静态类型
+                // 可判（注解/字面量/构造器/链式返回类型，std_ty_of_expr）且方法名
+                // 不在运行期方法面（dhv-ts builtinMethodFor 的镜像表），也不在
+                // 用户 impl 豁免面（Option/Result 枚举值运行期经 impls 派发）→
+                // check 期 error。此前双端对未知方法放行（issue #13：substring/
+                // as_bytes 等 check 0 error 通过、run 才报「String 没有方法」）。
+                // 保守边界：native/foreign 值、动态函数返回值等不判（零假阳性优先）。
+                let recv_ty = self.std_ty_of_expr(receiver);
+                if let Some(ty) = recv_ty {
+                    let literal_len = match &receiver.kind {
+                        // 字面量接收者的 UTF-16 长度（运行期 char 回退面按 ≤1 判定）
+                        ExprKind::Literal(l) => match &l.kind {
+                            LiteralKind::Str { value, .. } => Some(value.encode_utf16().count()),
+                            LiteralKind::Char(_) => Some(1),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if !std_method_on_surface(ty, &method.name, literal_len)
+                        && !self.impl_provides(ty, &method.name)
+                    {
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::Strictness("S19"),
+                                format!(
+                                    "接收者类型为 {}，但运行期方法面 {} 没有 \"{}\" —— run 将报「{} 没有方法 \"{}\"」（#13 check/run 对齐：S-19 自 v0.2.67 起为 error；正牌 API 见 BNF 附录 A / builtins.ts）",
+                                    ty.name(), ty.surface_name(), method.name, ty.name(), method.name
+                                ),
+                                method.span,
+                            )
+                            .note("方法面以 dhv-ts builtins.ts（BNF 附录 A 参考）为准 —— 拼写错误请改用正牌方法；自定义 impl 只对 Option/Result 枚举值生效"),
+                        );
+                    }
+                }
             }
             ExprKind::Field { base, .. } => self.walk_expr(base),
             ExprKind::Index { base, index } => {
@@ -1670,6 +2044,12 @@ impl TypeChecker {
                                 }
                             }
                             self.symbols.set_lit_facts(name, t, v, dom);
+                            // v0.2.67 S-19（#13）：推断来源的 std_ty 随 RHS 更新
+                            //（可判 → 记新类型；不可判 → 清除，防「先 Vec 后
+                            // String」的陈旧事实假阳性）；注解来源不清洗（注解
+                            // 是契约 —— 违约重赋值本身已超出静态检查边界）。
+                            let new_std_ty = self.std_ty_of_expr(rhs);
+                            self.symbols.update_inferred_std_ty(name, new_std_ty);
                         } else {
                             // 复合赋值（a += n）：折叠更新 lit_val；域检查
                             let bin_op = match &e.kind {
@@ -1745,6 +2125,8 @@ impl TypeChecker {
                     self.walk_type(&p.ty); // S7: 类型注解中的导入使用标记
                     if let ParamKind::Pattern(pat) = &p.kind {
                         self.walk_pattern(pat, SymbolKind::Param);
+                        // v0.2.67 S-19（#13）：闭包参数注解 std_ty（|s: String| s.as_bytes()）
+                        self.set_param_std_ty(&p.ty, pat);
                     }
                 }
                 if let Some(r) = ret {

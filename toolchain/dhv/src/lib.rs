@@ -70,8 +70,13 @@ fn compile_ext(file_name: &str, src: &str, do_codegen: bool) -> CompileResult {
 
     // 3. TypeCheck（严格性 + 拓扑 + 投射）
     let mut tc = typecheck::TypeChecker::new();
+    // v0.2.67 S-19（#13）：根文件 + 全部依赖模块的顶层 impl 方法名先于任何
+    // 体级检查收集（运行期 registerItem 在模块加载时注册、跨文件可见 ——
+    // check 侧同序预收集，Option/Result 的用户 impl 方法豁免才能双端同源）
+    tc.harvest_impl_methods(&file);
     for (mpath, mfile) in &linked.modules {
         tc.harvest_module(mpath, mfile);
+        tc.harvest_impl_methods(mfile);
     }
     // 依赖模块体级 S 系列检查（对齐 dhv-ts：先链接后逐文件检查）
     for (mpath, mfile) in &linked.modules {
