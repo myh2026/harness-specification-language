@@ -1,12 +1,16 @@
 // ============================================================================
-// dhv/src/langs.rs — 后端语言注册表（BNF v1.5 §5.2，与 dhv-ts/src/backends/registry.ts 对齐）
+// dhv/src/langs.rs — 后端语言注册表（BNF v1.5 §5.2 · dhv 端实际能力）
 // ----------------------------------------------------------------------------
 // 32 编程语言 + 6 静态格式 = 38 后端。
-// 能力分级（诚实边界）：
+// 能力分级（诚实边界 · v0.2.66 口径澄清）：
+// 能力级是「每端工具链」的属性 —— dhv-ts/src/backends/registry.ts 是规范基线
+// （full 3 · logic 3 · contract 26 · raw 6），本端（dhv）对 9 种语言配有专属
+// 后端做函数体级翻译，能力是基线的超集。manifest 如实报告本端实际产物：
 //   full    (3)  —— 活体语句翻译（函数体真实转译）：python / typescript / javascript
 //   logic   (12) —— 语句子集翻译（专属后端）：rust / go / cpp / java / csharp / kotlin / swift / scala / dart / elixir / haskell / ruby
 //   contract(17) —— 类型契约投射（通用后端，函数体围栏内嵌 HSL 原文）
 //   raw     (6)  —— 静态资源原文 + {{}} 插值渲染：yaml / markdown / json / toml / ini / xml
+// 详见 BNF §5.2.1「能力级是每端工具链的属性」段。
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

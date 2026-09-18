@@ -981,6 +981,15 @@ Scala/Haskell/OCaml/F#/Erlang 原生和类型）
 `dhv/src/langs.rs`。宿主语法校验：python 经 `python3 -m py_compile`、ts/js 经 bun 转译器、
 bash 经 `bash -n`（Lint 第 2 层，emit 时自动执行）。
 
+**能力级是「每端工具链」的属性（v0.2.66 澄清）**：上表为**规范基线**（合规实现必须
+达到的最低能力）。两端的实际能力可以不同且各自如实报告 —— dhv-ts（参考解释器）按
+上表（full 3 · logic 3 · contract 26 · raw 6）；dhv（Rust 编译器）对 9 种语言配有
+专属后端做**函数体级翻译**（java/csharp/kotlin/swift/ruby/scala/elixir/haskell/dart
+= logic，共 full 3 · logic 12 · contract 17 · raw 6）。manifest.json 的能力级字段
+始终报告**本端实际产物**（诚实边界协议）—— 同一份 HSL 投 java，两端 manifest 报
+不同 tier 不是漂移，是两端真实能力的如实声明；一致性回归对拍的是**产物行为**（语法
+合法性 / 值级输出），不强制 tier 相同。
+
 ### 5.3 拓扑校验规则（graph / edge）
 
 | 编号 | 规则 |

@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## v0.2.66（2026-09-15）—— python 产物 ruff 四修 + rust 后端保真（图灵语料对拍驱动）
+
+> 发布卫生补齐（2026-09-18）：v0.2.66 原提交（7ce294a）只更新了 dhv-ts 侧
+> （package.json 0.2.66 + 生成器修复），dhv Cargo.toml / README 徽章 / 本
+> CHANGELOG 条目漏更 —— version-sync CI 因此必红。本批补齐发布物料，版本
+> 语义不变。
+
+**图灵语料三程序**（org 仓 fixtures/turing/）：Rule 110 元胞自动机（Cook
+2004 TC 证明）· 3 态忙海狸 BB(3)（13 转移/14 构型/Σ=6 文献级不变量）·
+Brainfuck 解释器（906 指令 Hello World）—— 三程序 × 四语言对拍
+（dhv-ts 解释器 + python 产物 ruff + rustc + g++）全部输出一致。
+
+**python 产物 ruff 四修**（dhv-ts 车道，PIE808/SIM114/F541/UP034）：
+
+- **PIE808**：`range(0, N)` → `range(N)`（range 首参 0 恒可省）；
+- **SIM114**：match 等值臂合并（同体 `|` 模式臂不再重复生成体）；
+- **F541**：无占位符 f-string 不发 `f` 前缀（纯字面量直出）；
+- **UP034**：f-string 实参外层括号剥离。
+
+**rust 后端两修**（dhv-ts emit 车道，rustc 实编译驱动）：
+
+- **`as` 转换保真**：此前 cast 一律丢弃 → rustc 拒绝 i32 索引（usize 期望）；
+  现按目标类型真实投射 `as usize` / `as i64` …（BB(3) 语料驱动）；
+- **`char_at` 映射**：`s.char_at(i)` → `s.chars().nth(i)` 越界 None → 空
+  串（与 interp 越界返 '' 对齐；Brainfuck 语料驱动）。
+
 ## v0.2.65（2026-09-13）—— dhv(Rust) python 生成器 ruff 全绿（按工具链补齐）
 
 v0.2.64 把 dhv-ts 的 python 产物带到 ruff 全绿；本批按工具链推进到
