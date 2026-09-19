@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## v0.2.68（2026-09-18）—— 诊断码三处分歧对齐（#18：双端码集合一致 + 豁免清零）
+
+issue #18 实录：conformance 第 7 段「诊断码集合一致性」暴露三处已知豁免 ——
+同一错误双端报不同的码（或在不同检查层拦截）。本批逐项对齐并以
+**guide 第十章码表为单一事实来源**；三个语料移除 codes-exempt 后
+`bash tests/run_conformance.sh` 7 段全过、**⊘ 豁免数 0**（100/100）。
+
+**三处对齐**：
+
+- **E-1（顶层重名）**：dhv 此前用 `NameResolution("E1")` 拼接渲染为
+  `M-E1`（模块域前缀），dhv-ts 报 `E-1`。码表（guide 第十章 L/E/R 节）：
+  `E-1 | check | 重复定义顶层项` —— **dhv 去域前缀**：`DiagCode` 新增
+  `Duplicate` 族渲染 `E-{id}`，M- 前缀拼接不再用于重复定义语义。
+- **L-12（\u{...} 码点越域）**：dhv 此前在 pest 文法层拒绝 → 通用
+  `E0001`；dhv-ts 在 lexer 层报 `E-0`。对齐方向（issue 指定）：**两端
+  lexer 层以 L-12 专用码拦截** —— dhv escape 文法放宽为「{ 内任意内容到
+  首个 }」，码点域校验（纯十六进制 + ≤ 0x10FFFF）移入 parser 词法域扫描
+  （`scan_unicode_escapes`，遍历 pair 树定位全部 string/char 字面量）；
+  dhv-ts `LexError` 增设可选 `code`，`\u` 域违例（非十六进制 / 超上限）
+  携带 `L-12` 渲染。判定口径双端逐位对齐：空/非十六进制 → 「必须是
+  十六进制」；纯十六进制但越域（含超 u32 容量）→ 「超出上限」。
+  v0.2.56 L-12 教训语义不变（非法转义仍是硬错误，无静默值损坏），
+  只是拦截码从通用升级为专用。
+- **P-5（未知规则类型）**：dhv parser 文法层 `item_kind` 封闭枚举拒绝
+  裸规则名（`widget -> ...`）→ `E0001`；dhv-ts parser 收下、checker 语义层
+  报 `P-5`。对齐方向（issue 推荐 + BNF §3.4 R4「未知类型 → P5」）：
+  **都接受 → 语义层 P-5** —— dhv `rules_item` 文法放宽为
+  `rule_kind = { item_kind | identifier }`，未知类型由 typecheck 既有的
+  KNOWN 表拦截（P-5），保持语义检查层价值。BNF §3.4 同步：`RulesItem
+  ::= RuleKind "->" ...` + `RuleKind ::= ItemKind | Identifier`。
+
+**文档联动**：BNF §1.5 Escape 修正陈旧的 `\u{...}` 产生式（旧文仍容忍
+下划线，与 v0.2.56 L-12 双端拒绝实况相悖）；§3.4 RuleKind 成文；
+guide 第十章码表补 P-5 与 L-12 两行（E-1 原本即码表口径，dhv 侧归位）；
+`guide/BNF-v1.5.0.md` 镜像逐字节同步（spec-sync 守卫口径）。
+
+**已知残差（诚实边界，均无语料覆盖、结论级仍一致）**：`\u` 缺 `{`
+（dhv `E0001` vs dhv-ts `E-0`）；rules 规则类型为非 item_kind 关键字
+（如 `let`，dhv `E0001` vs dhv-ts `P-5`，BNF 文法按 `ItemKind |
+Identifier` 收紧故 dhv 行为即规范行为）。
+
+**测试**：conformance 100/100（7 段全过、⊘=0，三个语料豁免解除）；
+`cargo test` 15/15；`run-all` 194/194（含 ruff 门禁双车道）；IDE 校验
+全过；值级 unicode 边界语料（`\u{41}bc` / `\u{10FFFF}` 等）双端值不变。
+
 ## v0.2.67（2026-09-18）—— S-19 方法面收紧（#13 check/run 对齐）+ Vec 迭代器协议三件套
 
 issue #13 实录：`s.as_bytes()` / `s.substring(a, b)` 双端 check 0 error 通过、

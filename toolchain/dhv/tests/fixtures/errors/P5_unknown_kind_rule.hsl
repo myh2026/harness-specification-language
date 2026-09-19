@@ -1,5 +1,6 @@
 // 期望 P5：未知规则类型（R4）。
-// conformance: codes-exempt —— rust parse 层拦（E0001），ts check 层拦（P-5）：层级差异，见 issues/03
+// v0.2.68（issue #18）：rust parser 放宽 rules 规则类型（item_kind | identifier），
+// 未知类型归 R4 语义层拦截（双端 check 层同码 P-5），豁免解除。
 
 project {
     rules {

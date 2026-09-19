@@ -130,7 +130,7 @@ StringLiteral    ::= '"' (StringChar | Escape)* '"'
 StringChar       ::= 除 '"'、"\\"、NEWLINE 外的任意 Unicode 字符
 Escape           ::= "\\n" | "\\r" | "\\t" | "\\\\" | "\\0"
                  |  "\\x" HEX_DIGIT HEX_DIGIT
-                 |  "\\u{" (HEX_DIGIT | "_")+ (lookahead(!" "_or_empty) "}")   (* \u{1F600} *)
+                 |  "\\u{" HEX_DIGIT+ "}"   (* \u{1F600}；v0.2.56 L-12 起不含下划线；码点域（≤ 0x10FFFF）违例由词法层拦截 → 诊断 L-12，v0.2.68 / issue #18 起双端同码同层 *)
                  |  "\\'" | "\\\""
 
 RawStringLiteral ::= "r" HASH* '"' RawStringChar* '"' HASH*
@@ -655,7 +655,8 @@ ProjectionTarget ::= PathInExpr                             (* 指向本文件�
 
 (* —— v1.5 新增：投射规则组 —— *)
 RulesBlock       ::= "rules" "{" RulesItem* "}"
-RulesItem        ::= ItemKind "->" PathTemplate ":" LangIdent ","?
+RulesItem        ::= RuleKind "->" PathTemplate ":" LangIdent ","?
+RuleKind         ::= ItemKind | Identifier   (* v0.2.68 / issue #18：语法层宽松 —— 未知类型不于文法层拒绝，域校验归 R4 → P5（双端 parser 对齐） *)
 ItemKind         ::= "graph" | "fn" | "struct" | "enum" | "trait"
                   |  "const" | "type" | "block" | "static"
 PathTemplate     ::= StringLiteral                           (* 唯一占位符 {name} *)

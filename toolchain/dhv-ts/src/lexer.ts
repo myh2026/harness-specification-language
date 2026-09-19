@@ -88,8 +88,10 @@ function isHex(c: string): boolean {
   return /[0-9a-fA-F]/.test(c);
 }
 
+// v0.2.68 L-12（issue #18）：\u{...} 词法域违例带专用码 —— 与 dhv parser 词法层
+// 扫描同码同层（其余 LexError 仍报通用 E-0，与 rust 通用 E0001 对应）。
 export class LexError extends Error {
-  constructor(msg: string, public line: number, public col: number) {
+  constructor(msg: string, public line: number, public col: number, public code?: string) {
     super(`${msg} (line ${line}, col ${col})`);
   }
 }
@@ -371,12 +373,13 @@ export class Lexer {
         this.advance();
         // v0.2.56 L-12 对齐：pest 已收紧码点域（1-6 位 hex、无下划线、≤ 0x10FFFF）。
         // 此前 ts 容忍下划线（\u{_4_1_}）而 dhv 拒绝 —— 双端口径统一为严格式。
+        // v0.2.68（issue #18）：域违例升专用码 L-12（与 dhv 词法域扫描同码同层）。
         if (h.length === 0 || /[^0-9a-fA-F]/.test(h)) {
-          throw new LexError(`\\u{${h}} 转义必须是 1-6 位十六进制（不含下划线）`, this.line, this.col);
+          throw new LexError(`\\u{${h}} 转义必须是 1-6 位十六进制（不含下划线）`, this.line, this.col, 'L-12');
         }
         const cp = parseInt(h, 16);
         if (cp > 0x10ffff) {
-          throw new LexError(`\\u{${h}} 超出 Unicode 标量值上限 0x10FFFF`, this.line, this.col);
+          throw new LexError(`\\u{${h}} 超出 Unicode 标量值上限 0x10FFFF`, this.line, this.col, 'L-12');
         }
         return String.fromCodePoint(cp);
       }

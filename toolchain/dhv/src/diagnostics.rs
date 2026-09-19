@@ -39,6 +39,11 @@ pub enum DiagCode {
     NativeSafety(&'static str),
     /// M1-M5 名字解析（BNF §5.8）
     NameResolution(&'static str),
+    /// E-1 重复定义族（guide 第十章 L/E/R 码表；issue #18 对齐：此前误用
+    /// NameResolution("E1") 拼接出 M-E1，与 dhv-ts 的 E-1 跨端不同构）
+    Duplicate(&'static str),
+    /// 词法域字面量校验（L-12：\u{...} 码点越域等；issue #18 —— 双端 lexer 层同码）
+    LexLiteral(&'static str),
     /// 类型检查（通用）
     Type,
     /// Lint（三层 Lint 的第一层：HSL 原生）
@@ -57,6 +62,8 @@ impl DiagCode {
             DiagCode::Projection(id) => format!("P-{id}"),
             DiagCode::NativeSafety(id) => format!("N-{id}"),
             DiagCode::NameResolution(id) => format!("M-{id}"),
+            DiagCode::Duplicate(id) => format!("E-{id}"),
+            DiagCode::LexLiteral(id) => format!("L-{id}"),
             DiagCode::Type => "E0100".into(),
             DiagCode::Lint(id) => format!("L-{id}"),
             DiagCode::Codegen => "E0900".into(),

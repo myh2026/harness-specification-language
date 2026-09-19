@@ -3107,6 +3107,7 @@ dhv Rust 编译器实现；dhv-ts 在运行期强制 S-1/S-4/S-6。
 | P-2 | error/warn | 同一物理路径冲突 | 两项投射到同一路径不同语言 | 拆路径 |
 | P-3 | error | 投射目标未定义（或未 import） | `Missing -> "x.py" : python` | 定义项或补 import |
 | P-4 | error | 投射语言不合法 | block 投到 rust；fn 投到 cobol | block→静态格式；代码项→注册表语言 |
+| P-5 | error | 投射规则组校验（rules {}，R2/R3/R4）：未知/重复规则类型、非法路径占位符 | `rules { widget -> "x/{n}.rs" : rust }` | 规则类型限 9 种注册类型；占位符 v1 仅 `{name}` |
 | P-6 | warning | scale 不在含 graph 的入口文件 | `scale = microkernel;` 在纯类型文件 | 移到入口 |
 
 P-4 的真实报错（含完整注册表提示）：
@@ -3135,6 +3136,7 @@ error[P-4]: 静态资源 cfg 只能投射到 yaml/markdown/json/toml/ini/xml（�
 |:---|:---|:---|:---|:---|
 | E-0 / L-0 | check/run | 链接失败：import 路径不存在 | `import { X } from "./no-such.hsl";` | 修路径 |
 | E-1 | check | 重复定义顶层项 | 两个 `fn dup()` | 改名 |
+| L-12 | check（词法层） | `\u{...}` 转义码点越域：非十六进制 / 超出 Unicode 标量值上限 0x10FFFF（v0.2.68 / issue #18：双端 lexer 层同码拦截，此前 dhv 报通用 E0001、dhv-ts 报 E-0） | `"\u{110000}"` | 用合法码点（≤ 0x10FFFF） |
 | E-2 | check | 调用未定义的函数 / std 导入名不存在（v0.2.51） | `sort_desc(...)`（漏 import） | 补 import 或修拼写；单段路径调用才检查，局部绑定与两段路径豁免 |
 | R-1 | run | 入口文件没有 fn main | 只有 `fn not_main()` | 补 `fn main()` |
 
