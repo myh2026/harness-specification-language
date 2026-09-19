@@ -1,0 +1,14 @@
+// 回归锁定 S19（#13）：无注解绑定的初始化器推断 + 字面量接收者 ——
+// `let s = "hello"; s.substring(1, 2)`（字面量推断）与 `"abc".as_bytes()`
+//（字面量接收者）此前均绕过「注解口径」的旧检查。v0.2.67 起推断口径生效；
+// 多字符字面量直呼 char 方法（"abc".is_alphabetic()，运行期 char 回退面
+// 按 UTF-16 长度 ≤1 判定）同样 check 即拦。
+
+fn main() -> i64 {
+    let s = "hello world";
+    let sub = s.substring(0, 5);
+    let b = "abc".as_bytes();
+    let alpha = "abc".is_alphabetic();
+    println!("{} {} {}", sub, b, alpha);
+    0
+}

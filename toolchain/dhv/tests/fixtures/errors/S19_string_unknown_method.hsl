@@ -1,0 +1,17 @@
+// 回归锁定 S19（issue #13 原始复现）：内建值类型方法面白名单 —— 双端 dhv/dhv-ts
+// 此前对未知方法放行（`s.as_bytes()` / `s.substring(a, b)` check 0 error 通过），
+// dhv-ts run 运行期才报「String 没有方法 "as_bytes"」。v0.2.67 起 S-19 升级为
+// error：接收者静态类型可判（let 注解 / fn 参数注解）且方法不在运行期方法面
+//（与 interp builtinMethodFor 同表）→ check 期即拦截，双端一致。
+// 覆盖面：let 注解绑定（substring）+ fn 参数注解（as_bytes）。
+
+fn probe(s: String) -> i64 {
+    let b = s.as_bytes();
+    b.len()
+}
+
+fn main() -> i64 {
+    let s: String = String::from("hello world");
+    let sub = s.substring(0, 5);
+    probe(s) + sub.len()
+}

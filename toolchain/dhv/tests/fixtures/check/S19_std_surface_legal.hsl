@@ -1,0 +1,30 @@
+// 回归锁定 S19 零误报面（#13）：正牌方法族的合法使用必须全绿 —— 注解绑定 /
+// fn 参数注解 / 链式返回类型追踪（split→Vec→join、find→Option→unwrap_or、
+// parse→Result→is_ok、chars→take→collect::<String>）/ HashMap get→Option→
+// cloned / 重赋值更新推断事实（先 Vec 后 String）/ 多字符字面量调 String
+// 方法。双端必须 0 error、0 S-19 告警。
+
+fn greet(who: String) -> String {
+    let shouted = who.to_uppercase();
+    shouted.trim()
+}
+
+fn main() -> i64 {
+    let a = "a,b".split(",").join("-");
+    let b = "x".find("x").unwrap_or(-1);
+    let c = "3".parse::<i64>().is_ok();
+    let d = "hello".chars().take(2).collect::<String>();
+    let e = "hello".char_at(0).is_alphabetic();
+    let m: HashMap<String, i64> = HashMap::new();
+    let g = m.get("k").cloned();
+    let v: Vec<String> = vec!["a", "b"];
+    let joined = v.iter().take(1).collect::<Vec<String>>();
+    let s2 = String::from("hi");
+    let t = s2.trim().to_uppercase();
+    let mut parts = "a,b".split(",");
+    parts = "c";
+    let n = parts.len();
+    let r = greet(String::from("world"));
+    println!("{} {} {} {} {} {} {} {} {} {}", a, b, c, d, e, g.is_none(), joined.len(), t, n, r.len());
+    0
+}

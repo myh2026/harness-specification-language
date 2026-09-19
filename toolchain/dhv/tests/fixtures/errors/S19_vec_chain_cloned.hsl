@@ -1,0 +1,10 @@
+// 回归锁定 S19（issue #13 附带发现）：迭代器适配器链的接收者类型追踪 ——
+// `cs.iter().take(n).cloned().collect()` 此前双端 check 全过、run 崩
+//（Vec 没有 cloned）。链式返回类型静态追踪（chars→Vec / take→Vec）使
+// cloned 的接收者类型可判 → check 期即拦截。正牌写法：chars() 元素已是
+// 值，无需 cloned；或对 Option 接收者用 cloned（OPTION_METHODS 有）。
+
+fn main() -> i64 {
+    let out = "hello".chars().take(2).cloned().collect::<Vec<String>>();
+    out.len()
+}
