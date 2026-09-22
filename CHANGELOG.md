@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## v0.2.70（2026-09-22）—— ML 语料 I：感知器 + KNN 数字识别（四路径对拍）+ f64 整值 const 投射修复
+
+毕业论文「HSL 语言作为一等公民实现机器学习算法」语料落地：新增
+`fixtures/ml/digit-recognizer.hsl`（+ `fixtures/ml/README.md`）—— 5×5 位图
+数字（0/1/8）识别，数据集内嵌（12 训练 + 6 测试，含对抗性 1 像素噪声变体），
+**全程无 native 块**，与 org 仓 `fixtures/turing/` 同哲学：
+
+- **KNN**（k=3，欧氏距离，多数投票）：平方距离手写循环；3 近邻表保序插入
+  维护（不依赖 sort_by，规避后端排序实现差异）；平票按类序确定性破平；
+- **感知器**（is-8 二分类，margin 变体）：`w ∈ R^26`（`[0.0; 26]` 数组重复
+  字面量初始化），更新条件 `y·score < 1.0`（经典条件的间隔推广，保证测试
+  样本决策余量），lr=0.1、上限 30 轮、收敛即停；输出轮数 / 更新数 /
+  `||w||` / 逐样本得分；
+- **四路径对拍全绿**：check 0 错 → run 黄金输出 42 行 → emit python 经
+  ruff 0.16 全绿 + `python3` 真实运行逐行一致 → emit rust 经 `rustc` 真实
+  编译运行逐行一致（`KNN acc=6/6, Perceptron acc=6/6`）。跨后端确定性前提：
+  训练/推理全为 IEEE 754 double 加/乘（三运行时逐位一致），仅展示用开方走
+  `{:.3}/{:.4}` 定点打印。
+
+**修复（ML 语料对拍驱动）**：`const MARGIN: f64 = 1.0` 这类 **f64 整值
+const 字面量**，dhv-ts `exprLitText`（backends/decls.ts）经 `String(v)` 归一
+成 `1` → rust 后端产出 `pub const MARGIN: f64 = 1;` 触发 rustc E0308
+（mismatched types；emit 语法校验是启发式，拦不住）。dhv（Rust）侧用
+`lit.raw` 保留 `1.0`，双端本就分歧 —— dhv-ts 侧对齐：无 `.`/`e` 的浮点
+表示补 `.0` 后缀（`LitVal` 不存原文，parser 只保留数值）。
+
+**已知边界（诚实记录，非本批引入）**：dhv（Rust）对 `project{}` 强制
+P-2 物理路径唯一（一项一文件），dhv-ts 允许多项投射同一文件 —— org 图灵
+语料（rule110 / busy-beaver / bf）与本 ML 语料均采用多项单文件形态
+（rust 单文件可 rustc 直编），走 dhv-ts 车道；`dhv check` 报 22 × P-P2
+（仅此一类，无 S/G/N 违规）。
+
+**版本卫生**：v0.2.69 只 bump 了 dhv-ts（0.2.69），dhv `Cargo.toml` 停在
+0.2.68，CI version-sync 守卫处于必红状态 —— 本批双端对齐 bump 到 0.2.70
+（README「当前版本」同步）。
+
+**测试**：`tests/hsl/run-all.ts` 201/201；`tests/run_emit_conformance.ts`
+6/6；`bash tests/run_conformance.sh` 108/108（dhv 侧 cargo build 后全过）；
+`scripts/ruff-gate.ts --ts-only` 4 语料全绿；ML 语料四路径手工对拍实录见
+`fixtures/ml/README.md`。
+
 ## v0.2.69（2026-09-19）—— 推理型模型预算适配：观测记忆 + 空补全升档重试（B-24）
 
 实测（org 真实车道，deepseek-flash）：工具环任务触发长思考时

@@ -2064,7 +2064,16 @@ function microkernelScaffold(p: P, name: string, nodes: A.NodeDecl[]): string[] 
 
 function exprLitText(e: A.Expr): string | undefined {
   if (e.kind === 'lit') {
-    if (e.lit.t === 'int' || e.lit.t === 'float') return String(e.lit.v);
+    if (e.lit.t === 'int') return String(e.lit.v);
+    // v0.2.70（ML 语料对拍驱动）：f64 整值 const 字面量（如 `1.0`）此前经
+    // String(v) 归一为 `1`，rust 后端 `pub const M: f64 = 1;` 触发 rustc
+    // E0308（mismatched types）。dhv（Rust）侧用 lit.raw 保留 `1.0` ——
+    // 双端对齐：无 `.`/`e` 的浮点表示补 `.0` 后缀（LitVal 不存原文，
+    // dhv-ts parser 只保留数值）。
+    if (e.lit.t === 'float') {
+      const s = String(e.lit.v);
+      return /[.eE]/.test(s) ? s : s + '.0';
+    }
     if (e.lit.t === 'bool') return e.lit.v ? 'true' : 'false';
     if (e.lit.t === 'str') return JSON.stringify(e.lit.v);
   }

@@ -1,0 +1,338 @@
+// ============================================================================
+// fixtures/ml/digit-recognizer.hsl — HSL 机器识别 I：KNN + 感知器数字识别
+// ----------------------------------------------------------------------------
+// 毕业论文「HSL 语言作为一等公民实现机器学习算法」的语料：用纯 HSL 原语
+// （Vec/f64/match/for/while/format!）实现两个经典机器学习算法，在 5×5 位图
+// 数字数据集上完成训练与推理 —— 不是让 LLM 生成代码，而是 HSL 语言本身
+// 承载数据解析、距离度量、参数化训练循环与结构化评估输出。
+//
+// 数据集：0/1/8 三个易区分数字的 5×5 位图（每样本一串 25 字符，行优先，
+// '#'=1.0 / '.'=0.0，解析成 25 维特征向量）。
+//   训练 12 样本 = 每类 4 变体（基准形 + 1 像素噪声变体，含对抗性噪声：
+//   0 的中心填点使其向 8 靠近，逼迫 KNN 依赖多像素证据而非单点）；
+//   测试 6 样本 = 每类 2 变体（2 像素噪声，全部不出训练集）。
+//
+// 算法一 KNN：欧氏距离（手写平方距离循环，开方仅用于展示）+ k=3 近邻
+//   多数投票（保序插入维护 3 槽近邻表 —— 纯手写，无 sort_by 依赖）；
+//   平票按类序 0<1<8 确定性破平。
+// 算法二 感知器：is-8 二分类（+1/-1 标签），margin 变体更新条件
+//   y·score < margin（经典感知器 y·score ≤ 0 的推广），学习率 0.1，
+//   上限 30 轮，全部训练样本达 margin 后提前收敛。输出实际轮数、
+//   累计更新次数、最终权重 L2 范数与逐测试样本得分。
+//
+// 跨后端确定性说明（四路径对拍的前提）：所有运算为 IEEE 754 double 的
+// 加/乘（无超越函数参与训练），JS/Python/Rust 三运行时逐位一致；仅展示
+// 用开方按 {:.3}/{:.4} 定点打印，屏蔽后端 sqrt 实现的 1 ulp 差异。
+//
+// 全程无 native 块（与 fixtures/turing/ 同哲学 —— 语言能力展示）。
+//
+// 运行：cd toolchain && bun dhv-ts/src/main.ts run ../fixtures/ml/digit-recognizer.hsl --quiet
+// ============================================================================
+
+/// KNN 近邻数。
+const K: i32 = 3;
+/// 感知器学习率。
+const LR: f64 = 0.1;
+/// 感知器间隔（margin 变体：y·score < margin 即更新）。
+const MARGIN: f64 = 1.0;
+/// 感知器训练轮数上限。
+const EPOCHS: i32 = 30;
+
+/// '#'-'.' 位图（25 字符，行优先）→ 25 维 {0.0, 1.0} 特征向量。
+fn parse_bitmap(bits: String) -> Vec<f64> {
+    let mut v: Vec<f64> = vec![];
+    for i in 0..bits.len() {
+        if bits.char_at(i) == "#" {
+            v.push(1.0);
+        } else {
+            v.push(0.0);
+        }
+    }
+    v
+}
+
+/// 位图 → "row0/row1/row2/row3/row4" 单行文本（数据集自描述渲染）。
+fn bitmap_text(bits: String) -> String {
+    let mut out: String = String::from("");
+    for i in 0..bits.len() {
+        let ch: String = bits.char_at(i);
+        if i == 0 {
+            out = ch;
+        } else {
+            if i % 5 == 0 {
+                out = format!("{}/{}", out, ch);
+            } else {
+                out = format!("{}{}", out, ch);
+            }
+        }
+    }
+    out
+}
+
+/// 类别标签 → 数字名（match 字面量模式）。
+fn digit_name(label: i32) -> String {
+    match label {
+        0 => String::from("0"),
+        1 => String::from("1"),
+        8 => String::from("8"),
+        _ => String::from("?"),
+    }
+}
+
+/// 欧氏距离的平方：Σ (a[i]-b[i])²。{0,1} 特征下为精确整数和，
+/// 排序等价于欧氏距离；开方仅在展示时做。
+fn dist_sq(a: Vec<f64>, b: Vec<f64>) -> f64 {
+    let mut s: f64 = 0.0;
+    for i in 0..a.len() {
+        let d: f64 = a[i] - b[i];
+        s = s + d * d;
+    }
+    s
+}
+
+/// 算法一 KNN 测试回路：逐测试样本打印诊断行（真实/预测标签、3 近邻
+/// 欧氏距离、✓/✗），返回正确样本数。
+///
+/// 近邻表用 3 槽保序插入维护（严格小于才前插 —— 同距时先到者胜，
+/// 与稳定排序语义一致）；投票平票按类序 0<1<8 破平，全程确定性。
+fn knn_test_loop(train_x: Vec<Vec<f64>>, train_y: Vec<i32>, test_x: Vec<Vec<f64>>, test_y: Vec<i32>) -> i32 {
+    let classes: Vec<i32> = vec![0, 1, 8];
+    let mut correct: i32 = 0;
+    for t in 0..test_x.len() {
+        let probe: Vec<f64> = test_x[t].clone();
+        // 3 槽近邻表（保序插入，dist_sq 单调保序）
+        let mut best_d: Vec<f64> = vec![999.0, 999.0, 999.0];
+        let mut best_y: Vec<i32> = vec![-1, -1, -1];
+        for s in 0..train_x.len() {
+            let d: f64 = dist_sq(train_x[s].clone(), probe.clone());
+            if d < best_d[0] {
+                best_d[2] = best_d[1];
+                best_y[2] = best_y[1];
+                best_d[1] = best_d[0];
+                best_y[1] = best_y[0];
+                best_d[0] = d;
+                best_y[0] = train_y[s];
+            } else {
+                if d < best_d[1] {
+                    best_d[2] = best_d[1];
+                    best_y[2] = best_y[1];
+                    best_d[1] = d;
+                    best_y[1] = train_y[s];
+                } else {
+                    if d < best_d[2] {
+                        best_d[2] = d;
+                        best_y[2] = train_y[s];
+                    }
+                }
+            }
+        }
+        // 多数投票（平票按类序破平）
+        let mut pred: i32 = -1;
+        let mut best_votes: i32 = -1;
+        for c in 0..classes.len() {
+            let mut votes: i32 = 0;
+            for b in 0..best_y.len() {
+                if best_y[b] == classes[c] {
+                    votes = votes + 1;
+                }
+            }
+            if votes > best_votes {
+                best_votes = votes;
+                pred = classes[c];
+            }
+        }
+        // 诊断行（开方仅展示用）
+        let mut mark: String = String::from("✗");
+        if pred == test_y[t] {
+            mark = String::from("✓");
+            correct = correct + 1;
+        }
+        println!(
+            "test {}: true={} pred={} nn=[{:.3} {:.3} {:.3}] {}",
+            t + 1,
+            digit_name(test_y[t]),
+            digit_name(pred),
+            best_d[0].sqrt(),
+            best_d[1].sqrt(),
+            best_d[2].sqrt(),
+            mark
+        );
+    }
+    correct
+}
+
+/// 算法二 感知器训练（margin 变体）：w ∈ R^26（25 权重 + 偏置在下标 25），
+/// 标签 is-8 → +1.0 / 其余 → -1.0。收敛（一轮零更新）即提前停。
+/// 打印训练统计行，返回最终权重。
+fn train_perceptron(train_x: Vec<Vec<f64>>, train_y: Vec<i32>) -> Vec<f64> {
+    let mut w: Vec<f64> = [0.0; 26];
+    let mut updates: i32 = 0;
+    let mut used_epochs: i32 = 0;
+    for _e in 0..EPOCHS {
+        used_epochs = used_epochs + 1;
+        let mut epoch_updates: i32 = 0;
+        for s in 0..train_x.len() {
+            // score = w·x + b（偏置先行，与测试回路同序 —— 跨后端逐位一致）
+            let mut score: f64 = w[25];
+            for i in 0..25 {
+                score = score + w[i] * train_x[s][i];
+            }
+            // is-8 → +1，其余 → -1
+            let mut y: f64 = -1.0;
+            if train_y[s] == 8 {
+                y = 1.0;
+            }
+            // margin 更新条件：y·score < MARGIN（经典条件 y·score ≤ 0 的推广）
+            if y * score < MARGIN {
+                for i in 0..25 {
+                    w[i] = w[i] + LR * y * train_x[s][i];
+                }
+                w[25] = w[25] + LR * y;
+                epoch_updates = epoch_updates + 1;
+            }
+        }
+        updates = updates + epoch_updates;
+        if epoch_updates == 0 {
+            break;
+        }
+    }
+    // 权重 L2 范数（开方仅展示用，{:.4} 定点打印）
+    let mut norm_sq: f64 = 0.0;
+    for i in 0..w.len() {
+        norm_sq = norm_sq + w[i] * w[i];
+    }
+    println!("trained: epochs={}/{} updates={} ||w||={:.4}", used_epochs, EPOCHS, updates, norm_sq.sqrt());
+    w
+}
+
+/// 算法二 感知器测试回路：逐测试样本打印真实/预测二分类标签与得分，
+/// 返回正确样本数。score > 0 → is-8。
+fn perceptron_test_loop(w: Vec<f64>, test_x: Vec<Vec<f64>>, test_y: Vec<i32>) -> i32 {
+    let mut correct: i32 = 0;
+    for t in 0..test_x.len() {
+        let mut score: f64 = w[25];
+        for i in 0..25 {
+            score = score + w[i] * test_x[t][i];
+        }
+        let mut pred: String = String::from("not8");
+        if score > 0.0 {
+            pred = String::from("is8");
+        }
+        let mut truth: String = String::from("not8");
+        if test_y[t] == 8 {
+            truth = String::from("is8");
+        }
+        let mut mark: String = String::from("✗");
+        if pred == truth {
+            mark = String::from("✓");
+            correct = correct + 1;
+        }
+        println!("test {}: true={} pred={} score={:.3} {}", t + 1, truth, pred, score, mark);
+    }
+    correct
+}
+
+/// 入口：数据集内嵌 → 解析 → 渲染 → 两算法训练/推理 → 汇总。
+export fn main() -> i32 {
+    // ---- 训练集（12 = 3 类 × 4 变体；每行 5 字符 × 5 行 = 25 字符）----
+    // 0 基准外环 / +中心点(对抗：向 8 靠近) / -顶边点 / -底边点
+    // 1 基准竖笔+底横 / +左上缀 / -底横右端 / +笔画右侧
+    // 8 基准双环 / -中横点 / -底横点 / +上环内点
+    let train_bits: Vec<String> = vec![
+        String::from(".###.#...##...##...#.###."),
+        String::from(".###.#...##.#.##...#.###."),
+        String::from(".##..#...##...##...#.###."),
+        String::from(".###.#...##...##...#..##."),
+        String::from("..#....#....#....#...###."),
+        String::from("..#...##....#....#...###."),
+        String::from("..#....#....#....#...##.."),
+        String::from("..#....#....##...#...###."),
+        String::from(".###.#...#.###.#...#.###."),
+        String::from(".###.#...#.#.#.#...#.###."),
+        String::from(".###.#...#.###.#...#.#.#."),
+        String::from(".###.##..#.###.#...#.###."),
+    ];
+    let train_y: Vec<i32> = vec![0, 0, 0, 0, 1, 1, 1, 1, 8, 8, 8, 8];
+
+    // ---- 测试集（6 = 3 类 × 2 变体；每样本 2 像素噪声，均不出训练集）----
+    let test_bits: Vec<String> = vec![
+        String::from(".###.#...##...#....#..##."),
+        String::from(".###.#..###.#.##...#.###."),
+        String::from(".##....#....#....#...##.."),
+        String::from("..#....#...##....##..###."),
+        String::from(".###.#...#.#.#.#.#.#.###."),
+        String::from(".##..#...#.###.#...#.#.#."),
+    ];
+    let test_y: Vec<i32> = vec![0, 0, 1, 1, 8, 8];
+
+    // ---- 解析（字符串编码 → 25 维特征向量）----
+    let mut train_x: Vec<Vec<f64>> = vec![];
+    for s in 0..train_bits.len() {
+        train_x.push(parse_bitmap(train_bits[s].clone()));
+    }
+    let mut test_x: Vec<Vec<f64>> = vec![];
+    for t in 0..test_bits.len() {
+        test_x.push(parse_bitmap(test_bits[t].clone()));
+    }
+
+    println!("=== HSL 机器识别：5x5 位图数字（0/1/8）===");
+    println!("数据集：训练 {} 样本（每类 4 变体，含 1 像素噪声） · 测试 {} 样本（每类 2 变体，2 像素噪声）", train_x.len(), test_x.len());
+    println!("--- 训练集 ---");
+    for s in 0..train_bits.len() {
+        println!("train {}: label={} {}", s + 1, digit_name(train_y[s]), bitmap_text(train_bits[s].clone()));
+    }
+    println!("--- 测试集 ---");
+    for t in 0..test_bits.len() {
+        println!("test {}: label={} {}", t + 1, digit_name(test_y[t]), bitmap_text(test_bits[t].clone()));
+    }
+
+    // ---- 算法一：KNN ----
+    println!("--- 算法一：KNN（k={}，欧氏距离，多数投票）---", K);
+    let knn_ok: i32 = knn_test_loop(train_x.clone(), train_y.clone(), test_x.clone(), test_y.clone());
+    println!("KNN acc={}/{}", knn_ok, test_x.len());
+
+    // ---- 算法二：感知器（is-8 二分类）----
+    println!("--- 算法二：感知器（is-8 二分类，margin={:.1}，lr={:.1}）---", MARGIN, LR);
+    let w: Vec<f64> = train_perceptron(train_x.clone(), train_y.clone());
+    let perc_ok: i32 = perceptron_test_loop(w, test_x.clone(), test_y.clone());
+    println!("Perceptron acc={}/{}", perc_ok, test_x.len());
+
+    // ---- 汇总（机器自查断言写进输出，测试端双重核对）----
+    println!("=== 汇总 ===");
+    println!("KNN acc={}/{}, Perceptron acc={}/{}", knn_ok, test_x.len(), perc_ok, test_x.len());
+    if knn_ok == test_x.len() as i32 && perc_ok == test_x.len() as i32 {
+        println!("ML VERIFIED: KNN + perceptron both {} / {} on 5x5 digit bitmaps", knn_ok, test_x.len());
+    } else {
+        println!("ML MISMATCH: expected full accuracy");
+    }
+    0
+}
+
+project {
+    // python：全量单文件（对拍 + ruff 门禁）
+    K          -> "digit_recognizer.py" : python,
+    LR         -> "digit_recognizer.py" : python,
+    MARGIN     -> "digit_recognizer.py" : python,
+    EPOCHS     -> "digit_recognizer.py" : python,
+    parse_bitmap -> "digit_recognizer.py" : python,
+    bitmap_text  -> "digit_recognizer.py" : python,
+    digit_name   -> "digit_recognizer.py" : python,
+    dist_sq      -> "digit_recognizer.py" : python,
+    knn_test_loop -> "digit_recognizer.py" : python,
+    train_perceptron -> "digit_recognizer.py" : python,
+    perceptron_test_loop -> "digit_recognizer.py" : python,
+    main -> "digit_recognizer.py" : python,
+    // rust：单文件（rustc 单文件编译运行对拍）
+    K          -> "digit_recognizer.rs" : rust,
+    LR         -> "digit_recognizer.rs" : rust,
+    MARGIN     -> "digit_recognizer.rs" : rust,
+    EPOCHS     -> "digit_recognizer.rs" : rust,
+    parse_bitmap -> "digit_recognizer.rs" : rust,
+    bitmap_text  -> "digit_recognizer.rs" : rust,
+    digit_name   -> "digit_recognizer.rs" : rust,
+    dist_sq      -> "digit_recognizer.rs" : rust,
+    knn_test_loop -> "digit_recognizer.rs" : rust,
+    train_perceptron -> "digit_recognizer.rs" : rust,
+    perceptron_test_loop -> "digit_recognizer.rs" : rust,
+    main -> "digit_recognizer.rs" : rust,
+}
