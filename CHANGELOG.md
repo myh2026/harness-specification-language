@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## v0.2.69（2026-09-19）—— 推理型模型预算适配：观测记忆 + 空补全升档重试（B-24）
+
+实测（org 真实车道，deepseek-flash）：工具环任务触发长思考时
+completion_tokens=8191 全部是 reasoning_tokens、content 零字符 ——
+流被长度截断，用户看到 `empty completion (finish_reason=stream…)`
+硬错误，推理型模型在长任务上不可用。
+
+**修复（`host.ts` llmComplete 网关车道，多重优雅降级四层）**：
+
+- **① 观测**：两网关车道（流式/非流式）把 reasoning 需求回报 Host ——
+  失败路径（空补全抛错前）与成功路径（usage.completion_tokens_details
+  .reasoning_tokens / reasoning_chars÷3 粗估）都计入；
+- **② 记忆**：`llmReasoningFloor`（Host 实例字段）记录本 run 观测峰值，
+  `reasoningBoosted` 把后续请求的 maxTokens 下限抬到
+  `min(峰值×2+4096, 32768)` —— 同一 run 不再逐请求重踩；
+- **③ 重试**：空补全且推理耗尽型（finish_reason=length 或
+  reasoning_chars>0）→ `retryWithReasoningBudget` 按观测需求升档重试
+  一次（预算已够还空 → 判定非预算问题不重试，诚实抛）；
+- **④ 诚实**：升档后仍空 → 原样抛可诊断错误（v0.2.59 的诊断信息保留）。
+
+**兼容面**：SDK 直连 / scripted / 零外联车道零变化；非推理型模型
+（reasoning 零消耗）零变化（floor 恒 0，boost 是 no-op）；仅网关车道
+介入。dhv（Rust 端）无 LLM 网关，不受影响。
+
 ## v0.2.68（2026-09-18）—— 诊断码三处分歧对齐（#18：双端码集合一致 + 豁免清零）
 
 issue #18 实录：conformance 第 7 段「诊断码集合一致性」暴露三处已知豁免 ——

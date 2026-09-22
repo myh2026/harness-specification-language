@@ -85,6 +85,12 @@ export class Host {
   private zai: unknown = null;
   private fixture: FixtureState | null = null;
   private faultCounts = new Map<string, number>();
+  // 推理型模型预算记忆（v0.2.69，B-24）：本 run 观测到的 reasoning 需求峰值
+  // （tokens 估计）。推理型模型（deepseek-flash / DeepSeek-R 系）reasoning 计入
+  // max_tokens 预算 —— 首次请求预算不足时 content 空、reasoning 吃满；记忆
+  // 峰值后，后续请求 maxTokens 下限自动抬升（观测到的峰值×2 + 4096，cap
+  // 32768），同一 run 不再重复踩坑。零外联/SDK/scripted 车道零影响。
+  private llmReasoningFloor = 0;
   public api: Record<string, unknown>;
 
   constructor(public opts: HostOptions) {
@@ -562,7 +568,17 @@ export class Host {
     // 完整正文，HSL 语义零变化（观测增强，非语义变更）。
     const gateway = (process.env.DHV_LLM_GATEWAY || "").replace(/\/+$/, "");
     if (gateway) {
-      return req.stream ? this.llmViaGatewayStream(gateway, req) : this.llmViaGateway(gateway, req);
+      // 推理预算记忆（v0.2.69）：观测峰值抬升后续请求预算下限
+      const boosted = this.reasoningBoosted(req);
+      try {
+        return await (req.stream ? this.llmViaGatewayStream(gateway, boosted) : this.llmViaGateway(gateway, boosted));
+      } catch (e) {
+        // 空补全升档重试（B-24）：推理耗尽型（finish_reason=length 或
+        // reasoning_chars>0）→ 按观测需求升档重试一次；仍空或非预算型 → 原样抛
+        const bumped = this.retryWithReasoningBudget(boosted, e);
+        if (!bumped) throw e;
+        return await (req.stream ? this.llmViaGatewayStream(gateway, bumped) : this.llmViaGateway(gateway, bumped));
+      }
     }
     // 零外联开关（v0.4.17）：DHV_LLM_DISABLE_SDK=1 时禁用 SDK 直连车道，
     // 显式抛错 —— CI / 离线环境可机械保证「测试零外联」（org 的 scripted
@@ -586,6 +602,45 @@ export class Host {
     });
     const content = completion.choices?.[0]?.message?.content ?? '';
     return content;
+  }
+
+  // ---- 推理型模型预算适配（v0.2.69，B-24） ---------------------------------
+  // 背景（2026-09-19 deepseek-flash 真实车道实测）：工具环任务触发长思考，
+  // completion_tokens=8191 全部是 reasoning_tokens，content 零字符 —— 流被
+  // 长度截断，用户看到 empty completion 硬错误。修复哲学（多重优雅降级）：
+  //   ① 观测：两网关车道把 reasoning 需求（成功与失败路径）回报给 Host；
+  //   ② 记忆：llmReasoningFloor 抬升后续请求的 maxTokens 下限；
+  //   ③ 重试：空补全且推理耗尽型 → 按观测需求升档重试一次（cap 32768）；
+  //   ④ 诚实：升档后仍空（真不是预算问题）→ 原样抛可诊断错误。
+  /** 观测回报：reasoning 需求峰值（tokens 口径）更新记忆。 */
+  private noteReasoningFloor(tokens: number): void {
+    if (Number.isFinite(tokens) && tokens > this.llmReasoningFloor) this.llmReasoningFloor = Math.ceil(tokens);
+  }
+
+  /** 预算抬升：记忆峰值 > 当前请求预算时抬到 min(峰值×2+4096, 32768)。 */
+  private reasoningBoosted<T extends { maxTokens?: number }>(req: T): T {
+    if (this.llmReasoningFloor <= 0) return req;
+    const want = Math.min(this.llmReasoningFloor * 2 + 4096, 32768);
+    if ((req.maxTokens ?? 1024) >= want) return req;
+    return { ...req, maxTokens: want };
+  }
+
+  /** 空补全升档重试决策：推理耗尽型返回升档后的请求，否则 null（不重试）。 */
+  private retryWithReasoningBudget<T extends { maxTokens?: number }>(req: T, e: unknown): T | null {
+    const msg = String((e as { message?: unknown })?.message ?? e);
+    const isLength = msg.includes("finish_reason=length");
+    const reasoningChars = Number((msg.match(/reasoning_chars=(\d+)/) || [])[1] || 0);
+    const reasoningTokens = Number((msg.match(/"reasoning_tokens":(\d+)/) || [])[1] || 0);
+    const completionTokens = Number((msg.match(/"completion_tokens":(\d+)/) || [])[1] || 0);
+    // 字符→token 粗估（中英混合 ~3 字符/token，启发式即可：这是下限抬升不是精确计费）
+    const observed = Math.max(reasoningTokens, Math.ceil(reasoningChars / 3), 0);
+    if (!isLength && observed <= 0) return null;
+    const need = Math.max(observed, completionTokens);
+    if (need <= 0) return null;
+    this.noteReasoningFloor(need);
+    const want = Math.min(need * 2 + 4096, 32768);
+    if ((req.maxTokens ?? 1024) >= want) return null; // 预算已够还空 —— 不是预算问题，诚实抛
+    return { ...req, maxTokens: want };
   }
 
   /**
@@ -646,6 +701,13 @@ export class Host {
         usage?: Record<string, unknown>;
       };
       const content = data.choices?.[0]?.message?.content ?? "";
+      // 观测回报（v0.2.69）：成功路径的 reasoning 需求也计入记忆 —— 首次大
+      // 预算成功的请求，使后续请求保持抬升后的下限（不至于每轮重踩）
+      const usageReasoning = Number(
+        ((data.usage as { completion_tokens_details?: { reasoning_tokens?: number } } | undefined)
+          ?.completion_tokens_details?.reasoning_tokens) ?? 0,
+      );
+      if (usageReasoning > 0) this.noteReasoningFloor(usageReasoning);
       if (content === "") {
         // 空内容的可诊断化（v0.2.59）：推理型模型 reasoning 吃满 max_tokens 时
         // content 空、finish_reason=length —— 此前表现为无信息的 "empty
@@ -784,6 +846,8 @@ export class Host {
         }
       }
       if (content === '') {
+        // 观测回报（v0.2.69）：流式车道的 reasoning 需求（字符→token 粗估）
+        if (reasoningChars > 0) this.noteReasoningFloor(Math.ceil(reasoningChars / 3));
         throw new Error(`empty completion (finish_reason=stream, usage=${usage ? JSON.stringify(usage) : 'n/a'}, reasoning_chars=${reasoningChars})`);
       }
       this.emit('llm_stream_done', {
