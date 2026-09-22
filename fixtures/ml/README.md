@@ -64,7 +64,7 @@ rustc /tmp/ml-emit/digit_recognizer.rs -o /tmp/ml-rs && /tmp/ml-rs
 | c. `emit` → python + ruff 0.16.8 + `python3` | ✅ ruff `All checks passed!`，输出与 b 非空行逐行一致 |
 | d. `emit` → rust + `rustc 1.98.1` 编译运行 | ✅ 编译 0 error（33 条 emitter 风格 warning），输出与 b 非空行逐行一致 |
 
-黄金输出摘要（完整输出见 b 路径）：
+黄金输出摘要（完整 42 行冻结在 [`golden-run.txt`](golden-run.txt)，供四路径重放 diff）：
 
 ```text
 --- 算法一：KNN（k=3，欧氏距离，多数投票）---
