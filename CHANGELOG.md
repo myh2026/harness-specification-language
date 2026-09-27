@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## v0.2.71（2026-09-27）—— issue #23 三层修复：N-6 空分组 check 期拦截 + native 桥构造期兜底 + Ok/Err/Some/None 垫片注入
+
+**根因修正**（issue #23 定性纠偏）：复现报告归因「双参数 native 函数代码
+生成缺陷」——实测逐变量分离：双参数 native 函数（返回裸值）check/run 全通；
+真凶是 `native typescript` 体内 **HSL 单元值习惯写法 `Ok(())` / `Err(())` /
+`Some(())`** 的空分组 `()` 不是合法 JS 表达式，`new Function` **构造期**抛
+SyntaxError，而构造调用在 try/catch 之外（裸穿透，连「native 块执行失败」
+前缀都没有，可诊断性为零）。
+
+三层修复（`toolchain/dhv-ts/src/native.ts` + `src/checker.ts`）：
+
+- **check 期拦截（N-6，双端）**：native typescript/javascript 体词法扫描
+  （字符串/注释剥离 + 箭头函数 `() =>` 白名单），三类非法空分组位置即拦
+  （嵌套 `X(())` / 逗号等号后 `f(x, ())` / `return ()`）。python 体内 `()`
+  是合法空元组，不适用。dhv（Rust）typecheck.rs 同步实现（NativeSafety("6")），
+  conformance §7 诊断码集合一致性依赖双端同码；
+- **运行期兜底（#23 可诊断性）**：`new Function` 构造移入 try —— 构造期
+  SyntaxError 统一包成 `HRuntimeError`，附源码摘录（前 2 非空行）与两大
+  高频成因提示；
+- **垫片注入（DX 层）**：`Ok/Err/Some/None` 垫片注入 native typescript
+  外层函数作用域（产出带 `__enum` 标记的合法 HSL 值，实测 HSL 侧 `match`
+  正确派发 `Err(e)` 载荷）；体内声明可遮蔽（内层 async 域）；被捕获变量
+  同名时跳过注入（捕获优先）。修正后的 #23 原始复现（`return Ok(null)` +
+  `return Err("...")`）check/run 全通。
+
+**顺带修复（双端一致性潜在分歧）**：dhv（Rust）`NativeSafety("N1")` 经
+`format!("N-{id}")` 渲染为 `N-N1`（双前缀），与 dhv-ts 的 `N-1` 不一致 ——
+改为 `NativeSafety("1")`（渲染 `N-1`）。此为 conformance §7 未暴露的潜伏
+分歧（errors/ 语料无 native 未注册语言用例）。
+
+**文档漂移治理（三处口径 + 低报自述）**：根 README 徽章 dhv/dhv-ts
+0.2.68 → 0.2.71、「已发布 v0.2.58」→ v0.2.70；dhv-ts README 横幅 0.2.66
+→ 0.2.71；dhv README 标题「编译器骨架 v0.1.0」→「编译器（Rust 后端）
+v0.2.71」，路线图 P3/P5/P7 由 🟡 骨架升 ✅ full 级（v0.2.64 ruff 全绿 +
+v0.2.66 图灵对拍实录，低报与实际能力不符）。guide/BNF-v1.5.0.md §5.5 码表
+新增 **N6** 行（单一事实源）。
+
+**测试**：`tests/hsl/run-all.ts` +7 用例（208/208）：N-6 正反例（箭头
+白名单 / 字符串注释不误报 / python 豁免）、垫片 Marshal、#23 修正版复现、
+构造期兜底包装；ruff 门禁 4 语料全绿（本地 ruff 0.16.9 实测）。
+
 ## v0.2.70（2026-09-22）—— ML 语料 I：感知器 + KNN 数字识别（四路径对拍）+ f64 整值 const 投射修复
 
 毕业论文「HSL 语言作为一等公民实现机器学习算法」语料落地：新增

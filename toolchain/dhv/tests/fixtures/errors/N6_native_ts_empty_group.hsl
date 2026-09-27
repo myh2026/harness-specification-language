@@ -1,0 +1,20 @@
+// 回归锁定 N6（issue #23 原始复现形态）：native typescript 体内 HSL 单元值
+// 习惯写法 Ok(()) —— 空分组 "()" 不是合法 JS 表达式。v0.2.70 及此前：
+// check 全过 / run 期 new Function 构造抛 SyntaxError 裸穿透（"Unexpected
+// token ')'"，无「native 块执行失败」前缀，可诊断性为零）。v0.2.71 起
+// check 期词法扫描即拦（字符串/注释剥离 + 箭头函数 () => 白名单），双端
+// 一致（dhv Rust typecheck.rs + dhv-ts checker.ts 同码 N-6）。
+// 覆盖面：return Ok(())（嵌套空分组①）+ f(x, ())（逗号后空分组②）。
+export fn probe(a: String, b: String) -> String {
+    native typescript {
+        return "A=" + String(a) + " B=" + String(b);
+    }
+}
+export fn main() -> Result<(), String> {
+    let out = probe(String::from("hello"), String::from("world"));
+    native typescript {
+        if (out !== "A=hello B=world") { return Err("mismatch: " + out); }
+        return Ok(());
+    }
+    Ok(())
+}

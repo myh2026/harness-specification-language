@@ -49,6 +49,55 @@ export interface Diag {
 // 后端语言集合来自 backends/registry（BNF v1.4 §5.2，38 后端）
 const NATIVE_LANGS = new Set(listLangs().map((l) => l.id));
 
+// ---- N-6（#23 / v0.2.71）：native typescript 空分组 "()" 词法扫描 ----
+// 剥离 JS 字符串字面量与注释（内容替换为同长度空格，保留换行，防误报：
+// return "Ok(())" 这类合法代码不因字面量内容触发）。
+function stripJsStringsAndComments(src: string): string {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i]!;
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      out += ' ';
+      i++;
+      while (i < n && src[i] !== quote) {
+        out += src[i] === '\n' ? '\n' : ' ';
+        if (src[i] === '\\') { // 转义序列跳两格（占位保持长度）
+          i++;
+          if (i < n) out += src[i] === '\n' ? '\n' : ' ';
+        }
+        i++;
+      }
+      if (i < n) { out += ' '; i++; } // 收尾引号
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < n && src[i] !== '\n') { out += ' '; i++; }
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      out += '  ';
+      i += 2;
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        out += src[i] === '\n' ? '\n' : ' ';
+        i++;
+      }
+      if (i < n) { out += '  '; i += 2; }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+// 三类非法空分组位置（箭头函数 `() =>` 白名单排除）：
+// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场；
+// ② 逗号/等号后空分组 `f(x, ())` / `x = ()`（后随 => 者为箭头函数，放行）；
+// ③ return 后空分组 `return ()`。
+const N6_EMPTY_GROUP_RE = /\(\s*\(\s*\)|[=,]\s*\(\s*\)(?!\s*=>)|\breturn\s*\(\s*\)/;
+
 // v0.2.51 E-2：当前文件可见的可调用名（顶层 fn/graph/macrodef/import 名）。
 // 检查器按文件串行运行，模块级游标是单线程安全的；
 // 修复盲区：此前调用未定义/未 import 的函数（如 sort_desc 漏 import）
@@ -1578,6 +1627,24 @@ function checkExpr(e: A.Expr, scope: Scope, enums: Map<string, string[]>, diags:
       // N-1 捕获语义：native 体按名词法捕获外层变量 —— 标记使用（防 S-7 误报）
       for (const m of e.body.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
         markUsed(scope, m[0]!);
+      }
+      // N-6（#23 / v0.2.71）：native typescript 体内空分组 "()" —— 不是合法
+      // JS 表达式。HSL 习语 Ok(()) / Err(()) / Some(())（单元载荷）在 run 期
+      // 令 new Function 构造抛 SyntaxError 裸穿透（check 全过 / run 崩溃，
+      // 「check 过 = run 不炸」承诺在此破口）。词法级扫描拦截：剥离字符串
+      // 字面量与注释后按三类非法位置判定（箭头函数 () => 白名单排除），
+      // 不做完整 JS 解析（维持「native 体原样搬运」铁律）。python 体内的
+      // Ok(()) 是合法 Python（() 为空元组），不扫描。
+      if (e.lang === 'typescript' || e.lang === 'javascript') {
+        const stripped = stripJsStringsAndComments(e.body);
+        if (N6_EMPTY_GROUP_RE.test(stripped)) {
+          diags.push(err(
+            'N-6',
+            'native typescript 体内出现空分组 "()" —— 这不是合法 JS 表达式（HSL 单元值的习惯写法）。改用 null / void 0 / $host.make("Result::Ok", [null])；Ok/Err/Some/None 垫片已在运行期注入（v0.2.71）',
+            e.span,
+            file,
+          ));
+        }
       }
       break;
     }

@@ -1023,6 +1023,7 @@ bash 经 `bash -n`（Lint 第 2 层，emit 时自动执行）。
 | N3 | 嵌套逃逸：`native python {}` 内不得再出现 HSL 语法；目标语言字符串内的 `{}` 按目标语言语义处理 |
 | N4 | `block` 插值 `{{ expr }}`：表达式类型必须实现 `ToString`（数值/bool/String/枚举），`Vec`/`struct` → 编译错误 |
 | N5 | 插值在**编译期**求值（const 上下文或字面量组合），运行期状态引用（如 `{{state.current_goal}}`）在生成时以占位符 + 注入点形式落地（YAML/MD 模板由运行时 harness 填充） |
+| N6 | `native typescript/javascript` 体内不得出现**空分组 `()`**——这不是合法 JS 表达式（HSL 单元值习惯 `Ok(())` / `Err(())` / `Some(())` 的载荷写法会在此破口：check 全过 / run 期 `new Function` 构造抛 SyntaxError）。词法级扫描（字符串/注释剥离 + 箭头函数 `() =>` 白名单），check 期即拦（issue #23，v0.2.71）；改用 `null` / `void 0` / `$host.make("Result::Ok", [null])`。`Ok/Err/Some/None` 垫片在 dhv-ts 运行期注入（体内声明可遮蔽）。python 体内 `()` 是合法空元组，不适用本规则 |
 
 ### 5.6 运算符优先级与结合性总表
 

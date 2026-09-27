@@ -132,6 +132,28 @@ function transformPythonBody(body: string): string {
   return lines.join('\n');
 }
 
+/** #23（v0.2.71）：native 体源码摘录 —— 构造期语法错误的可诊断性兜底。
+ * 取前 2 个非空行、每行截 80 字符，避免长体刷屏。 */
+function excerptNativeBody(body: string): string {
+  const lines = body.split('\n').filter((l) => l.trim().length > 0).slice(0, 2);
+  const shown = lines.map((l) => (l.length > 80 ? `${l.slice(0, 80)}…` : l)).join(' ⏎ ');
+  return shown.length > 0 ? shown : '（空块体）';
+}
+
+/** #23（v0.2.71）：HSL 构造子垫片源码 —— Ok/Err/Some/None 在 native
+ * typescript 体内直接可用（产出带 __enum 标记的合法 HSL 值）。垫片注入在
+ * 外层函数作用域，用户体内声明（function/let/const）在内层 async 域自然
+ * 遮蔽；被捕获变量同名时跳过注入（捕获优先，避免重复声明）。 */
+function nativeShimPrelude(captured: string[]): string {
+  const shadowed = new Set(captured);
+  const lines: string[] = [];
+  if (!shadowed.has('Ok')) lines.push('const Ok = (v) => ({ __enum: "Result", variant: "Ok", payload: { tuple: [v] } });');
+  if (!shadowed.has('Err')) lines.push('const Err = (v) => ({ __enum: "Result", variant: "Err", payload: { tuple: [v] } });');
+  if (!shadowed.has('Some')) lines.push('const Some = (v) => ({ __enum: "Option", variant: "Some", payload: { tuple: [v] } });');
+  if (!shadowed.has('None')) lines.push('const None = { __enum: "Option", variant: "None" };');
+  return lines.length > 0 ? `${lines.join('\n')}\n` : '';
+}
+
 export async function evalNativeBlock(
   lang: string,
   body: string,
@@ -144,11 +166,23 @@ export async function evalNativeBlock(
     for (const n of captured) ctx[n] = env.lookup(n)!.value;
     const hasReturn = /\breturn\b/.test(body);
     const code = hasReturn ? body : `return (\n${body}\n);`;
-    const fn = new Function(
-      '$host',
-      '$ctx',
-      `const { ${captured.join(', ')} } = ($ctx ?? {});\nreturn (async () => {\n${code}\n})();`,
-    );
+    let fn: Function;
+    try {
+      // #23 修复（v0.2.71）：new Function 构造移入 try —— 此前构造期
+      // SyntaxError（如 HSL 习语 Ok(()) 的空分组）裸穿透，连「native 块
+      // 执行失败」前缀都没有（check 全过 / run 神秘崩溃的可诊断性零）。
+      fn = new Function(
+        '$host',
+        '$ctx',
+        `const { ${captured.join(', ')} } = ($ctx ?? {});\n${nativeShimPrelude(captured)}return (async () => {\n${code}\n})();`,
+      );
+    } catch (err) {
+      throw new HRuntimeError(
+        `native typescript 块语法非法：${(err as Error).message}\n` +
+          `  源码摘录：${excerptNativeBody(body)}\n` +
+          `  高频成因：① HSL 单元值写法 Ok(()) / Err(()) / Some(()) —— 空分组 "()" 不是合法 JS 表达式（改用 null / $host.make("Result::Ok", [null])，check 期由 N-6 拦截）；② 括号配对与语句分隔`,
+      );
+    }
     try {
       const result = await fn(hostApi, ctx);
       return result === null ? undefined : result;

@@ -1,4 +1,4 @@
-# DHV — HSL 编译器骨架 v0.1.0
+# DHV — HSL 编译器（Rust 后端）v0.2.71
 
 > **HSL 是一门为编写 AI Agent harness 而生的编译型语言。你用 HSL 写逻辑，
 > DHV 编译器将其转译为一个包含多语言代码、配置、文档的真实工程仓库。**
@@ -76,12 +76,12 @@ Physical Writer + SourceMap（每个文件注入 @dhv:source-map 围栏）
 | P0 PEG 文法 | ✅ 完成（hsl.pest，与 BNF.md 对齐） |
 | P1 AST 类型定义 | ✅ 完成（ast.rs 全量节点） |
 | P2 Parser | ✅ 核心完成（项/类型/模式/表达式/graph/block/native/project/宏） |
-| Type Check 严格性 | ✅ S1/S2/S4/S6/S7/S8 落地（S3 强制错误处理待类型推导）；G1/G2 + P2/P3/P4 |
-| P3 Rust Codegen | 🟡 骨架（struct/enum/trait/fn 直译，表达式级主链路） |
+| Type Check 严格性 | ✅ S1/S2/S4/S6/S7/S8 落地（S3 强制错误处理待类型推导）；G1/G2 + P2/P3/P4 + N-6（#23 空分组拦截） |
+| P3 Rust Codegen | ✅ full 级（v0.2.66 图灵语料对拍：rustc 真实编译运行输出一致） |
 | P4 YAML/MD/JSON | ✅ 静态资源转译完整可用 |
-| P5 Python Codegen | 🟡 骨架（类型映射 + fn/struct + 表达式级主链路） |
+| P5 Python Codegen | ✅ full 级（v0.2.64 python 产物 ruff 全绿，默认全规则 0.16） |
 | P6 双向工程 | 🟡 骨架（围栏注入/提取/回写闭环接口就绪） |
-| P7 TS Codegen | 🟡 骨架（类型映射 + enum 判别式联合） |
+| P7 TS Codegen | ✅ full 级（org 仓 vendored 同源运行；emit 38 后端注册） |
 | P8 跨语言胶水 | ⬜ 计划（edge → FFI/IPC/MCP 适配器） |
 | P9 Lint 系统 | 🟡 骨架（诊断框架 + L 系列错误码） |
 | P10 宏系统 | 🟡 文法完整，展开器计划中 |

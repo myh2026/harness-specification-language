@@ -1895,12 +1895,34 @@ impl TypeChecker {
                 if crate::langs::resolve(&nb.lang.name).is_none() {
                     self.diags.push(
                         Diagnostic::error(
-                            DiagCode::NativeSafety("N1"),
+                            DiagCode::NativeSafety("1"),
                             format!("native 语言 `{}` 未注册（已注册语言见 dhv targets）", nb.lang.name),
                             nb.span,
                         )
                         .note("native 块语言标识必须是已注册后端 id 或 host（harness 宿主语言）"),
                     );
+                }
+                // N6（#23 / v0.2.71）：native typescript/javascript 体内空分组 "()"
+                // —— 不是合法 JS 表达式（HSL 习语 Ok(()) / Err(()) / Some(()) 的
+                // 单元载荷写法）。dhv-ts run 期 new Function 构造抛 SyntaxError 裸
+                // 穿透的实录（check 全过 / run 崩溃）。与 dhv-ts checker 的 N-6
+                // 词法扫描对齐：剥字符串/注释后按三类非法位置判定（箭头函数
+                // `() =>` 白名单排除）。python 体内 Ok(()) 是合法 Python（空元组），
+                // 不扫描。双端一致性：诊断码集合对拍（conformance §7）依赖两端
+                // 对同一语料出同一码。
+                if nb.lang.name == "typescript" || nb.lang.name == "javascript" {
+                    let stripped = strip_js_strings_and_comments(&nb.code);
+                    if n6_empty_group_hit(&stripped).is_some() {
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::NativeSafety("6"),
+                                "native typescript 体内出现空分组 \"()\" —— 这不是合法 JS 表达式（HSL 单元值的习惯写法）。改用 null / void 0 / $host.make(\"Result::Ok\", [null])；Ok/Err/Some/None 垫片已在 dhv-ts 运行期注入（v0.2.71）"
+                                    .to_string(),
+                                nb.span,
+                            )
+                            .note("issue #23：check 期显式拒绝（诚实边界），避免 check 全过 / run 崩溃"),
+                        );
+                    }
                 }
                 for word in nb.code.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
                     if word.is_empty() {
@@ -2690,4 +2712,155 @@ fn lit_ty_name(t: crate::typecheck::SymbolLitTy) -> &'static str {
         Str => "str",
         Char => "char",
     }
+}
+
+// ============================================================================
+// N-6（#23 / v0.2.71）：native typescript 空分组 "()" 词法扫描（与 dhv-ts
+// checker.ts 的 stripJsStringsAndComments / N6_EMPTY_GROUP_RE 语义对齐 ——
+// 双端诊断码集合一致性对拍（conformance §7）依赖同一语料出同一码）。
+// ----------------------------------------------------------------------------
+
+/// 剥离 JS 字符串字面量与注释（内容替换为同长度空白，保留换行）。
+/// 防误报：`return "Ok(())"` 这类合法代码不因字面量内容触发。
+fn strip_js_strings_and_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let n = bytes.len();
+    let mut out = String::with_capacity(n);
+    let mut i = 0usize;
+    while i < n {
+        let c = bytes[i] as char;
+        if c == '"' || c == '\'' || c == '`' {
+            let quote = c;
+            out.push(' ');
+            i += 1;
+            while i < n && (bytes[i] as char) != quote {
+                out.push(if bytes[i] as char == '\n' { '\n' } else { ' ' });
+                if bytes[i] as char == '\\' {
+                    // 转义序列跳两格（占位保持长度）
+                    i += 1;
+                    if i < n {
+                        out.push(if bytes[i] as char == '\n' { '\n' } else { ' ' });
+                    }
+                }
+                i += 1;
+            }
+            if i < n {
+                out.push(' ');
+                i += 1; // 收尾引号
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < n && bytes[i + 1] as char == '/' {
+            while i < n && bytes[i] as char != '\n' {
+                out.push(' ');
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < n && bytes[i + 1] as char == '*' {
+            out.push_str("  ");
+            i += 2;
+            while i < n && !(bytes[i] as char == '*' && i + 1 < n && bytes[i + 1] as char == '/') {
+                out.push(if bytes[i] as char == '\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            if i < n {
+                out.push_str("  ");
+                i += 2;
+            }
+            continue;
+        }
+        out.push(src[i..].chars().next().unwrap_or(' '));
+        i += 1;
+    }
+    out
+}
+
+/// 三类非法空分组位置（返回命中原文供诊断展示；箭头函数 `() =>` 白名单排除）：
+/// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场；
+/// ② 逗号/等号后空分组 `f(x, ())` / `x = ()`（后随 => 者为箭头函数，放行）；
+/// ③ return 后空分组 `return ()`。
+fn n6_empty_group_hit(stripped: &str) -> Option<String> {
+    let chars: Vec<char> = stripped.chars().collect();
+    let n = chars.len();
+    let is_ws = |c: char| c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    // ① 嵌套空分组：'(' ws* '(' ws* ')'
+    let mut i = 0usize;
+    while i < n {
+        if chars[i] == '(' {
+            let mut j = i + 1;
+            while j < n && is_ws(chars[j]) {
+                j += 1;
+            }
+            if j < n && chars[j] == '(' {
+                let mut k = j + 1;
+                while k < n && is_ws(chars[k]) {
+                    k += 1;
+                }
+                if k < n && chars[k] == ')' {
+                    return Some(stripped.chars().skip(i).take(k + 1 - i).collect());
+                }
+            }
+        }
+        i += 1;
+    }
+    // ② 逗号/等号后空分组（负向预查 => ）
+    let mut i = 0usize;
+    while i < n {
+        if chars[i] == ',' || chars[i] == '=' {
+            // 跳过 ==（相等比较后的括号是普通分组，仅空分组非法）
+            if chars[i] == '=' && i + 1 < n && chars[i + 1] == '=' {
+                i += 2;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < n && is_ws(chars[j]) {
+                j += 1;
+            }
+            if j < n && chars[j] == '(' {
+                let mut k = j + 1;
+                while k < n && is_ws(chars[k]) {
+                    k += 1;
+                }
+                if k < n && chars[k] == ')' {
+                    // 白名单：`() =>`（箭头函数）
+                    let mut m = k + 1;
+                    while m < n && is_ws(chars[m]) {
+                        m += 1;
+                    }
+                    if m + 1 < n && chars[m] == '=' && chars[m + 1] == '>' {
+                        i = m;
+                        continue;
+                    }
+                    return Some(stripped.chars().skip(j).take(k + 1 - j).collect());
+                }
+            }
+        }
+        i += 1;
+    }
+    // ③ return 后空分组
+    let lower: String = stripped.to_lowercase();
+    let mut from = 0usize;
+    while let Some(pos) = lower[from..].find("return") {
+        let at = from + pos;
+        let before_ok = at == 0 || !chars[at - 1].is_alphanumeric() && chars[at - 1] != '_';
+        let after = at + 6;
+        if before_ok && after < n {
+            let mut j = after;
+            while j < n && is_ws(chars[j]) {
+                j += 1;
+            }
+            if j < n && chars[j] == '(' {
+                let mut k = j + 1;
+                while k < n && is_ws(chars[k]) {
+                    k += 1;
+                }
+                if k < n && chars[k] == ')' {
+                    return Some(stripped.chars().skip(j).take(k + 1 - j).collect());
+                }
+            }
+        }
+        from = at + 6;
+    }
+    None
 }

@@ -4606,6 +4606,114 @@ test('v0.2.67 回归', 'S-19 RET/方法面自洽：STD_METHOD_RET 每项都在�
 });
 
 // ---------------------------------------------------------------------------
+// v0.2.71 回归 —— issue #23：native typescript 空分组 "()"（check 期 N-6 拦截
+// + new Function 构造移入 try + Ok/Err/Some/None 垫片注入）
+// ---------------------------------------------------------------------------
+test('v0.2.71 回归', '#23 N-6：native typescript 体内 Ok(()) 空分组 check 期即拦', () => {
+  const out = checkSrc(`export fn main() -> Result<(), String> {
+    native typescript {
+        return Ok(());
+    }
+    Ok(())
+}`);
+  assert(out.includes('N-6'), `Ok(()) 空分组应触发 N-6：${out.slice(0, 300)}`);
+});
+test('v0.2.71 回归', '#23 N-6：f(x, ()) 逗号后空分组拦截（箭头函数白名单放行）', () => {
+  const bad = checkSrc(`export fn main() -> String {
+    native typescript {
+        const g = (x) => x + 1; // 箭头函数合法
+        return g(());
+    }
+}`);
+  assert(bad.includes('N-6'), `g(()) 应触发 N-6：${bad.slice(0, 300)}`);
+  const ok = checkSrc(`export fn main() -> String {
+    native typescript {
+        const g = () => "arrow ok"; // () => 是箭头函数，白名单
+        return g();
+    }
+}`);
+  assert(ok.includes('0 error'), `箭头函数 () => 不应误报 N-6：${ok.slice(0, 300)}`);
+});
+test('v0.2.71 回归', '#23 N-6：字符串/注释内的 Ok(()) 不误报', () => {
+  const out = checkSrc(`export fn main() -> String {
+    native typescript {
+        // return Ok(()) 注释里的写法不拦
+        const s = "literal Ok(()) stays fine";
+        return s;
+    }
+}`);
+  assert(out.includes('0 error'), `字符串/注释内的 Ok(()) 不应误报：${out.slice(0, 300)}`);
+});
+test('v0.2.71 回归', '#23 N-6：python 体内 Ok(()) 合法（空元组）不拦截', () => {
+  const out = checkSrc(`export fn main() -> i64 {
+    native python {
+        __hsl_result__ = len((Ok(()), 1)) - 1
+    }
+}`);
+  assert(!out.includes('N-6'), `python 空元组不应触发 N-6：${out.slice(0, 300)}`);
+});
+test('v0.2.71 回归', '#23 垫片：native typescript 内 Ok/Err/Some/None 直接可用并正确 Marshal', () => {
+  const src = `export fn probe() -> Result<String, String> {
+    native typescript {
+        return Err("native-side failure injected");
+    }
+}
+export fn main() -> Result<(), String> {
+    let r = probe();
+    match r {
+        Ok(v) => { println!("got ok: {}", v); }
+        Err(e) => { println!("got err: {}", e); }
+    }
+    Ok(())
+}`;
+  const p = path.join(TMP, 'i23-shim-err.hsl');
+  fs.writeFileSync(p, src);
+  const r = run(['run', p, '--quiet']);
+  assertEq(r.code, 0, `垫片 Err 应正确 Marshal：${(r.stdout + r.stderr).slice(0, 300)}`);
+  assert(r.stdout.includes('got err: native-side failure injected'), `Err 载荷应透传：${r.stdout.slice(0, 200)}`);
+});
+test('v0.2.71 回归', '#23 原始复现：双参数 native 函数 check/run 全通（垫片 + 修后写法）', () => {
+  const src = `export fn dual_probe(a: String, b: String) -> String {
+    native typescript {
+        return "A=" + String(a) + " B=" + String(b);
+    }
+}
+export fn main() -> Result<(), String> {
+    let out = dual_probe(String::from("hello"), String::from("world"));
+    native typescript {
+        if (out !== "A=hello B=world") { return Err("dual probe mismatch: " + out); }
+        return Ok(null);
+    }
+    Ok(())
+}`;
+  const p = path.join(TMP, 'i23-dual-probe.hsl');
+  fs.writeFileSync(p, src);
+  const c = run(['check', p]);
+  assertEq(c.code, 0, `修正版复现应 check 全过：${(c.stdout + c.stderr).slice(0, 300)}`);
+  const r = run(['run', p, '--quiet']);
+  assertEq(r.code, 0, `修正版复现应 run 全通：${(r.stdout + r.stderr).slice(0, 300)}`);
+});
+test('v0.2.71 回归', '#23 运行期兜底：非法 JS 语法包成 HRuntimeError（含源码摘录提示）', () => {
+  // check 关（--no-check 之类不存在，直接 run）→ run 期 new Function 构造
+  // SyntaxError 应包成带「native typescript 块语法非法」前缀的 HRuntimeError，
+  // 不再裸穿透 Unexpected token ')'。构造一个 check 拦不到但 run 会炸的体：
+  // 字符串里放非法写法 check 不拦，但运行期 eval 合法（返回字符串）→ 用
+  // 真正 run 期才炸的括号错位（check 的三类位置模式不覆盖的形态）。
+  const src = `export fn main() -> String {
+    native typescript {
+        return (1 + ;
+    }
+}`;
+  const p = path.join(TMP, 'i23-runtime-wrap.hsl');
+  fs.writeFileSync(p, src);
+  const r = run(['run', p, '--quiet']);
+  assert(r.code !== 0, `非法 JS 应失败退出`);
+  const out = r.stdout + r.stderr;
+  assert(out.includes('native typescript 块语法非法') || out.includes('块执行失败'),
+    `构造期语法错误应包 HRuntimeError 前缀（可诊断性），实际：${out.slice(0, 300)}`);
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main(): Promise<number> {
