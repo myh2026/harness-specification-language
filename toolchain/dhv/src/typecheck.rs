@@ -2776,15 +2776,17 @@ fn strip_js_strings_and_comments(src: &str) -> String {
     out
 }
 
-/// 三类非法空分组位置（返回命中原文供诊断展示；箭头函数 `() =>` 白名单排除）：
-/// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场；
+/// 三类非法空分组位置（返回命中与否；箭头函数 `() =>` 与 IIFE `(() => {...})()`
+/// 白名单排除）：
+/// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场（四段：开-开-
+///    闭-闭；只写三段会误伤 IIFE 开头 `(()`，org 语料实测教训）；
 /// ② 逗号/等号后空分组 `f(x, ())` / `x = ()`（后随 => 者为箭头函数，放行）；
-/// ③ return 后空分组 `return ()`。
+/// ③ return 后空分组 `return ()`（后随 => 者为返回箭头函数，放行）。
 fn n6_empty_group_hit(stripped: &str) -> Option<String> {
     let chars: Vec<char> = stripped.chars().collect();
     let n = chars.len();
     let is_ws = |c: char| c == ' ' || c == '\t' || c == '\n' || c == '\r';
-    // ① 嵌套空分组：'(' ws* '(' ws* ')'
+    // 通用扫描：从位置 i 开始匹配 `(` ws* `(` ws* `)` ws* `)`（四段嵌套空分组）
     let mut i = 0usize;
     while i < n {
         if chars[i] == '(' {
@@ -2798,17 +2800,39 @@ fn n6_empty_group_hit(stripped: &str) -> Option<String> {
                     k += 1;
                 }
                 if k < n && chars[k] == ')' {
-                    return Some(stripped.chars().skip(i).take(k + 1 - i).collect());
+                    let mut l = k + 1;
+                    while l < n && is_ws(chars[l]) {
+                        l += 1;
+                    }
+                    if l < n && chars[l] == ')' {
+                        return Some("()".to_string());
+                    }
                 }
             }
         }
         i += 1;
     }
-    // ② 逗号/等号后空分组（负向预查 => ）
+    // ② 逗号/等号后空分组（负向预查 => ）；③ return 后空分组（同预查）
+    let is_empty_group_at = |pos: usize| -> bool {
+        // pos 指向 '('：其后（跳空白）紧跟 ')'
+        let mut k = pos + 1;
+        while k < n && is_ws(chars[k]) {
+            k += 1;
+        }
+        k < n && chars[k] == ')'
+    };
+    let followed_by_arrow = |close: usize| -> bool {
+        // close 指向 ')'：其后（跳空白）是 =>
+        let mut m = close + 1;
+        while m < n && is_ws(chars[m]) {
+            m += 1;
+        }
+        m + 1 < n && chars[m] == '=' && chars[m + 1] == '>'
+    };
     let mut i = 0usize;
     while i < n {
         if chars[i] == ',' || chars[i] == '=' {
-            // 跳过 ==（相等比较后的括号是普通分组，仅空分组非法）
+            // 跳过 ==（相等比较）
             if chars[i] == '=' && i + 1 < n && chars[i + 1] == '=' {
                 i += 2;
                 continue;
@@ -2817,28 +2841,19 @@ fn n6_empty_group_hit(stripped: &str) -> Option<String> {
             while j < n && is_ws(chars[j]) {
                 j += 1;
             }
-            if j < n && chars[j] == '(' {
+            if j < n && chars[j] == '(' && is_empty_group_at(j) {
+                // 白名单：`() =>`（箭头函数）
                 let mut k = j + 1;
                 while k < n && is_ws(chars[k]) {
                     k += 1;
                 }
-                if k < n && chars[k] == ')' {
-                    // 白名单：`() =>`（箭头函数）
-                    let mut m = k + 1;
-                    while m < n && is_ws(chars[m]) {
-                        m += 1;
-                    }
-                    if m + 1 < n && chars[m] == '=' && chars[m + 1] == '>' {
-                        i = m;
-                        continue;
-                    }
-                    return Some(stripped.chars().skip(j).take(k + 1 - j).collect());
+                if !followed_by_arrow(k) {
+                    return Some("()".to_string());
                 }
             }
         }
         i += 1;
     }
-    // ③ return 后空分组
     let lower: String = stripped.to_lowercase();
     let mut from = 0usize;
     while let Some(pos) = lower[from..].find("return") {
@@ -2850,13 +2865,14 @@ fn n6_empty_group_hit(stripped: &str) -> Option<String> {
             while j < n && is_ws(chars[j]) {
                 j += 1;
             }
-            if j < n && chars[j] == '(' {
+            if j < n && chars[j] == '(' && is_empty_group_at(j) {
+                // close 位置 = j+1 起跳过空白后的 ')'（is_empty_group_at 已保证存在）
                 let mut k = j + 1;
                 while k < n && is_ws(chars[k]) {
                     k += 1;
                 }
-                if k < n && chars[k] == ')' {
-                    return Some(stripped.chars().skip(j).take(k + 1 - j).collect());
+                if !followed_by_arrow(k) {
+                    return Some("()".to_string());
                 }
             }
         }

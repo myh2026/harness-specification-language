@@ -92,11 +92,12 @@ function stripJsStringsAndComments(src: string): string {
   }
   return out;
 }
-// 三类非法空分组位置（箭头函数 `() =>` 白名单排除）：
-// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场；
+// 三类非法空分组位置（箭头函数 `() =>` 与 IIFE `(() => {...})()` 白名单排除）：
+// ① 嵌套空分组 `X(())` —— Ok(()) / Err(()) / Some(()) 高频现场（注意四段：
+//    开-开-闭-闭；只写三段会误伤 IIFE 开头 `(()`，org 语料实测教训）；
 // ② 逗号/等号后空分组 `f(x, ())` / `x = ()`（后随 => 者为箭头函数，放行）；
-// ③ return 后空分组 `return ()`。
-const N6_EMPTY_GROUP_RE = /\(\s*\(\s*\)|[=,]\s*\(\s*\)(?!\s*=>)|\breturn\s*\(\s*\)/;
+// ③ return 后空分组 `return ()`（后随 => 者为返回箭头函数，放行）。
+const N6_EMPTY_GROUP_RE = /\(\s*\(\s*\)\s*\)|[=,]\s*\(\s*\)(?!\s*=>)|\breturn\s*\(\s*\)(?!\s*=>)/;
 
 // v0.2.51 E-2：当前文件可见的可调用名（顶层 fn/graph/macrodef/import 名）。
 // 检查器按文件串行运行，模块级游标是单线程安全的；

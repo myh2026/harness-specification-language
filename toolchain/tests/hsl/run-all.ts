@@ -4609,6 +4609,19 @@ test('v0.2.67 回归', 'S-19 RET/方法面自洽：STD_METHOD_RET 每项都在�
 // v0.2.71 回归 —— issue #23：native typescript 空分组 "()"（check 期 N-6 拦截
 // + new Function 构造移入 try + Ok/Err/Some/None 垫片注入）
 // ---------------------------------------------------------------------------
+test('v0.2.71 回归', '#23 N-6：IIFE `(() => {...})()` 不误报（org 语料实测教训）', () => {
+  // org 仓 hsl/pool/tools.hsl 大量使用 IIFE 定式 `const root = (() => { ... })();`
+  // —— 三段模式（开-开-闭）会误伤 IIFE 开头 `(()`；四段（开-开-闭-闭）只匹配
+  // 真空分组。此用例锁定该边界（v0.2.71.1 修复：org check 闸门曾全红）。
+  const out = checkSrc(`export fn main() -> String {
+    native typescript {
+        const root = (() => { const d = String(1 + 2); return "r" + d; })();
+        const zero = (() => "z")();
+        return root + zero;
+    }
+}`);
+  assert(out.includes('0 error'), `IIFE 定式不应误报 N-6：${out.slice(0, 300)}`);
+});
 test('v0.2.71 回归', '#23 N-6：native typescript 体内 Ok(()) 空分组 check 期即拦', () => {
   const out = checkSrc(`export fn main() -> Result<(), String> {
     native typescript {
