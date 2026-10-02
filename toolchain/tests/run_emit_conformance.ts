@@ -28,6 +28,22 @@ const DHV_TS = path.join(ROOT, 'dhv-ts/src/main.ts');
 const FIXTURES = path.join(ROOT, 'tests/fixtures/emit');
 const MARKER = /^emit::/;
 
+// —— 受限内核兼容（v0.2.72.1 · iSH 实测）：Bun rmSync(recursive) 在 iSH 类
+// 沙箱恒 EPERM（产品侧同类修复见 org 仓 lib/fssafe.ts）→ 手工遍历兜底。
+function rmrf(t: string): void {
+  try { fs.rmSync(t, { recursive: true, force: true }); return; } catch { /* 降级 */ }
+  try {
+    const walk = (p: string): void => {
+      const st = fs.lstatSync(p);
+      if (st.isDirectory()) {
+        for (const e of fs.readdirSync(p)) walk(path.join(p, e));
+        fs.rmdirSync(p);
+      } else fs.unlinkSync(p);
+    };
+    walk(t);
+  } catch { /* 尽力而为 */ }
+}
+
 interface RunResult { code: number; stdout: string; stderr: string }
 
 function run(cmd: string, args: string[], opts: { cwd?: string; timeout?: number } = {}): RunResult {
@@ -143,7 +159,7 @@ for (const fx of fixtures) {
     pass++;
     console.log(`  ✓ ${fx}（${projections.map((p) => p.lang).join('+')}）`);
   }
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmrf(tmp);
 }
 
 console.log(`\nemit 行为级对拍: ${pass} 通过 · ${failures.length} 失败 · ${backendRuns} 个后端真实运行`);

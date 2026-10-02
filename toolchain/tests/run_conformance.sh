@@ -154,9 +154,9 @@ s18_case "$S18_LEGAL_FIX" no
 # 「X-n」，如 G-G8 → G-8、S-S4 → S-4）。
 echo "== 7/7 诊断码集合一致性（errors/ 全量，S-4 分歧教训）=="
 codes_dhv() { "$DHV" check "$1" 2>&1 | grep -oE '(ERROR|WARNING)\[[A-Z0-9-]+\]' \
-  | sed -E 's/^ERROR\[/[/; s/^WARNING\[/[/; s/\[([A-Z])-\1/[\1-/' | sort -u; }
+  | python3 -c "import sys,re; [print(re.sub(r'\[([A-Z])-\\1', r'[\\1-', l.replace('ERROR[','[').replace('WARNING[','[').strip())) for l in sys.stdin]" | sort -u; }
 codes_ts()  { "${DHV_TS[@]}" check "$1" 2>&1 | grep -oE '(error|warning)\[[A-Z0-9-]+\]' \
-  | sed -E 's/^(error|warning)\[/[/; s/\[([A-Z])-\1/[\1-/' | sort -u; }
+  | python3 -c "import sys,re; [print(re.sub(r'\[([A-Z])-\\1', r'[\\1-', re.sub(r'^(error|warning)\[','[',l.strip()))) for l in sys.stdin]" | sort -u; }
 record_codes() { # name file
   local name="$1" f="$2" a b
   a="$(codes_dhv "$f")"
