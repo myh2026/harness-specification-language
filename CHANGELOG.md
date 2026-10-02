@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.2.72（2026-10-02）—— 发布基建：release 矩阵新增 aarch64-unknown-linux-musl
+
+- release.yml 构建矩阵 +1：**aarch64-unknown-linux-musl**（ubuntu runner 交叉
+  编译；纯 Rust 依赖零外部工具链，rust-lld 自包含链接）—— 产出自包含静态
+  musl 二进制，覆盖 Alpine / 受限内核（iSH 类沙箱）等 glibc 缺席环境。
+- 驱动背景：iSH（受限内核）端对 dhv 的本地构建受宿主 fs/工具链多重限制，本
+  目标使「云端构建 → 静态产物直落任意底座」成为标准交付路径；本批次为该攻
+  关的配套基建交付。
+
 ## v0.2.71（2026-09-27）—— issue #23 三层修复：N-6 空分组 check 期拦截 + native 桥构造期兜底 + Ok/Err/Some/None 垫片注入
 
 **根因修正**（issue #23 定性纠偏）：复现报告归因「双参数 native 函数代码
