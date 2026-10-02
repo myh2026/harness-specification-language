@@ -8,6 +8,8 @@
 - 驱动背景：iSH（受限内核）端对 dhv 的本地构建受宿主 fs/工具链多重限制，本
   目标使「云端构建 → 静态产物直落任意底座」成为标准交付路径；本批次为该攻
   关的配套基建交付。
+- 首跑实测追修：ubuntu GNU ld 不认 aarch64 errata 旗标 `--fix-cortex-a53-843419`
+  （v0.2.72 首跑 Release #36973013705 实录）→ musl 目标改走 rust-lld 链接。
 
 ## v0.2.71（2026-09-27）—— issue #23 三层修复：N-6 空分组 check 期拦截 + native 桥构造期兜底 + Ok/Err/Some/None 垫片注入
 

@@ -62,7 +62,18 @@ jobs:
           key: rust-${{ matrix.target }}-${{ hashFiles('toolchain/dhv/Cargo.lock') }}
           restore-keys: rust-${{ matrix.target }}-
 
+      - name: Build (aarch64-musl · rust-lld)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        working-directory: toolchain/dhv
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          # ubuntu 的 GNU ld 不认 aarch64 errata 旗标 --fix-cortex-a53-843419
+          # （v0.2.72 首跑实测）→ 改用 Rust 自带 rust-lld（LLVM 系链接器，
+          # 直接解析该旗标；自包含静态链接，零外部工具链依赖）。
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+
       - name: Build
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         working-directory: toolchain/dhv
         run: cargo build --release --target ${{ matrix.target }}
 
