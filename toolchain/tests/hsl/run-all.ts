@@ -22,6 +22,21 @@ import {
 
 const ROOT = path.resolve(import.meta.dir, '../..');
 const DHV = path.join(ROOT, 'dhv-ts/src/main.ts');
+// iSH 类受限沙箱：Bun rmSync(recursive) 恒 EPERM → 手工遍历兜底（v0.2.72.1）
+function rmrf(t: string): void {
+  try { fs.rmSync(t, { recursive: true, force: true }); return; } catch { /* 降级 */ }
+  try {
+    const walk = (p: string): void => {
+      const st = fs.lstatSync(p);
+      if (st.isDirectory()) {
+        for (const e of fs.readdirSync(p)) walk(path.join(p, e));
+        fs.rmdirSync(p);
+      } else fs.unlinkSync(p);
+    };
+    walk(t);
+  } catch { /* 尽力而为 */ }
+}
+
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'hsl-test-'));
 
 /** 内嵌进生成 Python 源码的路径统一转正斜杠（Windows 反斜杠会触发 \U 等转义错误） */
@@ -1286,7 +1301,7 @@ function hasCpp23(): boolean {
   } catch {
     cpp23Cache = false;
   } finally {
-    fs.rmSync(probe, { recursive: true, force: true });
+    rmrf(probe);
   }
   return cpp23Cache;
 }
@@ -4759,7 +4774,7 @@ async function main(): Promise<number> {
     for (const f of failures) console.log(`    [${f.group}] ${f.name}`);
   }
   console.log('');
-  fs.rmSync(TMP, { recursive: true, force: true });
+  rmrf(TMP);
   return failed > 0 ? 1 : 0;
 }
 
