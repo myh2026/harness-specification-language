@@ -1490,6 +1490,28 @@ export class Body {
       return this.printCall(text, name !== 'print');
     }
     if (name === 'vec') {
+      // v0.2.73（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
+      // splitTopLevel 按逗号分组，重复形态整段无逗号（单组内含 ';'）；
+      // 在组内 token 层判分号并 desugar 为各后端 repeat 构造。
+      if (groups.length === 1) {
+        const semi = groups[0]!.findIndex((t) => t.kind === 'punct' && t.text === ';');
+        if (semi >= 0) {
+          const head = groups[0]!.slice(0, semi);
+          const tail = groups[0]!.slice(semi + 1);
+          if (head.length === 0 || tail.length === 0) {
+            throw new TranspileError('vec![expr; n]：重复形态恰需两个参数（元素表达式与重复次数）');
+          }
+          const x = this.tokensToExpr(head);
+          const n = this.tokensToExpr(tail);
+          const L = this.lang.id;
+          if (L === 'rust') return `vec![${x}; ${n}]`;
+          if (L === 'python') return `[${x}] * (${n})`;
+          if (L === 'typescript' || L === 'javascript') return `Array.from({ length: (${n}) }, () => (${x}))`;
+          if (L === 'go') return `func() []any { v := ${x}; r := make([]any, int(${n})); for i := range r { r[i] = v }; return r }()`;
+          if (L === 'cpp') return `[&]{ auto _v = (${x}); return std::vector<decltype(_v)>(static_cast<size_t>(${n}), _v); }()`;
+          throw new TranspileError(`vec![expr; n]：${L} 后端尚未支持重复形态（H1 修复仅覆盖活体翻译族）`);
+        }
+      }
       const items = groups.map((g) => this.tokensToExpr(g));
       const L = this.lang.id;
       if (L === 'rust') return `vec![${items.join(', ')}]`;

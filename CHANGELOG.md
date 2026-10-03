@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## v0.2.72.1（2026-10-03）—— H1 修复：`vec![expr; n]` 重复形态（解释器 + emit 双路径）
+
+审计（hsl-audit）实锤的五路径分歧中的 **dhv-ts 半面**修复：语法在 BNF 内
+（「重复展开」），但 `parseExprsFromTokens` 只吃逗号分隔 —— check 双过、
+run/emit 双双崩、dhv 的 Python 产物输出非法 `[0;3]`。
+
+- **解释器（interp.ts）**：`evalMacro·vec` 在 token 层判 `;` 并 desugar 为
+  `new Array(n).fill(cloneValue(v))`（= std `repeat_vec` 语义）；**切片补 eof
+  终止符**（修复首版探针死循环 —— `parseExprsFromTokens` 以 eof 为终止，
+  缺 eof 无限循环）。
+- **emit（backends/body.ts）**：`macro·vec` 重复形态 desugar 到各后端
+  repeat 构造 —— python `[x] * n` · rust `vec![x; n]` · ts/js
+  `Array.from({length: n}, () => x)` · go 闭包 make+fill · cpp 闭包
+  `std::vector<decltype(_v)>`；其余后端诚实报错（不静默错码）。
+- **测试**：run-all 新增「vec 重复形态」3 例（run 基础 / 表达式+变量次数 /
+  emit python 真实执行 + rust 文本 + 多后端语法面）。
+- **实弹**：v1 `vec![0; 3]` → 打印 3（此前 `<macro>` 解析崩）；混合 ergo1
+  用例全通过（此前死在宏展开）；python 产物 `[0] * (3)` 可执行；rust 产物
+  `vec![0; 3]` rustc --crate-type lib 全绿。
+- **未完结（诚实边界）**：dhv（Rust）侧 Python 后端的重复形态映射仍缺
+  （产出 `[0;3]`）—— 需云端构建验证环境修复，另立 issue 跟踪；本轮不动
+  fixtures/emit 对拍语料（避免在 dhv 半面未修前把 conformance 拉红）。
+
 ## v0.2.72（2026-10-02）—— 发布基建：release 矩阵新增 aarch64-unknown-linux-musl
 
 - release.yml 构建矩阵 +1：**aarch64-unknown-linux-musl**（ubuntu runner 交叉

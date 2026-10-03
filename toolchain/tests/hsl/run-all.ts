@@ -1214,6 +1214,64 @@ print('opt-map-ok')
   assert(stdout.includes('opt-map-ok'), `Option::map 分发验证异常：${stdout}`);
 });
 
+// ---------------------------------------------------------------------------
+// v0.2.73（H1 修复）：vec![expr; n] 重复形态 —— 此前五路径分歧
+// （check 双过 / run 崩 <macro> 解析 / emit 崩 <macro-emit> / py 产物非法 [0;3]）
+// ---------------------------------------------------------------------------
+test('vec 重复形态', 'run: vec![0; 3] 得长度 3（此前 <macro> 解析崩）', () => {
+  const f = path.join(TMP, 'vec-repeat-run.hsl');
+  fs.writeFileSync(f, `export fn main() -> i32 {
+    let v = vec![0; 3];
+    println!("{}", v.len());
+    0
+}
+`);
+  const r = run(['run', f, '--quiet']);
+  assertEq(r.code, 0, `run 应通过（exit=${r.code}）：${r.stderr || r.stdout}`);
+  assert(r.stdout.includes('3'), `应打印长度 3：${r.stdout}`);
+});
+
+test('vec 重复形态', 'run: 表达式元素 + 变量次数（vec![3 + 4; n]）', () => {
+  const f = path.join(TMP, 'vec-repeat-expr.hsl');
+  fs.writeFileSync(f, `export fn main() -> i32 {
+    let n = 2;
+    let v = vec![3 + 4; n];
+    println!("{} {}", v.len(), v.get(0).unwrap());
+    0
+}
+`);
+  const r = run(['run', f, '--quiet']);
+  assertEq(r.code, 0, `run 应通过（exit=${r.code}）：${r.stderr || r.stdout}`);
+  assert(r.stdout.includes('2 7'), `应打印「2 7」：${r.stdout}`);
+});
+
+test('vec 重复形态', 'emit: python [x] * n 真实执行 + rust vec![x; n]（多后端语法面）', () => {
+  const dir = path.join(TMP, 'vec-repeat-emit');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'vr.hsl'), `export fn main() -> i32 {
+    let v = vec![0; 3];
+    println!("{}", v.len());
+    0
+}
+project {
+    main -> "m.py" : python,
+    main -> "m.rs" : rust,
+    main -> "m.ts" : typescript,
+    main -> "m.go" : go,
+    main -> "m.cpp" : cpp,
+}
+`);
+  const r = run(['emit', path.join(dir, 'vr.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  assert(!r.stdout.includes('语法✗'), `不应有语法失败：\n${r.stdout}`);
+  const py = fs.readFileSync(path.join(dir, 'm.py'), 'utf-8');
+  assert(py.includes('[0] * (3)'), `python 产物应为 [0] * (3)`);
+  const rs = fs.readFileSync(path.join(dir, 'm.rs'), 'utf-8');
+  assert(rs.includes('vec![0; 3]'), `rust 产物应为 vec![0; 3]`);
+  const pyOut = execFileSync('python3', [path.join(dir, 'm.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
+  assert(pyOut.includes('3'), `python 产物执行应打印 3：${pyOut}`);
+});
+
 test('emit', 'java/kotlin/swift contract 声明语法质量（class 包装 + 类型后置冒号）', () => {
   const dir = path.join(TMP, 'contract-qual');
   fs.mkdirSync(dir, { recursive: true });

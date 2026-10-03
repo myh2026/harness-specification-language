@@ -1658,6 +1658,26 @@ export class Interp {
         return undefined;
       }
       case 'vec': {
+        // v0.2.73（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
+        // parseExprsFromTokens 只吃逗号分隔且以 eof 为终止（切片必须补 eof，
+        // 否则死循环）；在 token 层判分号并 desugar：
+        // new Array(n).fill(cloneValue(v))（= std repeat_vec 语义）
+        const core = toks.filter((t) => t.kind !== 'eof');
+        const semi = core.findIndex((t) => t.kind === 'punct' && t.text === ';');
+        if (semi >= 0) {
+          const eofTok: Token = { kind: 'eof', text: '', line: 0, col: 0 };
+          const head = parseExprsFromTokens([...core.slice(0, semi), eofTok], '<macro>');
+          const tail = parseExprsFromTokens([...core.slice(semi + 1), eofTok], '<macro>');
+          if (head.length !== 1 || tail.length !== 1) {
+            throw new HRuntimeError('vec![expr; n]：重复形态恰需两个参数（元素表达式与重复次数）');
+          }
+          const v = await this.evalExpr(head[0]!, env);
+          const n = Number(await this.evalExpr(tail[0]!, env));
+          if (!Number.isFinite(n) || n < 0) {
+            throw new HRuntimeError(`vec![expr; n]：n 必须是非负整数（得 ${debug(n)}）`);
+          }
+          return new Array(Math.trunc(n)).fill(cloneValue(v));
+        }
         const exprs = parseExprsFromTokens(toks, '<macro>');
         const out: unknown[] = [];
         for (const x of exprs) out.push(await this.evalExpr(x, env));
