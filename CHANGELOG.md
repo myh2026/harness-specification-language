@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## v0.2.72.2（2026-10-03）—— H2/H3 修复：ruff-gate 受限沙箱适配 + 门禁可诊断性；H1 语料补齐（repeat 锚点）
+
+审计（hsl-audit §⑤ / R16 现场取证）实锤：**iSH 类受限沙箱上 Bun `rmSync(recursive)`
+深目录树必 EPERM** —— `scripts/ruff-gate.ts` 收尾**无条件** `rmSync` → 即使门禁
+全绿也把退出码污染成非零（**「跑完即崩，假红」**），且每次崩后遗留临时目录。
+（复现：6 层深 × 8 文件 × 200 行目录树循环 40 次 → 40/40 EPERM；修后 40/40
+干净清理 —— R16 取证脚本 `/root/audit/evidence/h2-h3/`。）
+
+- **H2（ruff-gate.ts）**：注入 `rmrf`（`rmSync` → 手工遍历兜底，同 `run-all.ts`
+  `e097d5f` 样板）并替换两处调用点（gateOne 每语料清理 `:86` + 收尾清场 `:136`）。
+- **H3（可诊断性）**：
+  - `DHV_GATE_KEEP=1` 环境变量等价 `--keep`（CI/调试免改调用串）；
+  - emit 失败分支附 **exitCode + 完整命令串**（此前只有 stderr 前 500 字，
+    慢核假红/真回归难以区分）；
+  - 全绿行附 **ruff 版本号**（动态探测 —— 实测揭出环境 ruff=0.7.4，与注释
+    声称的 0.16 不符，版本漂移从此一眼可见）。
+- **H1 语料补齐（审计 §⑤ 闭环）**：`kernel-tour.hsl`（ruff 门禁主语料）新增
+  `vec![expr; n]` 重复形态两例（字符串表达式 + 数值 + 变量次数）并补 `project{}`
+  投射 —— 此前「ruff 全绿」靠语料未用 repeat 维持；补齐后门禁**仍全绿**
+  （15 个 .py · ruff 0.7.4 默认全规则），证「修复后仍全绿」。
+  - 过程留痕：首次补语料未加投射 → emit 因 X-5（引用未投射名）**exit 1** →
+    门禁如实捕获（这正是 H3 增强后的诊断力）；补投射后全链绿。
+- **实弹（iSH 本机）**：`ruff-gate.ts --ts-only` **exit 0 + 全绿**（修前：EPERM
+  崩场）；`DHV_GATE_KEEP=1` 保留产物 + 零残留；`dhv-ts check/run` kernel-tour
+  含 repeat 全过（seed 3 / zeros 4）；**run-all 全量复跑 210/212**
+  （1599962ms —— 2 败全 go 环境类：iSH go 编译器段错误，CI 权威；**2× 慢核瞬态
+  未复发，本轮改动零新增红**）。
+- **诚实边界**：H2 修复只动 ruff-gate 脚本（org 侧无 vendored 面）；dhv(Rust)
+  侧同类 `rmSync` 面如存在，随 H1 尾账（Rust py 映射）同批处理。
+
 ## v0.2.72.1（2026-10-03）—— H1 修复：`vec![expr; n]` 重复形态（解释器 + emit 双路径）
 
 审计（hsl-audit）实锤的五路径分歧中的 **dhv-ts 半面**修复：语法在 BNF 内

@@ -17,7 +17,7 @@
 // 无 ruff 环境直接报错退出（门禁不静默跳过 —— 诚实失败优于假绿）。
 //
 // 用法：bun scripts/ruff-gate.ts [--keep] [--ts-only] [--rust-only] [--require-rust]
-//   --keep          保留产物目录便于排查
+//   --keep          保留产物目录便于排查（DHV_GATE_KEEP=1 等价 —— v0.2.72.2 H3）
 //   --ts-only       仅 dhv-ts 车道（ruff-gate CI job 用）
 //   --rust-only     仅 dhv(Rust) 车道（rust-ruff-gate CI job 用）
 //   --require-rust  Rust 车道强制在环（二进制缺失 = 失败，不跳过）
@@ -52,11 +52,37 @@ function findRuff(): string {
   process.exit(2);
 }
 
-const keep = process.argv.includes("--keep");
+// H2（v0.2.72.2）：iSH 类受限沙箱上 Bun rmSync(recursive) 深目录树必 EPERM →
+// 手工遍历兜底（同 run-all.ts e097d5f 样板）。此前收尾无条件 rmSync → 即使
+// 门禁全绿也把退出码污染成非零（「跑完即崩，假红」· 复现 40/40）。
+function rmrf(t: string): void {
+  try { fs.rmSync(t, { recursive: true, force: true }); return; } catch { /* 降级 */ }
+  try {
+    const walk = (p: string): void => {
+      const st = fs.lstatSync(p);
+      if (st.isDirectory()) {
+        for (const e of fs.readdirSync(p)) walk(path.join(p, e));
+        fs.rmdirSync(p);
+      } else fs.unlinkSync(p);
+    };
+    walk(t);
+  } catch { /* 尽力而为 */ }
+}
+
+const keep = process.argv.includes("--keep") || process.env.DHV_GATE_KEEP === "1"; // H3：env 等价开关（CI/调试免改调用串）
 const tsOnly = process.argv.includes("--ts-only");
 const rustOnly = process.argv.includes("--rust-only");
 const requireRust = process.argv.includes("--require-rust");
 const ruff = findRuff();
+/** H3：门禁对账用版本串（全绿行附上，慢核假红排查时一眼区分版本漂移）。 */
+const ruffVersion: string = (() => {
+  try {
+    const r = Bun.spawnSync([ruff, "--version"], { stdout: "pipe", stderr: "pipe" });
+    return (r.stdout.toString() + r.stderr.toString()).trim().split("\n")[0] ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 const outRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hsl-ruff-gate-"));
 let failed = 0;
 let lanes = 0;
@@ -83,12 +109,13 @@ function gateOne(lane: string, hsl: string, note: string, emitCmd: string[]): bo
     return true;
   }
   const dir = path.join(outRoot, `${lane}-${path.basename(hsl, ".hsl")}`);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmrf(dir);
   const emit = Bun.spawnSync(emitCmd, {
     cwd: TOOLCHAIN, stdout: "pipe", stderr: "pipe",
   });
   if (emit.exitCode !== 0) {
-    console.log(`  ✗ [${lane}] ${hsl} emit 失败：\n${emit.stderr.toString().slice(0, 500)}`);
+    // H3：附 exitCode + 命令串（慢核假红/真回归区分用 —— 此前只有 stderr 前 500 字）
+    console.log(`  ✗ [${lane}] ${hsl} emit 失败（exitCode=${emit.exitCode}）：\n      命令：${emitCmd.join(" ")}\n${emit.stderr.toString().slice(0, 500)}`);
     return false;
   }
   // 收集 python 文件
@@ -133,11 +160,11 @@ for (const c of CORPUS) {
   }
 }
 
-if (!keep) fs.rmSync(outRoot, { recursive: true, force: true });
+if (!keep) rmrf(outRoot);
 else console.log(`\n  产物保留：${outRoot}`);
 
 if (failed > 0) {
   console.error(`\n✗ ruff gate 失败（${failed} 份语料·车道）—— python 生成器回归，见上`);
   process.exit(1);
 }
-console.log(`\n✓ ruff gate 全绿（${lanes} 份语料·车道 · ruff 0.16 默认全规则）`);
+console.log(`\n✓ ruff gate 全绿（${lanes} 份语料·车道 · ${ruffVersion} 默认全规则）`);
