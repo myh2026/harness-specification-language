@@ -22,6 +22,11 @@ import {
 
 const ROOT = path.resolve(import.meta.dir, '../..');
 const DHV = path.join(ROOT, 'dhv-ts/src/main.ts');
+// v0.2.72.3（H5 伴随 · 慢核适配）：emit 宿主语法校验预算放大 —— iSH 类沙箱
+// python3 冷启动实测 29s（py_compile 首调；热态 1.3s），库默认 15s 在套件高
+// 负载下会造成**随机失败**（if-let 用例实测：同代码隔离跑双过、套件内双现）。
+// 60s 对快机（CI）无感；受限内核从此确定性通过。
+process.env.DHV_VALIDATE_TIMEOUT_MS ??= '60000';
 // iSH 类受限沙箱：Bun rmSync(recursive) 恒 EPERM → 手工遍历兜底（v0.2.72.1）
 function rmrf(t: string): void {
   try { fs.rmSync(t, { recursive: true, force: true }); return; } catch { /* 降级 */ }
@@ -1215,7 +1220,7 @@ print('opt-map-ok')
 });
 
 // ---------------------------------------------------------------------------
-// v0.2.73（H1 修复）：vec![expr; n] 重复形态 —— 此前五路径分歧
+// v0.2.72.1（H1 修复）：vec![expr; n] 重复形态 —— 此前五路径分歧
 // （check 双过 / run 崩 <macro> 解析 / emit 崩 <macro-emit> / py 产物非法 [0;3]）
 // ---------------------------------------------------------------------------
 test('vec 重复形态', 'run: vec![0; 3] 得长度 3（此前 <macro> 解析崩）', () => {
@@ -1270,6 +1275,136 @@ project {
   assert(rs.includes('vec![0; 3]'), `rust 产物应为 vec![0; 3]`);
   const pyOut = execFileSync('python3', [path.join(dir, 'm.py')], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
   assert(pyOut.includes('3'), `python 产物执行应打印 3：${pyOut}`);
+});
+
+// ---------------------------------------------------------------------------
+// v0.2.72.3（H5 / B-41）：char::is_ascii_* 谓词族补齐 —— 此前
+// `s.chars().filter(|c| c.is_ascii_digit())` check 静默过、run 崩
+// 「String 没有方法 "is_ascii_digit"」（闭包参数无注解 → S-19 保守放行；
+// 且 CHAR_METHODS 无此族）。修复 = interp +11 谓词、emit 五后端映射
+// （py 组合式 / ts-js 正则 / rust 原生 / go-cpp 助手），语义与 rust
+// char::is_ascii_* 精确对齐（仅 ASCII 域判真，非 ASCII 一律 false）。
+// ---------------------------------------------------------------------------
+test('v0.2.72.3 H5', 'run: B-41 原病灶 —— chars().filter(|c| c.is_ascii_digit()) 此前崩', () => {
+  const f = path.join(TMP, 'ascii-filter.hsl');
+  fs.writeFileSync(f, `export fn main() -> i32 {
+    let s: String = String::from("a1b2-c3");
+    let d = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    println!("{}", d.len());
+    0
+}
+`);
+  const r = run(['run', f, '--quiet']);
+  assertEq(r.code, 0, `run 应通过（此前「String 没有方法 is_ascii_digit」崩）：${r.stderr || r.stdout}`);
+  assert(r.stdout.includes('3'), `"a1b2-c3" 应滤出 3 个数字：${r.stdout}`);
+});
+
+test('v0.2.72.3 H5', 'run: 谓词族语义（digit/hex/ws/punct/control/非 ASCII 对拍）', () => {
+  const f = path.join(TMP, 'ascii-preds.hsl');
+  fs.writeFileSync(f, `export fn main() -> i32 {
+    println!("{}", String::from("7").is_ascii_digit());
+    println!("{}", String::from("a").is_ascii_digit());
+    println!("{}", String::from("f").is_ascii_hexdigit());
+    println!("{}", String::from("g").is_ascii_hexdigit());
+    println!("{}", String::from(" ").is_ascii_whitespace());
+    println!("{}", String::from("-").is_ascii_punctuation());
+    println!("{}", String::from("\\n").is_ascii_control());
+    println!("{}", String::from("\\u{e9}").is_ascii_alphabetic());
+    println!("{}", String::from("\\u{e9}").is_ascii());
+    0
+}
+`);
+  const r = run(['run', f, '--quiet']);
+  assertEq(r.code, 0, `run 应通过：${r.stderr || r.stdout}`);
+  const vals = r.stdout.trim().split('\n').map((l) => l.trim()).filter((l) => l === 'true' || l === 'false');
+  assertEq(vals.length, 9, `应打印 9 个布尔：${r.stdout}`);
+  assertEq(vals.join(' '), 'true false true false true true true false false', `谓词族取值应精确对拍（含非 ASCII false）：${vals.join(' ')}`);
+});
+
+test('v0.2.72.3 H5', 'check: 多字符字面量直呼 is_ascii_digit 仍拦（S-19 负例不缩水）', () => {
+  const out = checkSrc(`fn main() -> i64 {
+    let x = "ab".is_ascii_digit();
+    println!("{}", x);
+    0
+}`);
+  assert(out.includes('error[S-19]'), `多字符字面量应触发 S-19（char 面越界）：${out.slice(0, 300)}`);
+  const ok = checkSrc(`fn main() -> i64 {
+    let a = "7".is_ascii_digit();
+    println!("{}", a);
+    0
+}`);
+  assert(ok.includes('0 error'), `单字符字面量直呼不应误报：${ok.slice(0, 300)}`);
+});
+
+test('v0.2.72.3 H5', 'emit: is_ascii_digit 五后端映射（py 产物真实执行对拍）', () => {
+  const dir = path.join(TMP, 'ascii-emit');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'asc.hsl'), `export fn is_num_char(c: String) -> bool {
+    c.is_ascii_digit()
+}
+project {
+    is_num_char -> "n.py" : python,
+    is_num_char -> "n.ts" : typescript,
+    is_num_char -> "n.go" : go,
+    is_num_char -> "n.cpp" : cpp,
+    is_num_char -> "n.rs" : rust,
+}
+`);
+  const r = run(['emit', path.join(dir, 'asc.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  assert(!r.stdout.includes('语法✗'), `不应有语法失败：\n${r.stdout}`);
+  const py = fs.readFileSync(path.join(dir, 'n.py'), 'utf-8');
+  assert(py.includes('len(c) == 1 and c.isascii() and c.isdigit()'), `python 产物应为 ASCII 组合式：\n${py.slice(0, 800)}`);
+  const ts = fs.readFileSync(path.join(dir, 'n.ts'), 'utf-8');
+  assert(ts.includes('/^[0-9]$/.test(c)'), `ts 产物应为锚定正则：\n${ts.slice(0, 600)}`);
+  const rs = fs.readFileSync(path.join(dir, 'n.rs'), 'utf-8');
+  assert(rs.includes('c.is_ascii_digit()'), `rust 产物应为原生方法：\n${rs.slice(0, 400)}`);
+  const go = fs.readFileSync(path.join(dir, 'n.go'), 'utf-8');
+  assert(go.includes('_dhvIsAsciiDigit(c)') && go.includes('func _dhvIsAsciiDigit(s string) bool'), `go 产物应含助手调用+定义：\n${go.slice(0, 400)}`);
+  const cpp = fs.readFileSync(path.join(dir, 'n.cpp'), 'utf-8');
+  assert(cpp.includes('_dhvIsAsciiDigit(c)') && cpp.includes('inline bool _dhvIsAsciiDigit'), `cpp 产物应含助手调用+定义：\n${cpp.slice(0, 400)}`);
+  // python 产物真实执行对拍（interp 同源语义：'7' true / 'a' false / 'é' false）
+  const drv = `import importlib.util\nspec = importlib.util.spec_from_file_location("n", ${JSON.stringify(fwd(path.join(dir, 'n.py')))})\nm = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\nprint(m.is_num_char("7"), m.is_num_char("a"), m.is_num_char("é"))`;
+  const pyOut = execFileSync('python3', ['-c', drv], { encoding: 'utf-8', timeout: 30_000, env: { ...process.env, PYTHONUTF8: '1' } });
+  assert(pyOut.trim() === 'True False False', `python 产物执行应为 True False False，实际 ${pyOut.trim()}`);
+});
+
+test('v0.2.72.3 H5', 'cpp g++ 编译级：_dhvIsAsciiDigit/_dhvIsAsciiUpper 助手与 interp 语义对齐', () => {
+  if (!hasTool('g++') || !hasCpp23()) return; // 无 g++ / 不支持 C++23 跳过（非失败）
+  const dir = path.join(TMP, 'ascii-cpp');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.hsl'), `export fn is_num_char(c: String) -> bool {
+    c.is_ascii_digit()
+}
+export fn is_up_char(c: String) -> bool {
+    c.is_ascii_uppercase()
+}
+project {
+    is_num_char -> "n.cpp" : cpp,
+    is_up_char -> "u.cpp" : cpp,
+}
+`);
+  const r = run(['emit', path.join(dir, 'a.hsl'), '--out', dir]);
+  assertEq(r.code, 0, `emit 应通过：${r.stdout}`);
+  execFileSync('g++', ['-std=c++23', '-c', path.join(dir, 'n.cpp'), '-o', path.join(dir, 'n.o')], { timeout: 60_000 });
+  execFileSync('g++', ['-std=c++23', '-c', path.join(dir, 'u.cpp'), '-o', path.join(dir, 'u.o')], { timeout: 60_000 });
+  const main = `#include <cstdint>
+#include <cstdio>
+#include <string>
+bool is_num_char(std::string c);
+bool is_up_char(std::string c);
+int main() {
+    printf("%d %d %d %d %d\\n",
+        is_num_char("7") ? 1 : 0, is_num_char("a") ? 1 : 0, is_num_char("\xC3\xA9") ? 1 : 0,
+        is_up_char("A") ? 1 : 0, is_up_char("a") ? 1 : 0);
+    return 0;
+}
+`;
+  fs.writeFileSync(path.join(dir, 'main.cpp'), main);
+  execFileSync('g++', ['-std=c++23', path.join(dir, 'main.cpp'), path.join(dir, 'n.o'), path.join(dir, 'u.o'), '-o', path.join(dir, 'asc-test')], { timeout: 60_000 });
+  const stdout = execFileSync(path.join(dir, 'asc-test'), { encoding: 'utf-8', timeout: 30_000 });
+  // interp 语义：7→1 a→0 é→0（非 ASCII false）· A→1 a→0
+  assert(stdout.trim() === '1 0 0 1 0', `g++ 产物语义应与 interp 逐位对齐（1 0 0 1 0），实际 ${stdout.trim()}`);
 });
 
 test('emit', 'java/kotlin/swift contract 声明语法质量（class 包装 + 类型后置冒号）', () => {

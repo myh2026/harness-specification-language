@@ -1658,7 +1658,7 @@ export class Interp {
         return undefined;
       }
       case 'vec': {
-        // v0.2.73（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
+        // v0.2.72.1（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
         // parseExprsFromTokens 只吃逗号分隔且以 eof 为终止（切片必须补 eof，
         // 否则死循环）；在 token 层判分号并 desugar：
         // new Array(n).fill(cloneValue(v))（= std repeat_vec 语义）

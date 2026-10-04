@@ -604,10 +604,33 @@ export const FREE_FNS: Record<string, (args: unknown[]) => unknown> = {
 };
 
 // char 方法（单字符 string）
+// v0.2.72.3（H5 / B-41）：`is_ascii_*` 家族补齐 —— 此前 `s.chars().filter(|c|
+// c.is_ascii_digit())` 在 check 期静默通过、run 期崩「String 没有方法
+// "is_ascii_digit"」（闭包参数无注解 → S-19 静态不可判 → 零假阳性放行；见
+// checker.ts 保守边界注释）。这是 Rust 字符串解析/清洗最常用的字符谓词族，
+// 缺失迫使调用方改写为 native 块。语义与 rust 同名方法精确对齐（仅 ASCII
+// 域判真，非 ASCII 码点一律 false）。
 export const CHAR_METHODS: Record<string, BuiltinMethod> = {
   to_string: { fn: (r) => S(r) },
   is_alphabetic: { fn: (r) => /[A-Za-z\u0080-\uFFFF]/.test(S(r)) },
   is_numeric: { fn: (r) => /[0-9]/.test(S(r)) },
+  // ---- v0.2.72.3（H5）：ASCII 域谓词族（rust char::is_ascii_* 同名语义）----
+  // 单字符接收者（长度 > 1 在运行期取首码点判定的旧口径不适用：这里按
+  // 「整串是否全为 ASCII 域」不做全串判定 —— 与 interp 的 char 回退面一致，
+  // 接收者作为单个码点看待，空串一律 false）。
+  is_ascii: { fn: (r) => { const c = S(r); return c.length > 0 && [...c].every((ch) => ch.charCodeAt(0) < 0x80); } },
+  is_ascii_digit: { fn: (r) => /^[0-9]$/.test(S(r)) },
+  is_ascii_alphabetic: { fn: (r) => /^[A-Za-z]$/.test(S(r)) },
+  is_ascii_alphanumeric: { fn: (r) => /^[0-9A-Za-z]$/.test(S(r)) },
+  is_ascii_uppercase: { fn: (r) => /^[A-Z]$/.test(S(r)) },
+  is_ascii_lowercase: { fn: (r) => /^[a-z]$/.test(S(r)) },
+  // 空白域与 rust 的 is_ascii_whitespace 一致（含 \t \n \x0C \r 空格；不含 VT）
+  is_ascii_whitespace: { fn: (r) => /^[ \t\n\x0C\r]$/.test(S(r)) },
+  is_ascii_punctuation: { fn: (r) => /^[!-/:-@\[-`{-~]$/.test(S(r)) },
+  is_ascii_hexdigit: { fn: (r) => /^[0-9A-Fa-f]$/.test(S(r)) },
+  // rust 的 is_ascii_control：C0（0x00-0x1F）与 DEL（0x7F）
+  is_ascii_control: { fn: (r) => /^[\x00-\x1F\x7F]$/.test(S(r)) },
+  is_ascii_graphic: { fn: (r) => /^[!-~]$/.test(S(r)) },
   clone: { fn: (r) => S(r) },
 };
 

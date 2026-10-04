@@ -2750,7 +2750,7 @@ max_of = 9
 | Option | `unwrap_or` `unwrap_or_else` `is_some` `is_none` `map` `and_then` `ok_or` `or` `cloned` `unwrap`（S-2 警告） |
 | Result | `is_ok` `is_err` `ok` `err` `map` `map_err` `unwrap_or` `and_then` `or_else` `unwrap`（S-2 警告） |
 | 数值 | `to_string` `abs` `pow` `sqrt` `floor` `ceil` `round` `min` `max` `clamp` |
-| char | `to_string` `is_alphabetic` `is_numeric` |
+| char | `to_string` `is_alphabetic` `is_numeric` `is_ascii` `is_ascii_digit` `is_ascii_alphabetic` `is_ascii_alphanumeric` `is_ascii_uppercase` `is_ascii_lowercase` `is_ascii_whitespace` `is_ascii_punctuation` `is_ascii_hexdigit` `is_ascii_control` `is_ascii_graphic` |
 
 预导入宏：`format!`（`{}` / `{0}` / `{:?}` / `{:.N}` 浮点十进制精度（v0.2.51） / `{{` 转义）、`vec!`、
 `println!`、`print!`、`eprintln!`、`panic!`、`assert!`、`assert_eq!`、`dbg!`。

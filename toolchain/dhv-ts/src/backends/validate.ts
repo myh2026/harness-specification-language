@@ -14,6 +14,19 @@ import * as fs from 'node:fs';
 
 const execFileP = promisify(execFile);
 
+/**
+ * v0.2.72.3（H5 伴随 · 慢核适配）：宿主语法校验超时预算。
+ * iSH 类受限沙箱上 python3 冷启动实测 29s（py_compile 首调，页面缓存冷 +
+ * 慢内核；热态 1.3s）—— 硬编码 15s 预算在套件高负载下成为**随机失败源**
+ * （if-let 用例实测：同代码 隔离跑双过、套件内双现「Command failed」）。
+ * DHV_VALIDATE_TIMEOUT_MS 覆盖（默认 15000 = 历史行为；慢核/套件场景建
+ * 议 60000+，run-all.ts 已内置注入）。CI（快机）不受影响。
+ */
+const VALIDATE_TIMEOUT_MS = (() => {
+  const n = Number(process.env.DHV_VALIDATE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 15_000;
+})();
+
 /** 跨平台 python 启动：python3 优先，宿主无该别名（Windows 常态：只有
  *  python）时回退 python；并注入 PYTHONUTF8=1（Windows 默认 cp1252 代码页
  *  读 UTF-8 生成物会 UnicodeDecodeError —— 三平台 CI 实测）。 */
@@ -39,7 +52,7 @@ export async function validateGeneratedFile(absPath: string, langId: string): Pr
   try {
     switch (langId) {
       case 'python': {
-        await execPy(['-m', 'py_compile', absPath], { timeout: 15_000 });
+        await execPy(['-m', 'py_compile', absPath], { timeout: VALIDATE_TIMEOUT_MS });
         return { ok: true, tool: 'python3 -m py_compile' };
       }
       case 'typescript': {

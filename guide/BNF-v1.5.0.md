@@ -1374,7 +1374,7 @@ project {
 
 **Result**：`unwrap` `expect` `is_ok` `is_err` `ok` `err` `map` `map_err` `unwrap_or` `and_then` `or_else`
 
-**数值**：`to_string` `abs` `pow` `sqrt` `floor` `ceil` `round` `min` `max` `clamp`　**char**：`to_string` `is_alphabetic` `is_numeric`
+**数值**：`to_string` `abs` `pow` `sqrt` `floor` `ceil` `round` `min` `max` `clamp`　**char**：`to_string` `is_alphabetic` `is_numeric` `is_ascii` `is_ascii_digit` `is_ascii_alphabetic` `is_ascii_alphanumeric` `is_ascii_uppercase` `is_ascii_lowercase` `is_ascii_whitespace` `is_ascii_punctuation` `is_ascii_hexdigit` `is_ascii_control` `is_ascii_graphic`（ASCII 族 v0.2.72.3）
 
 **宏（预导入）**：`format!`（`{}`/`{0}`/`{:?}`/`{{`转义）`vec!` `println!` `print!` `eprintln!` `panic!` `assert!` `assert_eq!` `dbg!`
 

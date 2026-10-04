@@ -688,6 +688,100 @@ const METHOD_TABLE: Record<string, MethodEntry> = {
     cpp: (c) => `_dhvIsDigit(${c.recv})`,
     go: (c) => `_dhvIsDigit(${c.recv})`,
   },
+  // ---- v0.2.72.3（H5 / B-41）：ASCII 域谓词族（emit 面）----
+  // 与 interp CHAR_METHODS 精确同源（仅 ASCII 域判真；非 ASCII 码点 false）。
+  // python 无现成单字符 ASCII 谓词 → 用 `len(s) == 1 and s.isascii() and ...`
+  // 组合式（isascii 是 str 方法，py3.7+）；ts/js/rust 原生方法同名直译；
+  // go 用助手 `_dhvIsAscii*(r rune)`（按码点判定，非 ASCII > 0x7F）；cpp 用
+  // `_dhvIsAscii*`（unsigned char 判定，UTF-8 首字节 ≥ 0x80 天然 non-ASCII）。
+  is_ascii: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii())`,
+    typescript: (c) => `/^[\\x00-\\x7F]$/.test(${c.recv})`,
+    javascript: (c) => `/^[\\x00-\\x7F]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii()`,
+    cpp: (c) => `_dhvIsAscii(${c.recv})`,
+    go: (c) => `_dhvIsASCII(${c.recv})`,
+  },
+  is_ascii_digit: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.isdigit())`,
+    typescript: (c) => `/^[0-9]$/.test(${c.recv})`,
+    javascript: (c) => `/^[0-9]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_digit()`,
+    cpp: (c) => `_dhvIsAsciiDigit(${c.recv})`,
+    go: (c) => `_dhvIsAsciiDigit(${c.recv})`,
+  },
+  is_ascii_alphabetic: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.isalpha())`,
+    typescript: (c) => `/^[A-Za-z]$/.test(${c.recv})`,
+    javascript: (c) => `/^[A-Za-z]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_alphabetic()`,
+    cpp: (c) => `_dhvIsAsciiAlpha(${c.recv})`,
+    go: (c) => `_dhvIsAsciiAlpha(${c.recv})`,
+  },
+  is_ascii_alphanumeric: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.isalnum())`,
+    typescript: (c) => `/^[0-9A-Za-z]$/.test(${c.recv})`,
+    javascript: (c) => `/^[0-9A-Za-z]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_alphanumeric()`,
+    cpp: (c) => `_dhvIsAsciiAlnum(${c.recv})`,
+    go: (c) => `_dhvIsAsciiAlnum(${c.recv})`,
+  },
+  is_ascii_uppercase: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.isupper())`,
+    typescript: (c) => `/^[A-Z]$/.test(${c.recv})`,
+    javascript: (c) => `/^[A-Z]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_uppercase()`,
+    cpp: (c) => `_dhvIsAsciiUpper(${c.recv})`,
+    go: (c) => `_dhvIsAsciiUpper(${c.recv})`,
+  },
+  is_ascii_lowercase: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.islower())`,
+    typescript: (c) => `/^[a-z]$/.test(${c.recv})`,
+    javascript: (c) => `/^[a-z]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_lowercase()`,
+    cpp: (c) => `_dhvIsAsciiLower(${c.recv})`,
+    go: (c) => `_dhvIsAsciiLower(${c.recv})`,
+  },
+  is_ascii_whitespace: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv} in " \\t\\n\\f\\r")`,
+    typescript: (c) => `/^[ \\t\\n\\f\\r]$/.test(${c.recv})`,
+    javascript: (c) => `/^[ \\t\\n\\f\\r]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_whitespace()`,
+    cpp: (c) => `_dhvIsAsciiWS(${c.recv})`,
+    go: (c) => `_dhvIsAsciiWS(${c.recv})`,
+  },
+  is_ascii_punctuation: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and not ${c.recv}.isalnum() and not ${c.recv}.isspace() and ${c.recv}.isprintable())`,
+    typescript: (c) => `/^[!-/:-@\\[-\\x60{-~]$/.test(${c.recv})`,
+    javascript: (c) => `/^[!-/:-@\\[-\\x60{-~]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_punctuation()`,
+    cpp: (c) => `_dhvIsAsciiPunct(${c.recv})`,
+    go: (c) => `_dhvIsAsciiPunct(${c.recv})`,
+  },
+  is_ascii_hexdigit: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and (${c.recv}.isdigit() or ${c.recv}.lower() in "abcdef"))`,
+    typescript: (c) => `/^[0-9A-Fa-f]$/.test(${c.recv})`,
+    javascript: (c) => `/^[0-9A-Fa-f]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_hexdigit()`,
+    cpp: (c) => `_dhvIsAsciiHex(${c.recv})`,
+    go: (c) => `_dhvIsAsciiHex(${c.recv})`,
+  },
+  is_ascii_control: {
+    python: (c) => `(len(${c.recv}) == 1 and (ord(${c.recv}) < 0x20 or ord(${c.recv}) == 0x7F))`,
+    typescript: (c) => `/^[\\x00-\\x1F\\x7F]$/.test(${c.recv})`,
+    javascript: (c) => `/^[\\x00-\\x1F\\x7F]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_control()`,
+    cpp: (c) => `_dhvIsAsciiCtrl(${c.recv})`,
+    go: (c) => `_dhvIsAsciiCtrl(${c.recv})`,
+  },
+  is_ascii_graphic: {
+    python: (c) => `(len(${c.recv}) == 1 and ${c.recv}.isascii() and ${c.recv}.isprintable() and ${c.recv} != " ")`,
+    typescript: (c) => `/^[!-~]$/.test(${c.recv})`,
+    javascript: (c) => `/^[!-~]$/.test(${c.recv})`,
+    rust: (c) => `${c.recv}.is_ascii_graphic()`,
+    cpp: (c) => `_dhvIsAsciiGraphic(${c.recv})`,
+    go: (c) => `_dhvIsAsciiGraphic(${c.recv})`,
+  },
   // v1.4.9：Result 消费面（Option-flavored 表示下与 is_some/is_none 同构）。
   // rust 原生 .is_ok()/.is_err()；其余语言 Err → None/null/nullopt/nil
   is_ok: {
@@ -1416,7 +1510,7 @@ export class Body {
       case 'method': {
         if (e.name === 'len' || e.name === 'sum') return 'int';
         if (['to_string', 'join', 'trim', 'to_lowercase', 'to_uppercase', 'replace', 'as_str', 'char_at'].includes(e.name)) return 'str';
-        if (['is_empty', 'contains', 'starts_with', 'ends_with', 'is_some', 'is_none', 'is_ok', 'is_err', 'is_alphabetic', 'is_numeric', 'is_sorted', 'any', 'all'].includes(e.name)) return 'bool';
+        if (['is_empty', 'contains', 'starts_with', 'ends_with', 'is_some', 'is_none', 'is_ok', 'is_err', 'is_alphabetic', 'is_numeric', 'is_ascii', 'is_ascii_digit', 'is_ascii_alphabetic', 'is_ascii_alphanumeric', 'is_ascii_uppercase', 'is_ascii_lowercase', 'is_ascii_whitespace', 'is_ascii_punctuation', 'is_ascii_hexdigit', 'is_ascii_control', 'is_ascii_graphic', 'is_sorted', 'any', 'all'].includes(e.name)) return 'bool';
         if (e.name === 'clone' || e.name === 'iter') return this.exprKind(e.recv);
         // Option 保留：get/first/last/pop 返回 Option；map/and_then/or/cloned 保留接收者 Option 性
         if (['get', 'first', 'last', 'pop'].includes(e.name)) {
@@ -1490,7 +1584,7 @@ export class Body {
       return this.printCall(text, name !== 'print');
     }
     if (name === 'vec') {
-      // v0.2.73（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
+      // v0.2.72.1（H1 修复）：重复形态 vec![expr; n]（BNF「重复展开」）——
       // splitTopLevel 按逗号分组，重复形态整段无逗号（单组内含 ';'）；
       // 在组内 token 层判分号并 desugar 为各后端 repeat 构造。
       if (groups.length === 1) {
@@ -3050,6 +3144,42 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         'func _dhvIsDigit(s string) bool {',
         "\treturn len(s) == 1 && s[0] >= '0' && s[0] <= '9'",
         '}',
+        '// v0.2.72.3（H5 / B-41）：ASCII 域谓词族（interp CHAR_METHODS 同源 —— 空串 false；',
+        '// 多字符接收者取首字节判定，与既有 char 回退面口径一致）',
+        'func _dhvIsASCII(s string) bool {',
+        '\tif s == "" { return false }',
+        '\treturn s[0] < 0x80',
+        '}',
+        'func _dhvIsAsciiDigit(s string) bool {',
+        "\treturn len(s) == 1 && s[0] >= '0' && s[0] <= '9'",
+        '}',
+        'func _dhvIsAsciiAlpha(s string) bool {',
+        "\treturn len(s) == 1 && ((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z'))",
+        '}',
+        'func _dhvIsAsciiAlnum(s string) bool {',
+        '\treturn len(s) == 1 && ((s[0] >= \'a\' && s[0] <= \'z\') || (s[0] >= \'A\' && s[0] <= \'Z\') || (s[0] >= \'0\' && s[0] <= \'9\'))',
+        '}',
+        'func _dhvIsAsciiUpper(s string) bool {',
+        "\treturn len(s) == 1 && s[0] >= 'A' && s[0] <= 'Z'",
+        '}',
+        'func _dhvIsAsciiLower(s string) bool {',
+        "\treturn len(s) == 1 && s[0] >= 'a' && s[0] <= 'z'",
+        '}',
+        'func _dhvIsAsciiWS(s string) bool {',
+        '\treturn len(s) == 1 && (s[0] == \' \' || s[0] == \'\\t\' || s[0] == \'\\n\' || s[0] == \'\\f\' || s[0] == \'\\r\')',
+        '}',
+        'func _dhvIsAsciiPunct(s string) bool {',
+        '\treturn len(s) == 1 && s[0] > 0x20 && s[0] < 0x7F && !_dhvIsAsciiAlnum(s)',
+        '}',
+        'func _dhvIsAsciiHex(s string) bool {',
+        '\treturn len(s) == 1 && ((s[0] >= \'0\' && s[0] <= \'9\') || (s[0] >= \'a\' && s[0] <= \'f\') || (s[0] >= \'A\' && s[0] <= \'F\'))',
+        '}',
+        'func _dhvIsAsciiCtrl(s string) bool {',
+        '\treturn len(s) == 1 && (s[0] < 0x20 || s[0] == 0x7F)',
+        '}',
+        'func _dhvIsAsciiGraphic(s string) bool {',
+        '\treturn len(s) == 1 && s[0] > 0x20 && s[0] < 0x7F',
+        '}',
         '',
       ];
     }
@@ -3291,6 +3421,41 @@ export function languagePrelude(langId: string, goSkipHelpers = false): string[]
         '}',
         'inline bool _dhvIsDigit(const std::string& s) {',
         '    return !s.empty() && std::isdigit(static_cast<unsigned char>(s[0])) != 0;',
+        '}',
+        '// v0.2.72.3（H5 / B-41）：ASCII 域谓词族（interp CHAR_METHODS 同源 —— 空串 false；',
+        '// 多字符接收者取首字节判定，UTF-8 首字节 ≥ 0x80 天然 non-ASCII）',
+        'inline bool _dhvIsAscii(const std::string& s) {',
+        '    return !s.empty() && static_cast<unsigned char>(s[0]) < 0x80;',
+        '}',
+        'inline bool _dhvIsAsciiDigit(const std::string& s) {',
+        '    return s.size() == 1 && s[0] >= \'0\' && s[0] <= \'9\';',
+        '}',
+        'inline bool _dhvIsAsciiAlpha(const std::string& s) {',
+        '    return s.size() == 1 && ((s[0] >= \'a\' && s[0] <= \'z\') || (s[0] >= \'A\' && s[0] <= \'Z\'));',
+        '}',
+        'inline bool _dhvIsAsciiAlnum(const std::string& s) {',
+        '    return s.size() == 1 && ((s[0] >= \'a\' && s[0] <= \'z\') || (s[0] >= \'A\' && s[0] <= \'Z\') || (s[0] >= \'0\' && s[0] <= \'9\'));',
+        '}',
+        'inline bool _dhvIsAsciiUpper(const std::string& s) {',
+        '    return s.size() == 1 && s[0] >= \'A\' && s[0] <= \'Z\';',
+        '}',
+        'inline bool _dhvIsAsciiLower(const std::string& s) {',
+        '    return s.size() == 1 && s[0] >= \'a\' && s[0] <= \'z\';',
+        '}',
+        'inline bool _dhvIsAsciiWS(const std::string& s) {',
+        '    return s.size() == 1 && (s[0] == \' \' || s[0] == \'\\t\' || s[0] == \'\\n\' || s[0] == \'\\f\' || s[0] == \'\\r\');',
+        '}',
+        'inline bool _dhvIsAsciiPunct(const std::string& s) {',
+        '    return s.size() == 1 && s[0] > 0x20 && s[0] < 0x7F && !_dhvIsAsciiAlnum(s);',
+        '}',
+        'inline bool _dhvIsAsciiHex(const std::string& s) {',
+        '    return s.size() == 1 && ((s[0] >= \'0\' && s[0] <= \'9\') || (s[0] >= \'a\' && s[0] <= \'f\') || (s[0] >= \'A\' && s[0] <= \'F\'));',
+        '}',
+        'inline bool _dhvIsAsciiCtrl(const std::string& s) {',
+        '    return s.size() == 1 && (static_cast<unsigned char>(s[0]) < 0x20 || s[0] == 0x7F);',
+        '}',
+        'inline bool _dhvIsAsciiGraphic(const std::string& s) {',
+        '    return s.size() == 1 && s[0] > 0x20 && s[0] < 0x7F;',
         '}',
         '#endif',
         '',

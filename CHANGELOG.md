@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## v0.2.72.3（2026-10-03）—— H5 修复：`char::is_ascii_*` 谓词族（B-41）—— interp +11 谓词 + emit 六后端映射
+
+B-41（org 真实车道铸造轨迹实锤，hsl 队列 H5）：`s.chars().filter(|c| c.is_ascii_digit())`
+**check 静默通过、run 崩「String 没有方法 "is_ascii_digit"」** —— 「闭包参数
+无注解 → S-19 保守放行」（可判定性缺口）×「CHAR_METHODS 缺该族」（运行期方法
+面真缺）两因叠加。该族是 Rust 字符串解析/清洗最常用的字符谓词，缺失迫使
+调用方绕行 native 块。
+
+- **interp（builtins.ts）**：`CHAR_METHODS` +11 —— `is_ascii` / `is_ascii_digit` /
+  `is_ascii_alphabetic` / `is_ascii_alphanumeric` / `is_ascii_uppercase` /
+  `is_ascii_lowercase` / `is_ascii_whitespace` / `is_ascii_punctuation` /
+  `is_ascii_hexdigit` / `is_ascii_control` / `is_ascii_graphic`；语义与 rust
+  `char::is_ascii_*` 精确对齐（**仅 ASCII 域判真，非 ASCII 码点一律 false** ——
+  与既有 is_alphabetic/is_numeric 的「非 ASCII 判真」口径有意区分，对拍见下）。
+- **emit（backends/body.ts）**：`METHOD_TABLE` +11 项 × 6 活体后端 ——
+  python 组合式（`len(s) == 1 and s.isascii() and …`）、ts/js 锚定正则、
+  rust 原生方法直投、go/cpp `_dhvIsAscii*` 助手（含注入定义）；`bool` 返回
+  型判据同步扩展；java/kotlin 等非活体语言诚实回退 contract（不静默错码，
+  实测语法✓）。全部新产物 ruff 0.7.4 全绿。
+- **慢核适配（H5 伴随）**：`validate.ts` 宿主语法校验超时预算环境变量化 ——
+  `DHV_VALIDATE_TIMEOUT_MS`（默认 15000 = 历史行为；`run-all.ts` 内置注入
+  60000）。iSH 类沙箱 python3 冷启动实测 **29s**（py_compile 首调；热态
+  1.3s），15s 硬编码预算在套件高负载下成为**随机失败源**（if-let 用例：
+  同代码隔离跑双过、套件内双现「Command failed」；旋钮 5000 实测反向复现
+  4/6 通过，两向验证接线）。CI（快机）不受影响。
+- **测试（run-all）**：新增「v0.2.72.3 H5」5 例 —— ①B-41 原病灶 run
+  （`chars().filter(|c| c.is_ascii_digit())` 链）②谓词族语义九连对拍
+  （digit/hex/ws/punct/control + é 非 ASCII false）③S-19 负例不缩水
+  （多字符字面量直呼仍拦；单字符合法）④emit 五文件结构断言 + python 产物
+  真实执行（`True False False`）⑤cpp g++ 编译链接运行（`1 0 0 1 0`）。
+  **修前负控 4/4 全红**（病灶签名「String 没有方法 "is_ascii_digit"」原样
+  复现，日志 `/root/audit/h5-negative-control.log`）→ 修后 5/5 全绿。
+  **全量套件复跑（hsl-lab）：214 通过 · 3 失败 · 217 用例**（1777348ms）——
+  2× go 环境类（iSH go 编译器段错误；历史在册，CI 权威）+ 1× if-let 慢核
+  瞬态（py_compile 冷启动超 15s；同代码隔离复跑全过、clean 代码亦复现同败
+  → 环境类；本批旋钮消解后 if-let ×2 连过）。
+- **诚实边界**：dhv(Rust) 半面无改动 —— `toolchain/dhv` 的 `CHAR_METHOD_NAMES`
+  仍 4 键，该族**保持 fail-closed**（Rust check 继续拒绝，不出现「check 过而
+  38 后端 emit 错码」的更差状态）；Rust 半面（typecheck 表 + 38 后端映射 +
+  conformance 语料）随 H1 Rust 尾账同批安排。
+
 ## v0.2.72.2（2026-10-03）—— H2/H3 修复：ruff-gate 受限沙箱适配 + 门禁可诊断性；H1 语料补齐（repeat 锚点）
 
 审计（hsl-audit §⑤ / R16 现场取证）实锤：**iSH 类受限沙箱上 Bun `rmSync(recursive)`
