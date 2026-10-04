@@ -1266,6 +1266,25 @@ fn py_vec_macro(args: &MacroArgs) -> String {
     } else {
         args.tokens.clone()
     };
+    // v0.2.72.3（H1 Rust 尾账）：重复形态 vec![expr; n] → [expr] * n ——
+    // H1/H2 把 repeat 语料补进 kernel-tour 后，rust 车道的 python 产物实测
+    // `[0;3]`（invalid-syntax，ruff 门禁 CI 红灯）。与 dhv-ts H1 修复同语义：
+    // 顶层分号处 desugar（嵌套构造是 Delimited 原子 token，顶层扫描天然不
+    // 误伤 `vec![vec![1;2]; 3]` 的内层分号）；输出形与 ArrayRepeat 分支同款。
+    let mut semi_at: Option<usize> = None;
+    for (i, tt) in toks.iter().enumerate() {
+        if let TokenTree::Token(Token::Punct(p), _) = tt {
+            if p == ";" {
+                semi_at = Some(i);
+                break;
+            }
+        }
+    }
+    if let Some(i) = semi_at {
+        let elem = py_token_expr(&toks[..i]);
+        let count = py_token_expr(&toks[i + 1..]);
+        return format!("[{}] * {}", elem, count);
+    }
     let mut groups: Vec<Vec<TokenTree>> = Vec::new();
     let mut cur: Vec<TokenTree> = Vec::new();
     for tt in toks {

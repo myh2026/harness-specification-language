@@ -36,10 +36,22 @@ B-41（org 真实车道铸造轨迹实锤，hsl 队列 H5）：`s.chars().filter
   2× go 环境类（iSH go 编译器段错误；历史在册，CI 权威）+ 1× if-let 慢核
   瞬态（py_compile 冷启动超 15s；同代码隔离复跑全过、clean 代码亦复现同败
   → 环境类；本批旋钮消解后 if-let ×2 连过）。
-- **诚实边界**：dhv(Rust) 半面无改动 —— `toolchain/dhv` 的 `CHAR_METHOD_NAMES`
-  仍 4 键，该族**保持 fail-closed**（Rust check 继续拒绝，不出现「check 过而
-  38 后端 emit 错码」的更差状态）；Rust 半面（typecheck 表 + 38 后端映射 +
-  conformance 语料）随 H1 Rust 尾账同批安排。
+- **H1 Rust 尾账修复（CI 复红修复）**：`py_vec_macro` 支持重复形态 —— H1/H2
+  把 repeat 语料补进 kernel-tour 后，CI「dhv (Rust) python ruff gate」在
+  `repeat_seed/repeat_zeros` 的 rust 车道产物实测 `[0;3]`（invalid-syntax）
+  红灯（自 `2284caf` 起在册，本轮定位）。修复：顶层分号 desugar →
+  `[expr] * n`（与 dhv-ts H1 修复同语义、与 ArrayRepeat 分支同输出形；嵌套
+  构造为 Delimited 原子 token，顶层扫描天然不误伤 `vec![vec![1;2]; 3]`）。
+  本机受限内核无法重编 Rust —— 新增行以保真类型 harness `rustc` 编译校验
+  通过（rc=0），行为面由 CI 门禁（云端构建）验证。填补后门禁预期复绿。
+- **文档**：BNF 附录 A char 面补齐（权威源 `toolchain/hsl-spec/BNF.md` +
+  guide 镜像逐字节同步，md5 一致）+ HSL-GUIDE 方法表同步 + H1 注释版本
+  勘误（v0.2.73 → v0.2.72.1）。
+- **诚实边界**：H5 的 dhv(Rust) 半面仍未动 —— `CHAR_METHODS` 家族的
+  `CHAR_METHOD_NAMES` 仍 4 键，该族**保持 fail-closed**（Rust check 继续
+  拒绝，不出现「check 过而 38 后端 emit 错码」的更差状态）；其（typecheck
+  表 + 38 后端映射 + conformance 语料）与其余 Rust 尾账同批安排（本批只清
+  了「重复形态」一项尾账，见上）。
 
 ## v0.2.72.2（2026-10-03）—— H2/H3 修复：ruff-gate 受限沙箱适配 + 门禁可诊断性；H1 语料补齐（repeat 锚点）
 
