@@ -1,3 +1,15 @@
+## v0.2.72.4（2026-10-04）—— Windows 绝对路径 import 修复：resolveImport 键形态双候选
+
+- **根因**：win32 下 loadProgram 的模块键为 `path.resolve` 反斜杠形态（`D:\a\…`），
+  而 `resolveImport` 的查找候选全为正斜杠族（`D:/a/…` / normalizePath 形态）→
+  单一形态 miss → 运行期「import 路径无法解析」直接退出。CI
+  `cross-platform-tests (windows)` lane-ask「真车道消息完整性」两例实锤（50ms 空
+  stdout；macOS 同套件全过 —— 斜杠形态一致）。
+- **修复**：查找候选加 `nativeSep`（正斜杠路径按 `path.sep` 还原）双形态；posix 下
+  与 abs 同形零副作用，win32 下即命中 linker 注册键。
+- 验证：本地 posix 行为逐项复核（check + 绝对路径 import 探针程序跑通）；win 行为面
+  由 CI（windows runner）验证。
+
 # CHANGELOG
 
 ## v0.2.72.3（2026-10-03）—— H5 修复：`char::is_ascii_*` 谓词族（B-41）—— interp +11 谓词 + emit 六后端映射

@@ -391,9 +391,17 @@ export class Interp {
     const abs = path.isAbsolute(pathStr) ? pathStr : path.resolve(base, pathStr);
     // 模块键是 loadProgram 的 path.resolve 形态；normalizePath 形态作兼容回退
     const norm = normalizePath(abs.split(path.sep).join('/'));
+    // v0.2.72.4（win 绝对路径 import 修复）：键形态双候选 —— win32 下
+    // loadProgram 的 path.resolve 键为反斜杠形态（D:\a\…），而 import 字面量
+    // 常为正斜杠写法（D:/a/…）→ 单一形态查找 miss → 「import 路径无法解析」。
+    // CI cross-platform-tests(win) lane-ask 两例实锤（50ms 空 stdout；mac
+    // 同套件全过 —— 斜杠形态一致）。posix 下 nativeSep 与 abs 同形，零副作用。
+    const nativeSep = abs.split('/').join(path.sep);
     return this.modules.get(abs)
       ?? this.modules.get(norm)
+      ?? this.modules.get(nativeSep)
       ?? this.modules.get(norm.endsWith('.hsl') ? norm : norm + '.hsl')
+      ?? this.modules.get(nativeSep.endsWith('.hsl') ? nativeSep : nativeSep + '.hsl')
       ?? this.modules.get(abs.endsWith('.hsl') ? abs : abs + '.hsl');
   }
 
