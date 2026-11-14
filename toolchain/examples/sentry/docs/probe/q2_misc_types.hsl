@@ -1,0 +1,53 @@
+struct Item { id: i64, name: String }
+struct Bag { items: Vec<Item>, count: i64 }
+
+impl Bag {
+    fn new() -> Bag {
+        Bag { items: Vec::new(), count: 0 }
+    }
+    fn add(mut self, item: Item) -> Bag {
+        self.items.push(item);
+        self.count = self.count + 1;
+        self
+    }
+}
+
+fn main() -> Result<(), String> {
+    let s = String::from("abc");
+    let mut t = String::new();
+    t.push_str(&s);
+    t.push_str("def");
+    println!("strings={} len={}", t, t.len());
+
+    let b = Bag::new().add(Item { id: 1, name: "a".to_string() }).add(Item { id: 2, name: "b".to_string() });
+    println!("bag_count={} items={:?}", b.count, b.items.len());
+
+    let one = Item { id: 1, name: "a".to_string() };
+    let two = Item { id: 1, name: "a".to_string() };
+    println!("struct_eq={} clone_eq={}", one.id == two.id, one.name == two.name.clone());
+
+    let mut m: HashMap<String, Item> = HashMap::new();
+    m.insert("a".to_string(), one.clone());
+    println!("map_get={:?}", m.get("a".to_string()).map(|i| i.id));
+    println!("map_has={} map_len={}", m.contains_key("a".to_string()), m.len());
+
+    let mut nums = vec![3, 1, 2];
+    nums.sort();
+    println!("sorted={:?}", nums);
+    nums.sort_by(|x| -x);
+    println!("sort_by_key={:?}", nums);
+    nums.sort_desc();
+    println!("sort_desc={:?}", nums);
+
+    for (i, v) in nums.iter().enumerate() {
+        println!("enum i={} v={}", i, v);
+    }
+
+    let boxed: Vec<Box<dyn Fn2>> = vec![Box::new(Double {}) as Box<dyn Fn2>];
+    println!("dyn={}", boxed[0].apply(4));
+    Ok(())
+}
+
+trait Fn2 { fn apply(self, x: i64) -> i64; }
+struct Double {}
+impl Fn2 for Double { fn apply(self, x: i64) -> i64 { x * 2 } }

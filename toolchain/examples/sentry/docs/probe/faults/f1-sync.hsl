@@ -1,0 +1,31 @@
+// f1-sync — fixture-v2 faults on synchronous targets: empty / corrupt / rejected slow.
+// fixture: f1.json
+fn main() {
+    // fs.read: nth=1 empty, nth=2 corrupt, nth=3 untouched
+    let r1 = native typescript { return $host.fs.read("a.txt"); };
+    println!("R1_EMPTY len={} val={:?}", r1.len(), r1);
+    let r2 = native typescript { return $host.fs.read("a.txt"); };
+    println!("R2_CORRUPT val={:?}", r2);
+    let r3 = native typescript { return $host.fs.read("a.txt"); };
+    println!("R3_NORMAL val={:?}", r3);
+
+    // fs.write empty -> number 0
+    let w = native typescript { return $host.fs.write("f1-out.txt", "0123456789"); };
+    println!("W_EMPTY ret={:?}", w);
+
+    // fs.edit empty -> object result becomes unit
+    let e = native typescript { return $host.fs.edit("a.txt", "a", "a"); };
+    println!("E_EMPTY ret={:?}", e);
+
+    // fs.list corrupt -> truncated string
+    let l = native typescript { return $host.fs.list("."); };
+    println!("L_CORRUPT val={:?}", l);
+
+    // json.parse corrupt on object result -> no-op (only strings/Maps handled)
+    let j = native typescript { return $host.json.parse("{\"k\":1,\"pad\":\"x\"}"); };
+    println!("J_CORRUPT kind_obj field={}", j.k);
+
+    // json.fields corrupt -> Map cleared
+    let f = native typescript { return $host.json.fields("{\"verdict\":\"accept\",\"score\":3}"); };
+    println!("F_CORRUPT len={} has_verdict={:?}", f.len(), f.get("verdict"));
+}

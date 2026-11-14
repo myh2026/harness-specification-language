@@ -1,0 +1,16 @@
+// p5d-entry — R5 expansion pool: named items of imported modules' exports are projected too.
+import { inc, Point } from "./p5d-lib.hsl";
+
+fn main() -> Result<(), String> {
+    println!("{}", inc(1));
+    Ok(())
+}
+
+project {
+    main -> "gen/main.rs" : rust,
+
+    rules {
+        fn -> "gen/fn/{name}.rs" : rust,
+        struct -> "gen/st/{name}.rs" : rust,
+    }
+}

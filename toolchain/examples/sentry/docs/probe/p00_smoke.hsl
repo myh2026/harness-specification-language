@@ -1,0 +1,17 @@
+﻿// p00 smoke: basic program + println
+struct Point { x: i64, y: i64 }
+
+impl Point {
+    fn new(x: i64, y: i64) -> Point { Point { x, y } }
+    fn mag_sq(self) -> i64 { self.x * self.x + self.y * self.y }
+}
+
+const MAX: i64 = 100;
+typealias Id = i64;
+
+fn main() -> i64 {
+    let p = Point::new(3, 4);
+    let id: Id = 7;
+    println!("mag={} id={} max={}", p.mag_sq(), id, MAX);
+    0
+}

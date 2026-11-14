@@ -1,0 +1,20 @@
+enum P { A, B }
+graph Attrs(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    node mut n: i64 = 0;
+    node c: i64 = 0;
+    edge phase -> n on P::B with backpressure = true, durable;
+    edge n -> c;
+    loop {
+        match phase {
+            P::A => { phase = P::B; }
+            P::B => { n = n + 1; break; }
+        }
+    }
+    Ok(n + c)
+}
+fn main() -> Result<(), String> {
+    let r = Attrs::run(P::A)?;
+    println!("attrs={}", r);
+    Ok(())
+}

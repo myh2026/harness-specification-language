@@ -1,0 +1,11 @@
+struct Pt { x: i64, y: i64 }
+impl Pt {
+    fn new(x: i64, y: i64) -> Self {
+        Self { x, y }
+    }
+    fn sum(self) -> i64 { self.x + self.y }
+}
+fn main() -> Result<(), String> {
+    println!("self_kw={}", Pt::new(2, 3).sum());
+    Ok(())
+}

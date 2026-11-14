@@ -1,0 +1,26 @@
+// f2-async — fixture-v2 faults on async targets: empty / corrupt / slow / error + fixture track faults.
+fn main() {
+    // shell.run: nth=1 empty, nth=2 corrupt, nth=3 slow(delay 200), nth=4 clean
+    let s1 = native typescript { return await $host.shell.run("echo payload-12345"); };
+    println!("S1_EMPTY ok={} code={} out={:?} err={:?}", s1.ok, s1.code, s1.stdout, s1.stderr);
+    let s2 = native typescript { return await $host.shell.run("echo payload-12345"); };
+    println!("S2_CORRUPT ok={} code={} out={:?} err={:?}", s2.ok, s2.code, s2.stdout, s2.stderr);
+    let t0 = native typescript { return Date.now(); };
+    let s3 = native typescript { return await $host.shell.run("echo payload-12345"); };
+    let t1 = native typescript { return Date.now(); };
+    println!("S3_SLOW ok={} out={:?} elapsed_ms={}", s3.ok, s3.stdout, t1 - t0);
+
+    // fixture.next:plan nth=1 empty, nth=2 corrupt, nth=3 slow(delay 150)
+    let p1 = native typescript { return await $host.fixture.next("plan"); };
+    println!("P1_EMPTY left={} val={:?}", native typescript { return $host.fixture.left("plan"); }, p1);
+    let p2 = native typescript { return await $host.fixture.next("plan"); };
+    println!("P2_CORRUPT val={:?}", p2);
+    let u0 = native typescript { return Date.now(); };
+    let p3 = native typescript { return await $host.fixture.next("plan"); };
+    let u1 = native typescript { return Date.now(); };
+    println!("P3_SLOW val={:?} elapsed_ms={}", p3, u1 - u0);
+
+    // llm.complete error fault -> thrown message is the fault message
+    let llm = native typescript { try { return await $host.llm.complete({ messages: [{ role: "user", content: "hi" }] }); } catch (e) { return "CAUGHT:" + e.message; } };
+    println!("LLM_ERR val={:?}", llm);
+}

@@ -1,0 +1,7 @@
+macro_rules! rp_b {
+    [$($x:literal),*] => { vec![$($x),*] };
+}
+fn main() -> Result<(), String> {
+    println!("b={:?}", rp_b![]);
+    Ok(())
+}

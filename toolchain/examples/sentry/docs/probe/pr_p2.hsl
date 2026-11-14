@@ -1,0 +1,7 @@
+struct TwoA { n: i64 }
+struct TwoB { n: i64 }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    TwoA -> "src/same.rs" : rust,
+    TwoB -> "src/same.rs" : rust,
+}

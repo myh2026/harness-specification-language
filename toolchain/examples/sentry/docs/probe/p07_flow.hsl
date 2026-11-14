@@ -1,0 +1,54 @@
+// probe: if/else values, if let, while let, loops, labels, break values
+fn clamp(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo { lo } else if v > hi { hi } else { v }
+}
+
+fn main() -> i64 {
+    println!("{} {} {}", clamp(-5, 0, 10), clamp(5, 0, 10), clamp(99, 0, 10));
+    let parity = if clamp(5, 0, 10) % 2 == 0 { String::from("even") } else { String::from("odd") };
+    println!("parity={}", parity);
+
+    let maybe: Option<i64> = Some(9);
+    if let Some(v) = maybe {
+        println!("got {}", v);
+    }
+
+    let mut queue = vec![1, 2, 3];
+    let mut drained: i64 = 0;
+    while let Some(x) = queue.pop() {
+        drained += x;
+    }
+    println!("drained={}", drained);
+
+    // while
+    let mut i: i64 = 0;
+    while i < 3 { i += 1; }
+    println!("i={}", i);
+
+    // for range / inclusive range
+    let mut s1: i64 = 0;
+    for k in 0..5 { s1 += k; }
+    let mut s2: i64 = 0;
+    for k in 1..=3 { s2 += k; }
+    println!("s1={} s2={}", s1, s2);
+
+    // loop + break with value?
+    let mut count: i64 = 0;
+    loop {
+        count += 1;
+        if count >= 3 { break; }
+    }
+    println!("count={}", count);
+
+    // labeled loops
+    let mut hits: i64 = 0;
+    'outer: for a in 0..5 {
+        for b in 0..5 {
+            if a * b >= 6 { continue 'outer; }
+            if a + b > 5 { break 'outer; }
+            hits += 1;
+        }
+    }
+    println!("hits={}", hits);
+    0
+}

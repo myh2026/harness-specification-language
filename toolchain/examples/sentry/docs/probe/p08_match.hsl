@@ -1,0 +1,57 @@
+// probe: match patterns — guards, or-patterns, ranges, tuple/struct patterns,
+// wildcard binding, string match, nested Option/Result
+enum Level { Info, Warn { code: i64 }, Error { code: i64, message: String } }
+
+fn describe(l: Level) -> String {
+    match l {
+        Level::Info => String::from("info"),
+        Level::Warn { code } if code >= 2 => format!("severe {}", code),
+        Level::Warn { code } => format!("warn {}", code),
+        Level::Error { code, message } => format!("error {} {}", code, message),
+    }
+}
+
+fn classify(n: i64) -> &'static str {
+    match n {
+        1 | 2 => "small",
+        3..=9 => "mid",
+        _ => "big",
+    }
+}
+
+fn pair_sum(t: (i64, i64)) -> i64 {
+    match t {
+        (a, 0) => a,
+        (0, b) => b,
+        (a, b) => a + b,
+    }
+}
+
+fn main() -> i64 {
+    println!("{}", describe(Level::Warn { code: 2 }));
+    println!("{} {} {}", classify(2), classify(5), classify(50));
+    println!("{} {} {}", pair_sum((7, 0)), pair_sum((0, 7)), pair_sum((2, 3)));
+    println!("{}", classify(3));
+
+    // match on strings
+    let s = String::from("b");
+    let n = match s.as_str() {
+        "a" => 1,
+        "b" => 2,
+        _ => 0,
+    };
+    println!("str match={}", n);
+
+    // match on Option / Result with shorthand variants
+    let o: Option<i64> = Some(3);
+    match o {
+        Some(x) => println!("some {}", x),
+        None => println!("none"),
+    }
+    let r: Result<i64, String> = Err(String::from("e"));
+    match r {
+        Ok(v) => println!("ok {}", v),
+        Err(e) => println!("err {}", e),
+    }
+    0
+}

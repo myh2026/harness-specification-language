@@ -1,0 +1,63 @@
+const LIMIT: i64 = 8;
+type Name = String;
+
+struct Cfg { limit: i64, label: String }
+
+enum Phase { Plan, Act, Done }
+
+trait Describe { fn describe(self) -> String; }
+
+impl Describe for Cfg {
+    fn describe(self) -> String { format!("{}:{}", self.label, self.limit) }
+}
+
+fn helper(a: i64) -> i64 { a * 2 }
+
+block SystemPrompt {
+You are a sentry.
+Limit: {{LIMIT}}
+Doubled: {{helper(3)}}
+}
+
+static ConfigYaml {
+sentry:
+  limit: {{LIMIT}}
+  doubled: {{helper(4)}}
+}
+
+graph Worker(mut cfg: Cfg) -> Result<i64, String> {
+    node mut phase: Phase = Phase::Plan;
+    node mut total: i64 = 0;
+    edge phase -> total on Phase::Act;
+    loop {
+        match phase {
+            Phase::Plan => { phase = Phase::Act; }
+            Phase::Act => {
+                total = total + cfg.limit;
+                phase = Phase::Done;
+            }
+            Phase::Done => { break; }
+        }
+    }
+    Ok(total)
+}
+
+fn main() -> Result<(), String> {
+    let cfg = Cfg { limit: LIMIT, label: "sentry".to_string() };
+    println!("describe={}", cfg.describe());
+    let r = Worker::run(cfg)?;
+    println!("worker={}", r);
+    Ok(())
+}
+
+scale = microkernel;
+
+project {
+    Cfg          -> "src/types/cfg.rs"    : rust,
+    Phase        -> "src/types/phase.rs"  : rust,
+    Describe     -> "src/traits/describe.rs" : rust,
+    helper       -> "src/fn/helper.py"    : python,
+    Worker       -> "src/graph/worker.ts" : typescript,
+    SystemPrompt -> "prompts/system.md"   : markdown,
+    ConfigYaml   -> "config/sentry.yaml"  : yaml,
+}

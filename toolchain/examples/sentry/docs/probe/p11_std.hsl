@@ -1,0 +1,34 @@
+import * as text from "std/text";
+import * as math from "std/math";
+import * as iter from "std/iter";
+import * as rnd from "std/random";
+import * as tm from "std/time";
+import * as env from "std/env";
+import * as json from "std/json";
+import * as core from "std/core";
+import * as coll from "std/collections";
+
+fn main() -> Result<(), String> {
+    println!("snake={} camel={} pascal={} kebab={}", text.to_snake("HelloWorld"), text.to_camel("hello_world"), text.to_pascal("hello_world"), text.to_kebab("HelloWorld"));
+    println!("pad=[{}] [{}] cap={} count={}", text.pad_start("7", 3, "0"), text.pad_end("ab", 4), text.capitalize("abc"), text.count("a-b-a", "a"));
+    println!("alpha={} num={} trunc={} lev={}", text.is_alpha("abc"), text.is_numeric("3.5"), text.truncate("abcdef", 4), text.levenshtein("kitten", "sitting"));
+    println!("math pi={:.4} sqrt={} gcd={} lcm={} div_ceil={} isqrt={} pow={} rem={}", math.PI, math.sqrt(16.0), math.gcd(12, 18), math.lcm(4, 6), math.div_ceil(7, 2), math.isqrt(17), math.pow(2.0, 10.0), math.rem_euclid(-7, 3));
+    println!("iter range={:?} step={:?} enum={:?}", iter.range(0, 5), iter.range_step(0, 10, 3), iter.enumerate(vec!["a", "b"]));
+    println!("iter min={:?} max={:?} chain={:?} take={:?} skip={:?}", iter.min_of(vec![3, 1, 2]), iter.max_of(vec![3, 1, 2]), iter.chain(vec![1], vec![2, 3]), iter.take(vec![1, 2, 3], 2), iter.skip(vec![1, 2, 3], 1));
+    rnd.seed(7);
+    let r1 = rnd.int_in(1, 100);
+    let u1 = rnd.uuid_v4();
+    let c1 = rnd.choice(vec!["x", "y"]);
+    println!("rand int={} uuid={} choice={:?}", r1, u1, c1);
+    rnd.seed(7);
+    println!("reproducible={}", rnd.int_in(1, 100) == r1);
+    println!("time duration={} iso_len={}", tm.duration_desc(1500), tm.now_iso().len());
+    println!("env path_some={} task=[{}] model={} ws_len={}", env.env_get("PATH").is_some(), env.task_text(), env.model_name(), env.workspace().len());
+    println!("json stringify={}", json.stringify(vec![1, 2]));
+    let parsed = json.parse("{\"a\":1,\"b\":[true,null]}");
+    println!("json parse_ok={} get={:?}", parsed.is_ok(), json.get(parsed.ok().unwrap_or(0), "a"));
+    println!("type_name={} {} {}", core.type_name(1), core.type_name("s"), core.type_name(vec![1]));
+    println!("hash_eq={}", core.hash("abc") == core.hash("abc"));
+    println!("coll zip={:?} chunk={:?} dedup={:?} unique={:?} flat={:?} sort_desc={:?} rev={:?}", coll.zip(vec![1, 2], vec!["a", "b"]), coll.chunk(vec![1, 2, 3, 4], 2), coll.dedup(vec![1, 1, 2, 2, 1]), coll.unique(vec![1, 2, 1, 3]), coll.flatten(vec![vec![1], vec![2, 3]]), coll.sort_desc(vec![1, 3, 2]), coll.reverse(vec![1, 2, 3]));
+    Ok(())
+}

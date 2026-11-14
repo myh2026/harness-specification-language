@@ -1,0 +1,5 @@
+block P4B { hello }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    P4B -> "src/b.rs" : rust,
+}

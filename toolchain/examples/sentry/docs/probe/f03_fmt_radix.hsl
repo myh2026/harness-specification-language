@@ -1,0 +1,4 @@
+fn main() -> Result<(), String> {
+    println!("[{:x}] [{:o}] [{:b}] [{:#x}]", 255, 8, 10, 255);
+    Ok(())
+}

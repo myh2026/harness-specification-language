@@ -1,0 +1,34 @@
+enum Phase { Plan, Act, Done }
+struct State { phase: Phase, count: i64, trail: Vec<String> }
+
+graph Worker(mut state: State) -> Result<i64, String> {
+    node mut phase: Phase = Phase::Plan;
+    node mut count: i64 = 0;
+    node items: Vec<i64> = vec![];
+    edge phase -> count on Phase::Act;
+    edge count -> items on Phase::Done;
+    let start = 1;
+    loop {
+        match phase {
+            Phase::Plan => {
+                phase = Phase::Act;
+                state.count = state.count + 1;
+            }
+            Phase::Act => {
+                count = count + start;
+                phase = Phase::Done;
+            }
+            Phase::Done => {
+                break;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn main() -> Result<(), String> {
+    let st = State { phase: Phase::Plan, count: 0, trail: vec![] };
+    let r = Worker::run(st)?;
+    println!("graph_r={}", r);
+    Ok(())
+}

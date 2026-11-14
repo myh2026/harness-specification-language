@@ -1,0 +1,10 @@
+fn r2_fn(a: i64) -> i64 { a }
+project {
+    rules {
+        fn -> "gen/{name}.rs" : rust,
+    }
+}
+fn main() -> Result<(), String> {
+    println!("{}", r2_fn(1));
+    Ok(())
+}

@@ -1,0 +1,20 @@
+fn main() -> Result<(), String> {
+    let parsed = native typescript { return $host.json.stringify($host.json.parse("{\"a\": 1, \"b\": \"two\"}")); };
+    println!("parse_stringify={}", parsed);
+
+    let fmap = native typescript { return $host.json.fields("{\"a\": 1, \"b\": \"two\"}"); };
+    println!("fields_len={} a={:?} b={:?}", fmap.len(), fmap.get("a"), fmap.get("b"));
+
+    let w = native typescript { return $host.fs.write("toolchain/examples/sentry/docs/probe/_host_write.txt", "hello host"); };
+    let rd = native typescript { return $host.fs.read("toolchain/examples/sentry/docs/probe/_host_write.txt"); };
+    let listed = native typescript { return $host.fs.list("toolchain/examples/sentry/docs/probe"); };
+    println!("write={} read={} listed_has_hsl={}", w, rd, listed.contains(".hsl"));
+
+    let art = native typescript { return $host.artifacts.write("probe-artifact.md", "# hi"); };
+    let _e = native typescript { $host.events.emit("custom_event", { k: "v" }); return null; };
+    let model = native typescript { return $host.config.model; };
+    let _l = native typescript { $host.log("host log line"); return null; };
+    let out = native typescript { const r = await $host.shell.run("bun --version"); return r.stdout; };
+    println!("artifact={} model={} shell_stdout={}", art, model, out.trim());
+    Ok(())
+}

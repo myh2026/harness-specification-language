@@ -1,0 +1,3 @@
+fn main() -> Result<(), String> { Ok(()) }
+project { A1 -> "a.rs" : rust, }
+project { B1 -> "b.rs" : rust, }

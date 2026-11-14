@@ -1,0 +1,36 @@
+fn main() -> Result<(), String> {
+    let s = "  Hello World  ".to_string();
+    println!("trim=[{}] len={}", s.trim(), s.len());
+    println!("lower={} upper={}", s.to_lowercase(), s.to_uppercase());
+    println!("contains={} starts={} ends={}", s.contains("World"), s.starts_with("  "), s.ends_with("  "));
+    println!("replace={}", s.replace("World", "HSL"));
+    let parts = "a,b,c".split(",");
+    println!("split_len={} first={:?}", parts.len(), parts.first());
+    println!("lines={:?}", "x\ny\nz".lines());
+    println!("chars_len={}", s.chars().len());
+    println!("find={:?}", "abcdef".find("cd"));
+    println!("strip={} {}", "foobar".strip_prefix("foo").unwrap_or("?"), "foobar".strip_suffix("bar").unwrap_or("?"));
+    println!("repeat={}", "ab".repeat(3));
+    let n: i64 = "42".parse::<i64>().unwrap_or(0);
+    let f: f64 = "3.5".parse::<f64>().unwrap_or(0.0);
+    println!("parse={} {}", n, f);
+
+    let mut v = vec![3, 1, 2];
+    v.sort();
+    println!("sorted={:?}", v);
+    println!("join={}", v.iter().map(|x: i64| x.to_string()).collect::<Vec<String>>().join("-"));
+    let total = v.iter().fold(0, |acc: i64, x: i64| acc + x);
+    println!("fold={} sum={}", total, v.iter().sum::<i64>());
+    println!("rev={:?}", v.iter().rev().collect::<Vec<i64>>());
+    println!("first={:?} last={:?} get={:?}", v.first(), v.last(), v.get(99));
+    println!("pos={:?} any={} all={}", v.iter().position(|x: i64| x == 2), v.iter().any(|x: i64| x > 2), v.iter().all(|x: i64| x > 0));
+    let mut m = HashMap::new();
+    m.insert("b".to_string(), 2);
+    m.insert("a".to_string(), 1);
+    println!("map_len={} get={:?} has={} hasnt={}", m.len(), m.get("a"), m.contains_key("b"), m.contains_key("z"));
+    println!("keys={:?} values={:?}", m.keys(), m.values());
+    m.remove("b");
+    println!("after_remove={} len={}", m.contains_key("b"), m.len());
+    for k in m.keys() { println!("key={}", k); }
+    Ok(())
+}

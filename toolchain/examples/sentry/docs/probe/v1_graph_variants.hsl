@@ -1,0 +1,23 @@
+enum P { A, B, C }
+graph Var(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    node mut n: i64 = 0;
+    node mut m: i64 = 0;
+    edge phase -> n -> m on P::B with durable = true;
+    let start = 0;
+    loop {
+        match phase {
+            P::A => { if start == 0 { phase = P::B; } }
+            P::B => {
+                n = n + 1;
+                if n > 0 { return Ok(n * 10); }
+            }
+            P::C => { break; }
+        }
+    }
+    Ok(m)
+}
+fn main() -> Result<(), String> {
+    println!("var={}", Var::run(P::A)?);
+    Ok(())
+}

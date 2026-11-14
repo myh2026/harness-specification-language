@@ -1,0 +1,5 @@
+fn main() -> Result<(), String> {
+    let unused = 5;
+    println!("hi");
+    Ok(())
+}

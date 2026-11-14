@@ -1,0 +1,7 @@
+fn main() -> Result<(), String> {
+    let x = native cobol {
+        MOVE 1 TO X.
+    };
+    println!("{}", x);
+    Ok(())
+}

@@ -1,0 +1,17 @@
+struct S { n: i64 }
+enum P { A }
+graph W(mut state: S) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    loop {
+        match phase {
+            P::A => { state.n = state.n + 1; break; }
+        }
+    }
+    Ok(state.n)
+}
+fn main() -> Result<(), String> {
+    let mut st = S { n: 0 };
+    let r = W::run(st.clone())?;
+    println!("r={} after={}", r, st.n);
+    Ok(())
+}

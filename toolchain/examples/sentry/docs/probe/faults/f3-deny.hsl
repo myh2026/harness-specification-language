@@ -1,0 +1,15 @@
+// f3-deny — fault kinds error/deny: thrown messages + capability_denied events. try/catch inside native.
+fn main() {
+    let a = native typescript { try { return "OK:" + $host.fs.read("a.txt"); } catch (e) { return "CAUGHT:" + e.message; } };
+    println!("A_FS_DENY val={:?}", a);
+
+    let b = native typescript { try { return await $host.shell.run("echo hi"); } catch (e) { return "CAUGHT:" + e.message; } };
+    println!("B_SHELL_ERR val={:?}", b);
+
+    let c = native typescript { try { return await $host.fixture.next("plan"); } catch (e) { return "CAUGHT:" + e.message; } };
+    println!("C_TRACK_DENY val={:?}", c);
+
+    // nth mismatch: fault declared for nth=5, only one call -> no fault
+    let d = native typescript { return $host.fs.read("a.txt"); };
+    println!("D_NOFAULT val={:?}", d);
+}

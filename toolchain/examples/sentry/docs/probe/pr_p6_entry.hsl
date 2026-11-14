@@ -1,0 +1,5 @@
+import { LibG } from "./pr_p6_lib.hsl";
+fn main() -> Result<(), String> {
+    println!("{}", LibG::run(P::A)?);
+    Ok(())
+}

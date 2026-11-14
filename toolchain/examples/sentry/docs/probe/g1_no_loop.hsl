@@ -1,0 +1,8 @@
+enum P { A, B }
+graph NoLoop(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    node mut n: i64 = 0;
+    edge phase -> n on P::B;
+    Ok(n)
+}
+fn main() -> Result<(), String> { Ok(()) }

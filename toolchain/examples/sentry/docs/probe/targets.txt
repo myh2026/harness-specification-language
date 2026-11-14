@@ -1,0 +1,59 @@
+
+  ┌─────────────────────────────────────────────────┐
+  │  dhv-ts — HSL 参考解释器          v0.2.72        │
+  │  Harness Specification Language · BNF v1.5.0    │
+  │  38 后端：32 编程语言 + 6 静态格式               │
+  └─────────────────────────────────────────────────┘
+
+后端语言注册表（BNF v1.5 §5.2）—— 32 编程语言 + 6 静态格式
+
+  Tier 1 · Harness 核心（活体/语句子集翻译优先）
+    python        Python        .py   full 活体翻译       native 可执行 · 语法校验:python3
+    typescript    TypeScript    .ts   full 活体翻译       native 可执行 · 语法校验:bun-ts
+    javascript    JavaScript    .js   full 活体翻译       native 可执行 · 语法校验:bun-js
+    rust          Rust          .rs   logic 语句子集    
+    go            Go            .go   logic 语句子集    
+    cpp           C++           .cpp  logic 语句子集    
+    java          Java          .java contract 类型契约   — sealed interface + record 契约（Java 17+）
+    csharp        C#            .cs   contract 类型契约   — abstract record + 派生 record 契约（C# 9+）
+    kotlin        Kotlin        .kt   contract 类型契约   — sealed class + data class 契约
+    swift         Swift         .swift contract 类型契约   — enum 关联值原生支持（契约级）
+
+  Tier 2 · 脚本与动态
+    ruby          Ruby          .rb   contract 类型契约   — Struct + case/in 模式匹配（Ruby 2.7+）
+    php           PHP           .php  contract 类型契约   — enum（PHP 8.1）/ 抽象类 + match 契约
+    lua           Lua           .lua  contract 类型契约   — table 标签联合
+    perl          Perl          .pl   contract 类型契约   — Moose 风格类型约束（契约级）
+    bash          Bash          .sh   contract 类型契约   语法校验:bash-n  — case/函数壳 + 关联数组
+    powershell    PowerShell    .ps1  contract 类型契约   — class + switch 契约
+    r             R             .R    contract 类型契约   — list + switch 契约
+    julia         Julia         .jl   contract 类型契约   — struct + Union 契约
+
+  Tier 3 · 函数式
+    scala         Scala         .scala contract 类型契约   — sealed trait + case class（原生和类型）
+    elixir        Elixir        .ex   contract 类型契约   — defmodule + defstruct + 模式匹配（原生和类型）
+    erlang        Erlang        .erl  contract 类型契约   — tagged tuple（原生和类型）
+    haskell       Haskell       .hs   contract 类型契约   — data ... = ...（原生和类型）
+    ocaml         OCaml         .ml   contract 类型契约   — type ... = A | B（原生和类型）
+    fsharp        F#            .fs   contract 类型契约   — type ... = A of ... | B（原生 DU）
+
+  Tier 4 · 系统与现代
+    zig           Zig           .zig  contract 类型契约   — tagged union（原生和类型）
+    nim           Nim           .nim  contract 类型契约   — object variants（原生和类型）
+    crystal       Crystal       .cr   contract 类型契约   — abstract class + struct + case（原生联合）
+    dart          Dart          .dart contract 类型契约   — sealed class + factory（Dart 3）
+    groovy        Groovy        .groovy contract 类型契约   — class + @Canonical 契约
+    objectivec    Objective-C   .m    contract 类型契约   — interface + 实现壳契约
+    d             D             .d    contract 类型契约   — struct + tagged union 契约
+    vb            Visual Basic  .vb   contract 类型契约   — Structure/Module 契约
+
+  Static · 静态资源格式
+    yaml          YAML          .yml  原文+插值         
+    markdown      Markdown      .md   原文+插值         
+    json          JSON          .json 原文+插值           — JSON 无注释：dhv 以独立 .map 边车文件记录围栏
+    toml          TOML          .toml 原文+插值         
+    ini           INI           .ini  原文+插值         
+    xml           XML           .xml  原文+插值         
+
+  project { Item -> "path\file.ext" : <lang-id> } 中的 <lang-id> 取 id 列。
+  别名：ts→typescript · js→javascript · py→python · md→markdown · yml→yaml · c++→cpp · sh/bash→bash

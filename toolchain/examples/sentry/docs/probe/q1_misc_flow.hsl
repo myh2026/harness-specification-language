@@ -1,0 +1,46 @@
+fn parse_num(s: String) -> Option<i64> {
+    let v = s.parse::<i64>().ok()?;
+    Some(v * 2)
+}
+
+fn main() -> Result<(), String> {
+    let r = loop {
+        break 42;
+    };
+    println!("loop_break_value={}", r);
+
+    let msg = if r > 40 { "big".to_string() } else { "small".to_string() };
+    println!("if_else_expr={}", msg);
+
+    let grade = match r {
+        n if n > 100 => "huge",
+        _ => "normal",
+    };
+    println!("match_expr={}", grade);
+
+    println!("opt_some={:?} opt_none={:?} opt_bad={:?}", parse_num("21".to_string()), parse_num("x".to_string()), parse_num("oops".to_string()));
+
+    let maybe: Option<i64> = Some(5);
+    let doubled = maybe.map(|x| x * 2).unwrap_or(0);
+    println!("opt_map={}", doubled);
+    println!("ok_or={:?}", maybe.ok_or("err".to_string()));
+
+    let mut n = 0;
+    while let Some(_) = if n < 3 { Some(n) } else { None } {
+        n = n + 1;
+    }
+    println!("while_let={}", n);
+
+    let mut hits = 0;
+    'outer: for i in 0..3 {
+        for j in 0..3 {
+            if i == 1 && j == 1 { continue 'outer; }
+            if i == 2 && j == 0 { break 'outer; }
+            hits = hits + 1;
+        }
+    }
+    println!("labeled={}", hits);
+
+    println!("div={} mod={} fdiv={} pow={}", 7 / 2, 7 % 2, 7.0 / 2.0, 2.0.pow(10.0));
+    Ok(())
+}

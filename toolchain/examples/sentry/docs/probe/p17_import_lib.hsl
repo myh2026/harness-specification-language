@@ -1,0 +1,13 @@
+export const LIB_LIMIT: i64 = 3;
+export type LibName = String;
+export struct LibCfg { name: String }
+export enum LibPhase { Idle, Busy }
+export trait LibTrait { fn label(self) -> String; }
+
+impl LibTrait for LibCfg {
+    fn label(self) -> String { self.name.clone() }
+}
+
+export fn lib_double(a: i64) -> i64 { a * 2 }
+
+fn private_helper(a: i64) -> i64 { a + 1 }

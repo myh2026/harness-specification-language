@@ -1,0 +1,13 @@
+// p5d-lib — imported module for R5 expansion-pool test.
+export fn inc(x: u32) -> u32 {
+    x + 1
+}
+
+export struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn hidden() -> u32 {
+    7
+}

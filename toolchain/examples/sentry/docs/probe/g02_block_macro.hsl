@@ -1,0 +1,4 @@
+fn main() -> Result<(), String> {
+    println!("{:?}", { 1 + 2 });
+    Ok(())
+}

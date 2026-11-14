@@ -1,0 +1,7 @@
+macro_rules! rp_d {
+    ($($x:tt)*) => { vec![$($x),*] };
+}
+fn main() -> Result<(), String> {
+    println!("d={:?}", rp_d!(1, 2, 3));
+    Ok(())
+}

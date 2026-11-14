@@ -1,0 +1,6 @@
+import { helper } from "./s04_unused_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    println!("no use");
+    Ok(())
+}

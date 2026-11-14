@@ -1,0 +1,13 @@
+fn main() -> Result<(), String> {
+    let mut m = HashMap::new();
+    m.insert("a".to_string(), 1);
+    m.insert("b".to_string(), 2);
+    let mut total = 0;
+    for (k, v) in m.iter() {
+        total = total + v;
+        println!("k={} v={}", k, v);
+    }
+    println!("total={}", total);
+    println!("indexed={}", m["a"]);
+    Ok(())
+}

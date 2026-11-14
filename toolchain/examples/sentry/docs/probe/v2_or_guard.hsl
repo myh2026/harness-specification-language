@@ -1,0 +1,14 @@
+enum P { A, B }
+graph OrG(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    node mut n: i64 = 0;
+    edge phase -> n on P::A | P::B;
+    loop {
+        match phase {
+            P::A => { phase = P::B; }
+            P::B => { n = n + 1; break; }
+        }
+    }
+    Ok(n)
+}
+fn main() -> Result<(), String> { println!("{}", OrG::run(P::A)?); Ok(()) }

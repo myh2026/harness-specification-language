@@ -1,0 +1,13 @@
+enum Color { Red, Green, Blue }
+
+fn name(c: Color) -> String {
+    match c {
+        Color::Red => "red".to_string(),
+        Color::Green => "green".to_string(),
+    }
+}
+
+fn main() -> Result<(), String> {
+    println!("{}", name(Color::Red));
+    Ok(())
+}

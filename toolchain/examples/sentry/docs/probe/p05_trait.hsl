@@ -1,0 +1,56 @@
+// probe: trait / impl / Box<dyn Trait> / default methods / From
+trait Provider {
+    fn name(self) -> String;
+    fn greet(self) -> String {
+        format!("hello from {}", self.name())
+    }
+}
+
+struct Alpha { id: i64 }
+struct Beta { label: String }
+
+impl Provider for Alpha {
+    fn name(self) -> String { format!("alpha-{}", self.id) }
+}
+
+impl Provider for Beta {
+    fn name(self) -> String { self.label.clone() }
+    fn greet(self) -> String { String::from("beta override") }
+}
+
+struct ErrA { message: String }
+struct ErrB { message: String }
+
+impl From<ErrA> for ErrB {
+    fn from(e: ErrA) -> ErrB {
+        ErrB { message: String::from("wrapped: ") + e.message }
+    }
+}
+
+fn flaky(fail: bool) -> Result<i64, ErrA> {
+    if fail { Err(ErrA { message: String::from("boom") }) } else { Ok(42) }
+}
+
+fn run(fail: bool) -> Result<i64, ErrB> {
+    let v = flaky(fail)?;   // Err auto-converted via From
+    Ok(v + 1)
+}
+
+fn main() -> i64 {
+    let ps: Vec<Box<dyn Provider>> = vec![
+        Box::new(Alpha { id: 1 }),
+        Box::new(Beta { label: String::from("bee") }),
+    ];
+    for p in ps {
+        println!("{}", p.greet());
+    }
+    match run(true) {
+        Result::Ok(v) => println!("ok {}", v),
+        Result::Err(e) => println!("err {}", e.message),
+    }
+    match run(false) {
+        Result::Ok(v) => println!("ok {}", v),
+        Result::Err(e) => println!("err {}", e.message),
+    }
+    0
+}

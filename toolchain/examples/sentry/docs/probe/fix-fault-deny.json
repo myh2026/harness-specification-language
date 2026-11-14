@@ -1,0 +1,1 @@
+{"acts":["a1"],"faults":[{"target":"fs.read","kind":"deny","message":"denied-by-fixture"}]}

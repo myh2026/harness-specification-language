@@ -1,0 +1,8 @@
+// p0c — isolate S-7 with config fields
+fn main() {
+    let cfg = native typescript { return $host.config; };
+    println!("model={} workspace={} task={} allow={:?}", cfg.model, cfg.workspace, cfg.task, cfg.allow);
+    println!("temperature={} maxTurns={} maxBashCalls={} maxOutputChars={}", cfg.temperature, cfg.maxTurns, cfg.maxBashCalls, cfg.maxOutputChars);
+    println!("outdir={}", cfg.outdir);
+    println!("all={:?}", cfg);
+}

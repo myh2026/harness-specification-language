@@ -1,0 +1,6 @@
+import { anything } from "./no_such_lib.hsl";
+
+fn main() -> Result<(), String> {
+    println!("{}", anything(1));
+    Ok(())
+}

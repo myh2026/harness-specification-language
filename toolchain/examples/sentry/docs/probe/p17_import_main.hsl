@@ -1,0 +1,12 @@
+import { LibCfg, LibPhase, LIB_LIMIT } from "./p17_import_lib.hsl";
+import * as lib from "./p17_import_lib.hsl";
+import lib_double as dbl from "./p17_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let cfg = LibCfg { name: "x".to_string() };
+    println!("direct={}", dbl(4));
+    println!("limit={} phase={:?}", LIB_LIMIT, LibPhase::Idle);
+    println!("namespace={} ns_limit={}", lib.lib_double(5), lib.LIB_LIMIT);
+    println!("cfg={:?} label={}", cfg, lib.LibTrait::label(cfg.clone()));
+    Ok(())
+}

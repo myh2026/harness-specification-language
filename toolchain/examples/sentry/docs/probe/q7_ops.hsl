@@ -1,0 +1,11 @@
+fn main() -> Result<(), String> {
+    let a = String::from("a");
+    let b = String::from("b");
+    let c = a + b;
+    println!("concat={}", c);
+    let mut v = Vec::new();
+    v.push(1);
+    v.push(2);
+    println!("vec={:?}", v);
+    Ok(())
+}

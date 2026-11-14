@@ -1,0 +1,15 @@
+struct R1Cfg { limit: i64 }
+fn r1_helper(a: i64) -> i64 { a + 1 }
+
+fn main() -> Result<(), String> {
+    println!("{} {}", R1Cfg { limit: 1 }.limit, r1_helper(1));
+    Ok(())
+}
+
+project {
+    R1Cfg -> "explicit/cfg.rs" : rust,
+    rules {
+        struct -> "gen/{name}.rs" : rust,
+        fn     -> "gen/fns/{name}.py" : python,
+    }
+}

@@ -1,0 +1,7 @@
+struct P { s: String }
+fn main() -> Result<(), String> {
+    println!("disp={} debug={:?}", "a".to_string(), "a".to_string());
+    println!("opt disp={} opt debug={:?}", Some("a".to_string()), Some("a".to_string()));
+    println!("p disp={} p debug={:?}", P { s: "a".to_string() }, P { s: "a".to_string() });
+    Ok(())
+}

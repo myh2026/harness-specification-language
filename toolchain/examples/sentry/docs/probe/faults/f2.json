@@ -1,0 +1,12 @@
+{
+  "tracks": { "plan": ["plan-a", "plan-b", "plan-c"] },
+  "faults": [
+    { "target": "shell.run", "nth": 1, "kind": "empty" },
+    { "target": "shell.run", "nth": 2, "kind": "corrupt" },
+    { "target": "shell.run", "nth": 3, "kind": "slow", "delayMs": 200 },
+    { "target": "fixture.next:plan", "nth": 1, "kind": "empty" },
+    { "target": "fixture.next:plan", "nth": 2, "kind": "corrupt" },
+    { "target": "fixture.next:plan", "nth": 3, "kind": "slow", "delayMs": 150 },
+    { "target": "llm.complete", "nth": 1, "kind": "error", "message": "llm boom" }
+  ]
+}

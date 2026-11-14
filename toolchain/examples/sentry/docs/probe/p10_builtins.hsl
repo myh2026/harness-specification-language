@@ -1,0 +1,38 @@
+struct P { x: i64, y: i64 }
+enum E { A, B(i64) }
+
+fn main() -> Result<(), String> {
+    println!("fmt1={} fmt2={} fmt3={}", format!("{:.2}", 3.14159), format!("{:?}", vec![1, 2]), format!("{:#?}", vec![1]));
+    println!("pos={} esc={} align={}", format!("{0}-{1}-{0}", "a", "b"), format!("{{}}"), format!("{:>4}|{:<4}|", 1, 2));
+    println!("radix={} zeropad={}", format!("{:b}|{:x}|{:o}", 10, 255, 8), format!("{:05}", 42));
+    println!("dbg={:?} {:?} {:?} {:?}", P { x: 1, y: 2 }, E::B(3), Some(1), Ok::<i64, String>(5));
+
+    let mut s = String::new();
+    s.push_str("abc");
+    println!("s={} char_count={} char_at={:?} take={} join={}", s, s.char_count(), s.char_at(1), s.take(2), vec!["x", "y"].join("+"));
+    println!("trim_end=[{}] trim_start=[{}]", "a  ".trim_end(), "  a".trim_start());
+    println!("split_once={:?} rsplit_once={:?}", "a=b=c".split_once("="), "a=b=c".rsplit_once("="));
+    let mut t = "hello world".to_string();
+    t.retain(|c: char| c != 'l');
+    println!("retain={}", t);
+    t.truncate(3);
+    println!("truncated={}", t);
+    println!("split_ws={:?}", "a  b\tc".split_whitespace());
+
+    let mut v = vec![1, 2, 2, 3, 3, 4];
+    v.retain(|x: i64| x != 2);
+    println!("v_retain={:?}", v);
+    println!("chunks={:?} step_by={:?} zip={:?}", v.chunks(2).len(), v.iter().step_by(2).collect::<Vec<i64>>(), v.iter().zip(v.iter()).collect::<Vec<(i64, i64)>>().len());
+    println!("filter_map={:?} flat_map={:?}", vec![1, 2, 3, 4].iter().filter_map(|x: i64| if x % 2 == 0 { Some(x * 10) } else { None }).collect::<Vec<i64>>(), vec![1, 2].iter().flat_map(|x: i64| vec![x, x]).collect::<Vec<i64>>());
+    println!("count={} min={:?} max={:?}", v.iter().count(), v.iter().min(), v.iter().max());
+    println!("index0={} index2={}", v[0], v[1]);
+
+    let mut m = HashMap::new();
+    m.insert(1, "one".to_string());
+    m.insert(2, "two".to_string());
+    println!("i64_key get={:?} len={}", m.get(1), m.len());
+    println!("map_iter={:?}", m.iter());
+    println!("option: expect={} and={:?} filter={:?}", Some(5).expect("has"), Some(3).and(Some(4)), Some(3).filter(|x: i64| x > 2));
+    println!("result: expect={} unwrap_err={}", Ok::<i64, String>(9).expect("ok"), Err::<i64, String>("bad".to_string()).unwrap_err());
+    Ok(())
+}

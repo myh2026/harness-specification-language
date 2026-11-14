@@ -1,0 +1,42 @@
+// probe: struct literal / shorthand / ..base / impl / method / self
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Named {
+    id: i64,
+    label: String,
+}
+
+impl Point {
+    fn new(x: i64, y: i64) -> Point {
+        Point { x, y }
+    }
+    fn zero() -> Point { Point { x: 0, y: 0 } }
+    fn mag_sq(self) -> i64 { self.x * self.x + self.y * self.y }
+    fn shift(self, dx: i64, dy: i64) -> Point {
+        Point { x: self.x + dx, y: self.y + dy }
+    }
+}
+
+fn main() -> i64 {
+    let p = Point::new(3, 4);
+    println!("mag={} zero={:?}", p.mag_sq(), Point::zero());
+    let q = p.shift(1, 1);
+    println!("q={:?}", q);
+
+    // struct update ..base
+    let base = Point { x: 10, y: 20 };
+    let upd = Point { x: 99, ..base };
+    println!("upd={:?}", upd);
+
+    // literal with explicit field names + shorthand mix
+    let id = 5;
+    let n = Named { id, label: String::from("n") };
+    println!("n={:?}", n);
+    // field access + clone
+    let n2 = n.clone();
+    println!("n2.id={} n2.label.len={}", n2.id, n2.label.len());
+    0
+}

@@ -1,0 +1,4 @@
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    Ghost -> "src/ghost.rs" : rust,
+}

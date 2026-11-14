@@ -1,0 +1,9 @@
+{
+  "acts": ["act-1", "act-2", "act-3"],
+  "reviews": ["{\"verdict\": \"accept\"}"],
+  "tracks": {
+    "plan": ["plan-a", "plan-b", "plan-c"],
+    "obs": ["obs-a", "obs-b"]
+  },
+  "faults": []
+}

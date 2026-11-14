@@ -1,0 +1,5 @@
+// p0d — keyword field access `scale` via dot
+fn main() {
+    let cfg = native typescript { return $host.config; };
+    println!("scale={}", cfg.scale);
+}

@@ -1,0 +1,19 @@
+enum Phase { Plan, Act, Done }
+
+graph Loop(mut state: i64) -> Result<i64, String> {
+    node p: Phase = Phase::Plan;
+    node count: i64 = 0;
+    loop {
+        match p {
+            Phase::Plan => { p = Phase::Act; }
+            Phase::Act => { count = count + 1; p = Phase::Done; }
+            _ => {}
+        }
+    }
+}
+
+fn main() -> Result<(), String> {
+    let r = Loop::run(0)?;
+    println!("{}", r);
+    Ok(())
+}

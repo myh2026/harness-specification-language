@@ -1,0 +1,12 @@
+# gateway service config
+server:
+  port: 8443
+  timeout_ms: 5000
+upstreams:
+  payment-db:
+    host: payment-db.internal
+    pool_size: 200
+    max_wait_ms: 180
+retry:
+  attempts: 2
+  backoff_ms: 100

@@ -6,8 +6,9 @@
 # 覆盖（用户指定的三件事）：
 #   1. 实装工具链 —— cargo build --release 真实构建 dhv（Rust 编译器），
 #      并用编译产物真实跑一次 check（二进制冒烟，非仅编译成功）
-#   2. 3 个项目 —— nova（15 模块静态检查）/ dsh（剧本端到端：真实改文件
-#      + 真跑测试）/ backends-demo（38 后端全测）
+#   2. 4 个项目 —— nova（15 模块静态检查）/ dsh（剧本端到端：真实改文件
+#      + 真跑测试）/ sentry（事故分诊剧本端到端：确定性回放 + 预算耗尽失败
+#      路径）/ backends-demo（38 后端全测）
 #   3. 38 后端全测 —— tests/verify_backends.ts：全部文件语法校验通过 +
 #      零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级
 #      真解析（v0.2.52 起非法 JSON 红灯）
@@ -62,7 +63,7 @@ jobs:
 
   # ── 2. 3 个项目回归 + 38 后端全测 ────────────────────────────────────
   three-projects:
-    name: 3 项目（nova / dsh / backends-demo·38 后端全测）
+    name: 4 项目（nova / dsh / sentry / backends-demo·38 后端全测）
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -70,6 +71,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: nova — 15 模块静态检查
         working-directory: toolchain
         run: bun dhv-ts/src/main.ts check examples/nova/nova.hsl
@@ -89,6 +93,40 @@ jobs:
           run = json.load(open('/tmp/dsh-run/run.json'))
           assert run['ok'] is True, run
           print('  ok: dsh 剧本端到端 run.ok=True')
+          PYEOF
+      - name: sentry — 事故分诊剧本端到端（确定性回放 + 预算耗尽失败路径）
+        working-directory: toolchain
+        run: |
+          rm -rf /tmp/sentry-ws /tmp/sentry-run /tmp/sentry-budget-ws /tmp/sentry-budget
+          cp -r examples/sentry/workspace /tmp/sentry-ws
+          bun dhv-ts/src/main.ts check examples/sentry/sentry.hsl
+          bun dhv-ts/src/main.ts run examples/sentry/sentry.hsl \
+            --workspace /tmp/sentry-ws \
+            --task "checkout 支付链路自 02:13 起大面积超时，请分诊并给出复盘报告" \
+            --model scripted \
+            --fixture examples/sentry/fixtures/triage-demo.json \
+            --out /tmp/sentry-run
+          cp -r examples/sentry/workspace /tmp/sentry-budget-ws
+          bun dhv-ts/src/main.ts run examples/sentry/sentry.hsl \
+            --workspace /tmp/sentry-budget-ws \
+            --task "预算耗尽测试" \
+            --model scripted \
+            --fixture examples/sentry/fixtures/loop-forever.json \
+            --max-turns 3 \
+            --out /tmp/sentry-budget
+          python3 - <<'PYEOF'
+          import json
+          run = json.load(open('/tmp/sentry-run/run.json'))
+          assert run['ok'] is True, run
+          report = open('/tmp/sentry-run/run-report.md', encoding='utf-8').read()
+          assert 'accepted' in report, report[:300]
+          assert 'SEV-1' in report, report[:300]
+          budget = json.load(open('/tmp/sentry-budget/run.json'))
+          assert budget['ok'] is True, budget
+          inc = json.load(open('/tmp/sentry-budget/incident.json'))
+          assert inc['ok'] is False, inc
+          assert inc.get('verdict') == 'budget_exhausted', inc
+          print('  ok: sentry 回放 accepted/SEV-1；预算耗尽 incident.verdict=budget_exhausted')
           PYEOF
       - name: backends-demo — 38 后端全测（投射 + 全量覆盖校验）
         working-directory: toolchain

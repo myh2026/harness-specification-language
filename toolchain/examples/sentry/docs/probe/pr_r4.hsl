@@ -1,0 +1,7 @@
+struct RCfg3 { n: i64 }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    rules {
+        widget -> "gen/{name}.rs" : rust,
+    }
+}

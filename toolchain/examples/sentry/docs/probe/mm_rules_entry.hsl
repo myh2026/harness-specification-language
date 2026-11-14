@@ -1,0 +1,22 @@
+import { MItem, MPhase, m_helper } from "./mm_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let it = MItem { id: m_helper(2) };
+    println!("{} {:?}", it.id, MPhase::Idle);
+    Ok(())
+}
+
+project {
+    MItem -> "src/m/item.rs" : rust,
+    rules {
+        struct -> "gen/structs/{name}.rs" : rust,
+        enum   -> "gen/enums/{name}.rs" : rust,
+        fn     -> "gen/fns/{name}.py" : python,
+        const  -> "gen/consts.rs" : rust,
+        type   -> "gen/aliases.rs" : rust,
+        trait  -> "gen/traits/{name}.rs" : rust,
+        block  -> "gen/static/{name}.yaml" : yaml,
+        static -> "gen/static/{name}.toml" : toml,
+        graph  -> "gen/graphs/{name}.ts" : typescript,
+    }
+}

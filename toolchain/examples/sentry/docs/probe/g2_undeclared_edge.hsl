@@ -1,0 +1,13 @@
+enum P { A, B }
+graph Undecl(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    edge phase -> ghost on P::B;
+    loop {
+        match phase {
+            P::A => { phase = P::B; }
+            P::B => { break; }
+        }
+    }
+    Ok(1)
+}
+fn main() -> Result<(), String> { Ok(()) }

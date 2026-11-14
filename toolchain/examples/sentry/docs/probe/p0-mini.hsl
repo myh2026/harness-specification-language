@@ -1,0 +1,32 @@
+// p0-mini — native-block gating of $host + typing basics
+struct Opts {
+    cwd: String,
+    timeoutMs: i64,
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let cfg = native typescript { return $host.config; };
+    println!("model={} scale={} workspace={}", cfg.model, cfg.scale, cfg.workspace);
+
+    let sh = native typescript { return await $host.shell.run("ls"); };
+    println!("shell ok={} code={} out_len={}", sh.ok, sh.code, sh.stdout.len());
+    println!("shell stderr head={:?}", sh.stderr);
+
+    let o = Opts { cwd: ".", timeoutMs: 2000 };
+    let sh2 = native typescript { return await $host.shell.run("ls", o); };
+    println!("shell2(Opts) ok={} code={}", sh2.ok, sh2.code);
+
+    let payload = native typescript { return { x: 3, y: 4 }; };
+    let p = native typescript { return $host.make("Point", payload); };
+    println!("make x={} y={} raw={:?}", p.x, p.y, p);
+
+    let r = native typescript {
+        return { name: "n1", nested: { deep: { v: 7 }, tags: ["a", "b"], ok: true } };
+    };
+    println!("r.name={} v={} tag={} ok={}", r.name, r.nested.deep.v, r.nested.tags[1], r.nested.ok);
+}

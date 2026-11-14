@@ -1,0 +1,9 @@
+{
+  "tracks": { "plan": ["plan-a"] },
+  "faults": [
+    { "target": "fs.read", "nth": 1, "kind": "deny", "message": "denied-by-fixture" },
+    { "target": "shell.run", "nth": 1, "kind": "error", "message": "shell boom" },
+    { "target": "fixture.next:plan", "nth": 1, "kind": "deny", "message": "track denied" },
+    { "target": "fs.read", "nth": 5, "kind": "error", "message": "never" }
+  ]
+}

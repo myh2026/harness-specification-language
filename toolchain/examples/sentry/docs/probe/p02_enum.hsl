@@ -1,0 +1,42 @@
+// probe: enum unit/tuple/struct variants, matching, if let, Option/Result shorthand
+enum Shape {
+    Circle { radius: f64 },
+    Rect { w: i64, h: i64 },
+    Pair(i64, i64),
+    Dot,
+}
+
+enum Action {
+    Tool { name: String },
+    Done { summary: String },
+}
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle { radius } => 3.14 * radius * radius,
+        Shape::Rect { w, h } => (w * h) as f64,
+        Shape::Pair(a, b) => (a * b) as f64,
+        Shape::Dot => 0.0,
+    }
+}
+
+fn main() -> i64 {
+    println!("circle={}", area(Shape::Circle { radius: 2.0 }));
+    println!("rect={}", area(Shape::Rect { w: 3, h: 4 }));
+    println!("pair={}", area(Shape::Pair(2, 5)));
+    println!("dot={}", area(Shape::Dot));
+
+    let a = Action::Tool { name: String::from("grep") };
+    match a {
+        Action::Tool { name } => println!("tool {}", name),
+        Action::Done { summary } => println!("done {}", summary),
+    }
+    // if let on enum
+    let b = Action::Done { summary: String::from("ok") };
+    if let Action::Tool { name } = b {
+        println!("tool {}", name);
+    } else {
+        println!("not a tool");
+    }
+    0
+}

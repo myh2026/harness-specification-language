@@ -1,0 +1,34 @@
+// p5b — projection to python/typescript/python, static block, explicit shadowing, no graph.
+/// 帮助函数（rules fn 展开到 python）
+export fn helper(x: u32) -> u32 {
+    x + 1
+}
+
+/// 配置（rules struct 展开到 python）
+export struct Card {
+    title: String,
+}
+
+/// 静态资源块（显式映射到 markdown）
+block SYSTEM_PROMPT {
+# Sentry System Prompt
+
+You are the sentry harness.
+}
+
+/// 另一个 fn（rules 展开 + main 特例）
+fn main() -> Result<(), String> {
+    let c = Card { title: String::from("t") };
+    println!("{} {}", helper(1), c.title);
+    Ok(())
+}
+
+project {
+    main -> "gen/main.py" : python,
+    SYSTEM_PROMPT -> "gen/SYSTEM.md" : markdown,
+
+    rules {
+        fn -> "gen/fn/{name}.py" : python,
+        struct -> "gen/types/{name}.py" : python,
+    }
+}

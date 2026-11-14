@@ -1,0 +1,9 @@
+fn work() -> i64 {
+    let y = 1?;
+    y
+}
+
+fn main() -> Result<(), String> {
+    println!("{}", work());
+    Ok(())
+}

@@ -1,0 +1,230 @@
+// ============================================================================
+// sentry/logic/analysis.hsl — 确定性分析层：日志扫描 / 指标解析 / 评级 / 报告闸门
+// ============================================================================
+// 设计原则：结论由 HSL 纯函数计算，模型不能改数字；这是"可验证分诊"的地基。
+// 文法覆盖：for-in + if/else 链 / Vec 索引 / HashMap + Option / turbofish parse /
+//           match 穷尽（Severity 四分） / vec![...] / String 方法链
+// ============================================================================
+
+import { LogFacts, MetricFacts, Evidence, Severity, GateReport } from "../types/signals.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Policy } from "../types/state.hsl";
+import { read_file } from "../tools/files.hsl";
+
+/// 扫描网关日志：计数 + 首个 ERROR 的时间戳/组件 + 错误码命中次数。
+/// 日志行格式：`<ISO 时间戳> <LEVEL> <component> k=v ...`
+export fn scan_logs(raw: String) -> LogFacts {
+    let lines = raw.split("\n");
+    let mut total: u32 = 0;
+    let mut errors: u32 = 0;
+    let mut warns: u32 = 0;
+    let mut timeouts: u32 = 0;
+    let mut first_ts = String::from("");
+    let mut component = String::from("unknown");
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.len() == 0 {
+            continue;
+        }
+        total += 1;
+        if trimmed.contains(" ERROR ") {
+            errors += 1;
+            if first_ts.len() == 0 {
+                let parts = trimmed.split_whitespace();
+                if parts.len() > 0 {
+                    first_ts = parts[0].clone();
+                }
+                if parts.len() > 2 {
+                    component = parts[2].clone();
+                }
+            }
+        }
+        if trimmed.contains(" WARN ") {
+            warns += 1;
+        }
+        if trimmed.contains("UPSTREAM_TIMEOUT") {
+            timeouts += 1;
+        }
+    }
+    LogFacts {
+        total_lines: total,
+        error_lines: errors,
+        warn_lines: warns,
+        first_error_ts: first_ts,
+        top_component: component,
+        timeout_mentions: timeouts,
+    }
+}
+
+/// 解析 metrics.json（扁平 JSON，经 $host.json.fields 进入 HSL）。
+export fn parse_metrics(raw: String) -> Result<MetricFacts, HarnessError> {
+    let fields: HashMap<String, String> = native typescript {
+        try {
+            return $host.json.fields(raw);
+        } catch (e) {
+            const m = new Map();
+            m.set("error", String(e && e.message || e));
+            return m;
+        }
+    };
+    if fields.contains_key("error") {
+        let detail = fields.get("error").unwrap_or(String::from("?"));
+        return Err(HarnessError::new(String::from("metrics"), format!("metrics.json 不是合法 JSON：{}", detail)));
+    }
+    let p99 = fields.get("p99_ms").unwrap_or(String::from("0")).parse::<f64>()?;
+    let baseline = fields.get("baseline_p99_ms").unwrap_or(String::from("0")).parse::<f64>()?;
+    let err_rate = fields.get("error_rate").unwrap_or(String::from("0")).parse::<f64>()?;
+    let qps = fields.get("requests_per_min").unwrap_or(String::from("0")).parse::<u32>()?;
+    let cpu = fields.get("cpu_saturation").unwrap_or(String::from("0")).parse::<f64>()?;
+    let deploy = fields.get("deploy_minutes_ago").unwrap_or(String::from("0")).parse::<u32>()?;
+    Ok(MetricFacts {
+        p99_ms: p99,
+        baseline_p99_ms: baseline,
+        error_rate: err_rate,
+        requests_per_min: qps,
+        cpu_saturation: cpu,
+        deploy_minutes_ago: deploy,
+    })
+}
+
+/// HSL 侧评分矩阵：严重级别是可复现的计算结果，不是模型印象。
+/// 评分点：p99 超基线 3 倍 +2；错误率 ≥25% +2、≥40% 再 +1；CPU ≥90% +1；
+///         15 分钟内有过部署 +1；ERROR 行 ≥50 +1。
+export fn grade(log: LogFacts, metrics: MetricFacts) -> Severity {
+    let mut score: f64 = 0.0;
+    if metrics.p99_ms > metrics.baseline_p99_ms * 3.0 {
+        score += 2.0;
+    } else if metrics.p99_ms > metrics.baseline_p99_ms * 1.5 {
+        score += 1.0;
+    }
+    if metrics.error_rate >= 0.25 {
+        score += 2.0;
+    } else if metrics.error_rate >= 0.05 {
+        score += 1.0;
+    }
+    if metrics.error_rate >= 0.40 {
+        score += 1.0;
+    }
+    if metrics.cpu_saturation >= 0.90 {
+        score += 1.0;
+    }
+    if metrics.deploy_minutes_ago <= 15 {
+        score += 1.0;
+    }
+    if log.error_lines >= 50 {
+        score += 1.0;
+    }
+    if score >= 5.0 {
+        Severity::Sev1
+    } else if score >= 3.0 {
+        Severity::Sev2
+    } else if score >= 1.0 {
+        Severity::Sev3
+    } else {
+        Severity::Sev4
+    }
+}
+
+/// 原始文件读取（不走模型可见输出封顶，供 analyzer 完整扫描日志）。
+#[capability(file_read)]
+fn read_raw_file(path: String) -> Result<String, HarnessError> {
+    let r = native typescript {
+        try {
+            return { ok: true, body: await $host.fs.read(path), error: "" };
+        } catch (e) {
+            return { ok: false, body: "", error: String(e && e.message || e) };
+        }
+    };
+    if r.ok == false {
+        Err(HarnessError::new(String::from("evidence"), format!("无法读取 {}：{}", path, r.error)))
+    } else {
+        Ok(r.body)
+    }
+}
+
+/// analyzer 节点实体：对 $host.fs 做只读侦察并产出证据包。
+#[derive(Debug, Clone)]
+export struct Analyzer {
+    policy: Policy,
+}
+
+impl Analyzer {
+    fn new(policy: Policy) -> Analyzer {
+        Analyzer { policy }
+    }
+
+    fn collect(self) -> Result<Evidence, HarnessError> {
+        collect_evidence(self.policy.clone())
+    }
+}
+
+#[capability(file_read)]
+export fn collect_evidence(policy: Policy) -> Result<Evidence, HarnessError> {
+    let log_raw = read_raw_file(String::from("artifacts/gateway.log"))?;
+    let metrics_raw = read_raw_file(String::from("artifacts/metrics.json"))?;
+    let log = scan_logs(log_raw);
+    let metrics = parse_metrics(metrics_raw)?;
+    let severity = grade(log.clone(), metrics.clone());
+    let collected_at: String = native typescript {
+        return new Date().toISOString();
+    };
+    Ok(Evidence {
+        log,
+        metrics,
+        severity,
+        collected_at,
+    })
+}
+
+/// 报告闸门：确定性检查 report.md 的结构与关键事实（不调用模型）。
+#[capability(file_read)]
+export fn check_report(policy: Policy, severity: Severity) -> Result<GateReport, HarnessError> {
+    let r = read_file(policy.clone(), String::from("report.md"))?;
+    if r.ok == false {
+        let mut missing: Vec<String> = Vec::new();
+        missing.push(format!("无法读取 report.md：{}", r.output));
+        return Ok(GateReport { ok: false, violations: missing });
+    }
+    let content = r.output.clone();
+    let mut violations: Vec<String> = Vec::new();
+    if content.len() < 400 {
+        violations.push(format!("报告过短（{} 字符，至少 400）", content.len()));
+    }
+    let required = vec![
+        String::from("## 根因"),
+        String::from("## 证据"),
+        String::from("## 影响面"),
+        String::from("## 处置"),
+    ];
+    for section in required {
+        if content.contains(section.as_str()) == false {
+            violations.push(format!("缺少章节 {}", section));
+        }
+    }
+    let label = severity.clone().label();
+    if content.contains(label.as_str()) == false {
+        violations.push(format!("缺少严重级别 {}", label));
+    }
+    if content.contains("UPSTREAM_TIMEOUT") == false {
+        violations.push(String::from("缺少错误码 UPSTREAM_TIMEOUT"));
+    }
+    if content.contains("payment-db") == false {
+        violations.push(String::from("缺少根因组件 payment-db"));
+    }
+    if content.contains("p99") == false {
+        violations.push(String::from("缺少 p99 指标引用"));
+    }
+    let ok = violations.len() == 0;
+    Ok(GateReport { ok, violations })
+}
+
+/// 闸门违规项 → 给模型的重试提示文本。
+export fn render_violations(violations: Vec<String>) -> String {
+    let mut out = String::from("");
+    for v in violations {
+        out.push_str("- ");
+        out.push_str(v.as_str());
+        out.push_str("\n");
+    }
+    out
+}

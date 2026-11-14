@@ -1,0 +1,7 @@
+struct Cfg { limit: i64, label: String }
+
+fn main() -> Result<(), String> {
+    let c = Cfg { limit: "not-a-number", label: "x".to_string() };
+    println!("{} {}", c.limit, c.label);
+    Ok(())
+}

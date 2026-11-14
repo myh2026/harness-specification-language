@@ -1,0 +1,12 @@
+enum P { A, B }
+export graph LibG(mut phase: P) -> Result<i64, String> {
+    node mut phase: P = P::A;
+    loop {
+        match phase {
+            P::A => { phase = P::B; }
+            P::B => { break; }
+        }
+    }
+    Ok(1)
+}
+scale = monolith;

@@ -1,0 +1,37 @@
+import { to_snake, to_camel, to_pascal, to_kebab, pad_start, pad_end, capitalize, count, is_alpha, is_numeric, truncate, levenshtein, split_once, rsplit_once, split_at } from "std/text";
+import { PI, E, sqrt, gcd, lcm, div_ceil, isqrt, pow } from "std/math";
+import { range, range_step, enumerate, chain, take, skip, min_of, max_of } from "std/iter";
+import { seed, int_in, uuid_v4, choice, shuffle, random } from "std/random";
+import { now_ms, now_iso, duration_desc } from "std/time";
+import { env_get, task_text, model_name, workspace } from "std/env";
+import { parse, stringify, get } from "std/json";
+import { identity, type_name, hash } from "std/core";
+import { zip, chunk, dedup, unique, flatten, sort_desc, reverse } from "std/collections";
+
+fn main() -> Result<(), String> {
+    println!("snake={} camel={} pascal={} kebab={}", to_snake("HelloWorld"), to_camel("hello_world"), to_pascal("hello_world"), to_kebab("HelloWorld"));
+    println!("pad=[{}] [{}] cap={} count={}", pad_start("7", 3, "0"), pad_end("ab", 4), capitalize("abc"), count("a-b-a", "a"));
+    println!("alpha={} num={} trunc={} lev={}", is_alpha("abc"), is_numeric("3.5"), truncate("abcdef", 4), levenshtein("kitten", "sitting"));
+    println!("split_once={:?} rsplit_once={:?} split_at={:?}", split_once("a=b", "="), rsplit_once("a=b=c", "="), split_at("abcdef", 3));
+    println!("math pi={:.4} e={:.3} sqrt={} gcd={} lcm={} div_ceil={} isqrt={} pow={}", PI, E, sqrt(16.0), gcd(12, 18), lcm(4, 6), div_ceil(7, 2), isqrt(17), pow(2.0, 10.0));
+    println!("iter range={:?} step={:?} enum={:?}", range(0, 5), range_step(0, 10, 3), enumerate(vec!["a", "b"]));
+    println!("iter min={:?} max={:?} chain={:?} take={:?} skip={:?}", min_of(vec![3, 1, 2]), max_of(vec![3, 1, 2]), chain(vec![1], vec![2, 3]), take(vec![1, 2, 3], 2), skip(vec![1, 2, 3], 1));
+    seed(7);
+    let r1 = int_in(1, 100);
+    let u1 = uuid_v4();
+    let c1 = choice(vec!["x", "y"]);
+    println!("rand int={} uuid={} choice={:?} random={}", r1, u1, c1, random());
+    seed(7);
+    println!("reproducible={}", int_in(1, 100) == r1);
+    println!("shuffle={:?}", shuffle(vec![1, 2, 3]));
+    println!("time duration={} iso_len={} now_ms_pos={}", duration_desc(1500), now_iso().len(), now_ms() > 0);
+    println!("env path_some={} task=[{}] model={} ws_len={}", env_get("PATH").is_some(), task_text(), model_name(), workspace().len());
+    println!("json stringify={}", stringify(vec![1, 2]));
+    let parsed = parse("{\"a\":1,\"b\":[true,null]}");
+    println!("json ok={} get={:?} get_missing={:?}", parsed.is_ok(), get(parsed.ok().unwrap_or(0), "a"), get(parsed.ok().unwrap_or(0), "zz"));
+    println!("type_name={} {} {}", type_name(1), type_name("s"), type_name(vec![1]));
+    println!("hash_eq={}", hash("abc") == hash("abc"));
+    println!("identity={}", identity(9));
+    println!("coll zip={:?} chunk={:?} dedup={:?} unique={:?} flat={:?} sort_desc={:?} rev={:?}", zip(vec![1, 2], vec!["a", "b"]), chunk(vec![1, 2, 3, 4], 2), dedup(vec![1, 1, 2, 2, 1]), unique(vec![1, 2, 1, 3]), flatten(vec![vec![1], vec![2, 3]]), sort_desc(vec![1, 3, 2]), reverse(vec![1, 2, 3]));
+    Ok(())
+}

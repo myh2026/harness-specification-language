@@ -1,0 +1,21 @@
+macro_rules! guard_check2 {
+    ($name:ident, [$($cap:literal),*]) => {
+        impl $name {
+            fn allowed(self, capability: String) -> bool {
+                match capability.as_str() {
+                    $($cap => true,)*
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+
+struct EchoTool { t: i64 }
+guard_check2!(EchoTool, ["echo", "ping"]);
+
+fn main() -> Result<(), String> {
+    let c = EchoTool { t: 1 };
+    println!("echo={}", c.allowed("echo".to_string()));
+    Ok(())
+}

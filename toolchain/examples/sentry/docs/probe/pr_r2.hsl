@@ -1,0 +1,7 @@
+struct RCfg { n: i64 }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    rules {
+        struct -> "gen/{wrong}.rs" : rust,
+    }
+}

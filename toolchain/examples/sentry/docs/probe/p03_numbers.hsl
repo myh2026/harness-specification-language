@@ -1,0 +1,43 @@
+// probe: numeric types, literals, casts, ranges
+fn main() -> i64 {
+    let a: i64 = 42;
+    let b: f64 = 3.14;
+    let c: bool = true;
+    let d: char = 'H';
+    let s: String = String::from("hello");
+    let big: i64 = 0xFF;
+    let bin: i64 = 0b1010;
+    let sep: i64 = 4_000;
+    let raw = r"C:\path\to\file";
+    println!("a={} b={} c={} d={} s={} big={} bin={} sep={} raw={}", a, b, c, d, s, big, bin, sep, raw);
+
+    let u8v: u8 = 250;
+    let u32v: u32 = 7;
+    let usizev: usize = 3;
+    let i128v: i128 = 5;
+    println!("u8={} u32={} usize={} i128={}", u8v, u32v, usizev, i128v);
+
+    // casts are the only conversion channel
+    let x: i64 = 3;
+    let y: f64 = x as f64 / 2.0;
+    let z: i64 = 7 / 2;          // integer division truncates
+    let m: i64 = 7 % 2;
+    println!("y={} z={} m={}", y, z, m);
+
+    // int + float is S-14 (error); use as
+    println!("{}", (a as f64) + b);
+
+    // tuples: literal, index, destructure
+    let t: (i64, String) = (1, String::from("one"));
+    println!("t.0={} t.1={}", t.0, t.1);
+    let (n, w) = t;
+    println!("n={} w={}", n, w);
+
+    // value-context range
+    let r = 0..3;
+    println!("r={:?}", r);
+    let mut sum: i64 = 0;
+    for k in r { sum += k; }
+    println!("sum={}", sum);
+    0
+}

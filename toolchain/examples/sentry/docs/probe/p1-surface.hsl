@@ -1,0 +1,112 @@
+// p1-surface — $host API surface, non-throwing paths only.
+// Every $host access is gated inside a native typescript block (HSL has no direct $host syntax).
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rc {
+    ok: bool,
+    code: i64,
+    stdout: String,
+    stderr: String,
+}
+
+fn main() {
+    // ---- config: flattened inside native (dot access to `scale` is unparseable from HSL) ----
+    let cfg_line: String = native typescript {
+        const c = $host.config;
+        return `model=${c.model} scale=${c.scale} task=${JSON.stringify(c.task)} temperature=${c.temperature} maxTurns=${c.maxTurns} maxBashCalls=${c.maxBashCalls} maxOutputChars=${c.maxOutputChars} allow=${c.allow.join(",")}`;
+    };
+    println!("CONFIG {}", cfg_line);
+    let cfg_ws: String = native typescript { return $host.config.workspace; };
+    let cfg_out: String = native typescript { return $host.config.outdir; };
+    println!("WS {}", cfg_ws);
+    println!("OUTDIR {}", cfg_out);
+
+    // ---- env ----
+    let envv: String = native typescript { const v = $host.env.get("DHV_PROBE"); return v === undefined ? "<undefined>" : v; };
+    let env_missing: String = native typescript { const v = $host.env.get("DHV_NO_SUCH_VAR"); return v === undefined ? "<undefined>" : v; };
+    println!("ENV DHV_PROBE={} MISSING={}", envv, env_missing);
+
+    // ---- fs.write / read / edit / list ----
+    let wn: i64 = native typescript { return $host.fs.write("sub/a.txt", "hello 世界\nsecond line\n"); };
+    println!("FS_WRITE_RET {}", wn);
+    let rb: String = native typescript { return $host.fs.read("sub/a.txt"); };
+    println!("FS_READ {:?}", rb);
+    let e1 = native typescript { return $host.fs.edit("sub/a.txt", "hello", "HELLO"); };
+    println!("FS_EDIT_OK {:?}", e1);
+    let e2 = native typescript { return $host.fs.edit("sub/a.txt", "no-such-token", "x"); };
+    println!("FS_EDIT_MISS {:?}", e2);
+    let e3 = native typescript { return $host.fs.edit("sub/a.txt", "line", "LINE"); };
+    println!("FS_EDIT_DUP {:?}", e3);
+    let after: String = native typescript { return $host.fs.read("sub/a.txt"); };
+    println!("FS_AFTER {:?}", after);
+    let ls1: String = native typescript { return $host.fs.list("."); };
+    println!("FS_LIST . =>\n{}", ls1);
+    let ls2: String = native typescript { return $host.fs.list("sub", 1); };
+    println!("FS_LIST sub,1 =>\n{}", ls2);
+
+    // ---- artifacts (not jailed, lands in --out) ----
+    let apath: String = native typescript { return $host.artifacts.write("probe/art.md", "# artifact from $host\n"); };
+    println!("ARTIFACT {}", apath);
+
+    // ---- json bridge ----
+    let j = native typescript { return $host.json.parse('{"a":1,"b":{"c":[10,20]},"s":"x","f":1.5,"t":true}'); };
+    println!("JSON a={} b.c[1]={} s={} f={} t={}", j.a, j.b.c[1], j.s, j.f, j.t);
+    let js: String = native typescript { return $host.json.stringify($host.json.parse('{"z":1,"a":[1,2]}')); };
+    println!("JSON_STRINGIFY {:?}", js);
+    let fenced = "```json\n{\"verdict\": \"accept\", \"score\": 3, \"nested\": {\"k\": 1}}\n```\n";
+    let fields: HashMap<String, String> = native typescript { return $host.json.fields(fenced); };
+    println!("JSON_FIELDS verdict={:?} score={:?} nested={:?}", fields.get(String::from("verdict")), fields.get(String::from("score")), fields.get(String::from("nested")));
+
+    // ---- events + log ----
+    let _ = native typescript { $host.events.emit("probe_marker", { n: 1, s: "two", b: true }); return null; };
+    let _ = native typescript { $host.log("log line", 42, { k: "v" }); return null; };
+    println!("EVENTS_EMITTED");
+
+    // ---- shell.run: three shapes (allowed / denied / nonzero) ----
+    let sh = native typescript { return await $host.shell.run("ls"); };
+    println!("SHELL_ALLOWED ok={} code={} out={:?} err={:?}", sh.ok, sh.code, sh.stdout, sh.stderr);
+    let shd = native typescript { return await $host.shell.run("whoami"); };
+    println!("SHELL_DENIED ok={} code={} out={:?} err={:?}", shd.ok, shd.code, shd.stdout, shd.stderr);
+    let shn = native typescript { return await $host.shell.run("ls /no/such/path"); };
+    println!("SHELL_NONZERO ok={} code={} err_head={:?}", shn.ok, shn.code, shn.stderr);
+
+    // ---- native value boundary: nested object / array / number / bool / null ----
+    let r = native typescript {
+        return {
+            name: "n1",
+            count: 7,
+            ratio: 2.5,
+            flag: true,
+            nothing: null,
+            tags: ["a", "b", "c"],
+            nested: { deep: { v: 99 }, inner: [1, 2] },
+            show: (x) => `show:${x}`,
+        };
+    };
+    println!("NAT name={} count={} ratio={} flag={}", r.name, r.count, r.ratio, r.flag);
+    println!("NAT tags={:?} tags.len={} tags[2]={}", r.tags, r.tags.len(), r.tags[2]);
+    println!("NAT nested.deep.v={} nested.inner[1]={}", r.nested.deep.v, r.nested.inner[1]);
+    println!("NAT nothing={:?}", r.nothing);
+    println!("NAT method-pass-through show={}", r.show("z"));
+
+    // ---- $host.make: struct + prelude/declared enum ----
+    let payload = native typescript { return { x: 3, y: 4 }; };
+    let p = native typescript { return $host.make("Point", payload); };
+    println!("MAKE_POINT x={} y={} debug={:?}", p.x, p.y, p);
+    let res = native typescript { return $host.make("Result::Ok", [42]); };
+    println!("MAKE_RESULT {:?}", res);
+    let opt = native typescript { return $host.make("Option::Some", ["v"]); };
+    println!("MAKE_OPTION {:?}", opt);
+
+    // ---- fixture (v2 tracks + acts + reviews, hand-written to be ample) ----
+    let act1: String = native typescript { return await $host.fixture.nextAct(); };
+    let rev1: String = native typescript { return await $host.fixture.nextReview(); };
+    let t1: String = native typescript { return await $host.fixture.next("plan"); };
+    let acts_left: i64 = native typescript { return $host.fixture.actsLeft(); };
+    let plan_left: i64 = native typescript { return $host.fixture.left("plan"); };
+    println!("FIX act1={:?} rev1={:?} track_plan={:?} actsLeft={} planLeft={}", act1, rev1, t1, acts_left, plan_left);
+}
+

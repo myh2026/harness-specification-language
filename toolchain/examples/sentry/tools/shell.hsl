@@ -1,0 +1,58 @@
+// ============================================================================
+// sentry/tools/shell.hsl — bash 工具（首词白名单 + 超时 + 输出封顶 + 重试友好）
+// ============================================================================
+// 文法覆盖：#[capability(process_spawn)] / native try-catch（注入故障可能 throw）
+//           / String.push_str 复合赋值 / if 守卫
+// ============================================================================
+
+import { ToolResult } from "../types/messages.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Policy } from "../types/state.hsl";
+import { cap_chars } from "./files.hsl";
+
+#[capability(process_spawn)]
+export fn run_bash(policy: Policy, command: String) -> Result<ToolResult, HarnessError> {
+    let r = native typescript {
+        const t0 = Date.now();
+        try {
+            const out = await $host.shell.run(command, { timeoutMs: 60000 });
+            return { ok: out.ok, code: out.code, stdout: out.stdout, stderr: out.stderr, error: "", ms: Date.now() - t0 };
+        } catch (e) {
+            return { ok: false, code: -1, stdout: "", stderr: "", error: String(e && e.message || e), ms: Date.now() - t0 };
+        }
+    };
+    if r.error.len() > 0 {
+        let mut failed = String::from("[spawn error] ");
+        failed.push_str(r.error.as_str());
+        let capped_fail = cap_chars(failed, policy.max_output_chars);
+        return Ok(ToolResult {
+            call: format!("bash {}", command),
+            ok: false,
+            output: capped_fail,
+            duration_ms: r.ms,
+            attempts: 1,
+        });
+    }
+    let mut combined = String::from("");
+    if r.stdout.len() > 0 {
+        combined.push_str(r.stdout.as_str());
+    }
+    if r.stderr.len() > 0 {
+        if combined.len() > 0 {
+            combined.push_str("\n");
+        }
+        combined.push_str("[stderr]\n");
+        combined.push_str(r.stderr.as_str());
+    }
+    if combined.len() == 0 {
+        combined.push_str(format!("(no output, exit {})", r.code).as_str());
+    }
+    let capped = cap_chars(combined, policy.max_output_chars);
+    Ok(ToolResult {
+        call: format!("bash {}", command),
+        ok: r.ok,
+        output: capped,
+        duration_ms: r.ms,
+        attempts: 1,
+    })
+}

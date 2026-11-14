@@ -1,0 +1,21 @@
+// p6-dhv — $host.dhv.check / $host.dhv.run nested CLI capture (in-process, no bash).
+fn main() -> Result<(), String> {
+    let g = native typescript { return await $host.dhv.check("good.hsl"); };
+    println!("CHECK_GOOD ok={} output={:?}", g.ok, g.output);
+
+    let b = native typescript { return await $host.dhv.check("bad.hsl"); };
+    println!("CHECK_BAD ok={} output={:?}", b.ok, b.output);
+
+    let m = native typescript { return await $host.dhv.check("missing.hsl"); };
+    println!("CHECK_MISSING ok={} output={:?}", m.ok, m.output);
+
+    let r = native typescript { return await $host.dhv.run(["check", "good.hsl"]); };
+    println!("RUN_CHECK ok={} code={} out={:?} err={:?}", r.ok, r.code, r.stdout, r.stderr);
+
+    let u = native typescript { return await $host.dhv.run(["targets"]); };
+    println!("RUN_TARGETS ok={} code={} out_len={}", u.ok, u.code, u.stdout.len());
+
+    let e = native typescript { return await $host.dhv.run(["nonsense"]); };
+    println!("RUN_NONSENSE ok={} code={} out_len={} err_len={}", e.ok, e.code, e.stdout.len(), e.stderr.len());
+    Ok(())
+}

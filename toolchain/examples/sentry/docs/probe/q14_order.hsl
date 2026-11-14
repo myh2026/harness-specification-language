@@ -1,0 +1,11 @@
+fn main() -> Result<(), String> {
+    let v: Vec<Box<dyn Fn2>> = vec![Box::new(Double {})];
+    println!("late_trait={}", v[0].apply(4));
+    let d = Double {};
+    println!("plain_late={}", d.apply(5));
+    Ok(())
+}
+
+trait Fn2 { fn apply(self, x: i64) -> i64; }
+struct Double {}
+impl Fn2 for Double { fn apply(self, x: i64) -> i64 { x * 2 } }

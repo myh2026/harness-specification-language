@@ -1,0 +1,5 @@
+fn main() -> Result<(), String> {
+    println!("literal={{}} pos=%s", "x");
+    println!("{0}{1}{0}", "a", "b");
+    Ok(())
+}

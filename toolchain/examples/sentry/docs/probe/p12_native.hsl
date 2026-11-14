@@ -1,0 +1,52 @@
+struct ToolCall { name: String, count: i64 }
+enum Phase { Plan, Act }
+
+fn main() -> Result<(), String> {
+    let name = "bash".to_string();
+    let count = 3;
+    let r = native typescript {
+        const label = name + ":" + String(count);
+        return label;
+    };
+    println!("ts1={}", r);
+
+    let up = native typescript { return name.toUpperCase(); };
+    println!("ts2={}", up);
+
+    let joined = native typescript {
+        const arr = [1, 2, 3];
+        return arr.map((x) => x * 2).join(",");
+    };
+    println!("ts3={}", joined);
+
+    let awaited = native typescript { return await Promise.resolve("awaited"); };
+    println!("ts4={}", awaited);
+
+    let vecv = native typescript { return [10, 20]; };
+    println!("ts5={:?}", vecv);
+
+    let made = native typescript {
+        return $host.make("ToolCall", { name: "grep", count: 2 });
+    };
+    println!("ts6={:?} name={}", made, made.name);
+
+    let enumv = native typescript {
+        return $host.make("Phase::Act", null);
+    };
+    println!("ts7={:?}", enumv);
+
+    let foreign = native typescript { return { a: 1 }; };
+    println!("ts8_a={}", foreign.a);
+
+    let py = native python {
+    return {"sum": 3, "name": "py"}
+    };
+    println!("py={:?}", py);
+
+    let flag = native typescript { return true; };
+    println!("ts9={}", flag);
+
+    let nothing = native typescript { return null; };
+    println!("ts10={:?}", nothing);
+    Ok(())
+}

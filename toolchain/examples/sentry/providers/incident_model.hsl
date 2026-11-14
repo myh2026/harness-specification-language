@@ -1,0 +1,85 @@
+// ============================================================================
+// sentry/providers/incident_model.hsl — 模型提供方：trait + 双实现（native 逃生舱）
+// ============================================================================
+// 文法覆盖：TraitDef（async fn + self）/ impl Trait for Type /
+//           native typescript（$host.llm / $host.fixture）/ #[capability(net_connect)]
+// ============================================================================
+
+import { Message } from "../types/messages.hsl";
+import { ProviderError } from "../types/errors.hsl";
+import { SENTRY_PROMPT } from "../config/resources.hsl";
+
+/// 模型提供方契约：执行者与审计者共用同一契约，但实例/低温/对话隔离。
+export trait IncidentModel {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError>;
+}
+
+/// 真实模型（OpenAI 兼容 chat 协议，经 $host.llm 网关）。
+#[capability(net_connect)]
+#[derive(Debug, Clone)]
+export struct DeepSeekIncidentModel {
+    model: String,
+    temperature: f64,
+}
+
+impl DeepSeekIncidentModel {
+    fn new(model: String, temperature: f64) -> DeepSeekIncidentModel {
+        DeepSeekIncidentModel { model, temperature }
+    }
+}
+
+impl IncidentModel for DeepSeekIncidentModel {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError> {
+        // N1 纪律：prompt 组装在 HSL 侧；native 只做 API 调用与平凡类型捕获
+        let system = SENTRY_PROMPT;
+        let raw: String = native typescript {
+            const messages = [
+                { role: "system", content: system },
+                ...transcript.map((m) => ({ role: m.role, content: m.content })),
+            ];
+            const r = await $host.llm.complete({
+                messages,
+                temperature: self.temperature,
+                maxTokens: 1200,
+            });
+            if (r === undefined || r === null) throw new Error("empty completion");
+            return r;
+        };
+        if raw.len() == 0 {
+            Err(ProviderError::new(502, String::from("empty completion")))
+        } else {
+            Ok(raw)
+        }
+    }
+}
+
+/// 确定性剧本模型（fixture 驱动）：CI 可复现、零外联、可注入故障。
+/// track = "triage"（执行者轨道）或 "audit"（审计者轨道）。
+#[derive(Debug, Clone)]
+export struct ScriptedIncidentModel {
+    track: String,
+}
+
+impl ScriptedIncidentModel {
+    fn new(track: String) -> ScriptedIncidentModel {
+        ScriptedIncidentModel { track }
+    }
+}
+
+impl IncidentModel for ScriptedIncidentModel {
+    async fn act(self, transcript: Vec<Message>) -> Result<String, ProviderError> {
+        let track = self.track.clone();
+        let raw: String = native typescript {
+            try {
+                return await $host.fixture.next(track);
+            } catch (e) {
+                return "";
+            }
+        };
+        if raw.len() == 0 {
+            Err(ProviderError::new(503, String::from("fixture exhausted")))
+        } else {
+            Ok(raw)
+        }
+    }
+}

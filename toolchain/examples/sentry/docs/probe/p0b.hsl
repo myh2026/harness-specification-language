@@ -1,0 +1,19 @@
+// p0b — S-7 unused-binding behavior + keyword field access
+struct Opts {
+    cwd: String,
+    timeoutMs: i64,
+}
+
+fn main() {
+    let a = 1;
+    println!("a={}", a);
+
+    let b = native typescript { return 2; };
+    println!("b={}", b);
+
+    let c = native typescript { return { model: "scripted", n: 5 }; };
+    println!("c.model={} c.n={}", c.model, c.n);
+
+    let cfg = native typescript { return $host.config; };
+    println!("cfg.model={}", cfg.model);
+}

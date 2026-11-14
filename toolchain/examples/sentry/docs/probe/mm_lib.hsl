@@ -1,0 +1,9 @@
+export struct MItem { id: i64 }
+export enum MPhase { Idle, Busy }
+export fn m_helper(a: i64) -> i64 { a * 3 }
+
+struct LibOwn { n: i64 }
+
+project {
+    LibOwn -> "src/lib/own.rs" : rust,
+}

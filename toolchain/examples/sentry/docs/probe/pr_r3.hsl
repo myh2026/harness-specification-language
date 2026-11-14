@@ -1,0 +1,8 @@
+struct RCfg2 { n: i64 }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    rules {
+        struct -> "gen/{name}.rs" : rust,
+        struct -> "gen2/{name}.rs" : rust,
+    }
+}

@@ -179,7 +179,7 @@ HSL/
 ├── toolchain/     # DHV 工具链（主产品）
 │   ├── dhv/       #   Rust 编译器（PEG 文法 hsl.pest，多后端转译）
 │   ├── dhv-ts/    #   TypeScript 参考解释器（check / run / emit / targets / sync / watch）
-│   ├── examples/  #   内置示例：nova（研究型 Agent）、dsh（对话型 Agent）、backends-demo（38 后端投射）
+│   ├── examples/  #   内置示例：nova（研究型 Agent）、dsh（对话型 Agent）、sentry（事故分诊 Agent）、backends-demo（38 后端投射）
 │   ├── hsl-spec/  #   BNF v1.5.0 语言规范 + 合规矩阵
 │   └── tests/     #   双编译器一致性回归套件（run_conformance.sh）
 ├── guide/         # HSL 语言完全指南（4000+ 行，全部示例经实测）
@@ -211,6 +211,15 @@ bun dhv-ts/src/main.ts run examples/dsh/dsh.hsl \
   --fixture examples/dsh/fixtures/fix-variance.json \
   --out /tmp/dsh-run
 
+# 3b) 第二个完整 harness：事故分诊 Agent（确定性回放；失败路径见 fixtures/loop-forever.json）
+cp -r examples/sentry/workspace /tmp/sentry-ws
+bun dhv-ts/src/main.ts run examples/sentry/sentry.hsl \
+  --workspace /tmp/sentry-ws \
+  --task "checkout 支付链路自 02:13 起大面积超时，请分诊并给出复盘报告" \
+  --model scripted \
+  --fixture examples/sentry/fixtures/triage-demo.json \
+  --out /tmp/sentry-run
+
 # 4) 投射出真实工程（38 后端 + manifest + 语法校验）
 bun dhv-ts/src/main.ts emit examples/backends-demo/agent.hsl --out /tmp/backends-demo
 
@@ -218,7 +227,7 @@ bun dhv-ts/src/main.ts emit examples/backends-demo/agent.hsl --out /tmp/backends
 bash tests/run_conformance.sh
 ```
 
-只想看产物、不想装 Rust？第 2/3/4 步仅用 Bun 即可完成；`bun dhv-ts/src/main.ts targets`
+只想看产物、不想装 Rust？第 2/3/3b/4 步仅用 Bun 即可完成；`bun dhv-ts/src/main.ts targets`
 可列出全部 38 个后端（tier / 能力级 / 扩展名）。
 
 ### 🧩 HSL IDE（v0.2.0 全链路）—— 装扩展即得完整工具链
@@ -325,7 +334,7 @@ main 合并（版本号变更）→ CI 四 job 全绿（含 version-sync 守卫�
 | 两套实现各自覆盖到什么程度 | [toolchain/hsl-spec/COMPLIANCE.md](toolchain/hsl-spec/COMPLIANCE.md) |
 | Rust 编译器内部结构与路线图 | [toolchain/dhv/README.md](toolchain/dhv/README.md) |
 | 解释器运行方式 / native 逃生舱 / 已知限制 | [toolchain/dhv-ts/README.md](toolchain/dhv-ts/README.md) |
-| 三个可直接跑的完整项目 | [toolchain/examples/](toolchain/examples/)（nova · dsh · backends-demo） |
+| 四个可直接跑的完整项目 | [toolchain/examples/](toolchain/examples/)（nova · dsh · sentry · backends-demo） |
 | 每个 HSL 文件怎么变成多语言仓库 | [toolchain/examples/backends-demo/agent.hsl](toolchain/examples/backends-demo/agent.hsl) |
 
 ## 📄 许可证

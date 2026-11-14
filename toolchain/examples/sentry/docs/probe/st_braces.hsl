@@ -1,0 +1,12 @@
+const N: i64 = 7;
+block Braces {
+JSON sample: {"a": 1, "b": [1, 2]}
+Python: f"{x}"
+Plain: { not interpolation }
+Var: {{N}}
+Escaped braces: {{"{"}}
+}
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    Braces -> "out/braces.txt" : markdown,
+}

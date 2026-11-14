@@ -1,0 +1,6 @@
+import { private_helper } from "./p17_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    println!("{}", private_helper(1));
+    Ok(())
+}

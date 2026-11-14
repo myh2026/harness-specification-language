@@ -1,0 +1,15 @@
+{
+  "acts": ["a1"],
+  "reviews": ["{\"verdict\":\"accept\"}"],
+  "tracks": { "plan": ["plan-a", "plan-b"] },
+  "faults": [
+    { "target": "fs.read", "nth": 1, "kind": "empty" },
+    { "target": "fs.read", "nth": 2, "kind": "corrupt" },
+    { "target": "fs.read", "nth": 9, "kind": "slow", "delayMs": 50 },
+    { "target": "fs.write", "nth": 1, "kind": "empty" },
+    { "target": "fs.edit", "nth": 1, "kind": "empty" },
+    { "target": "fs.list", "nth": 1, "kind": "corrupt" },
+    { "target": "json.parse", "nth": 1, "kind": "corrupt" },
+    { "target": "json.fields", "nth": 1, "kind": "corrupt" }
+  ]
+}

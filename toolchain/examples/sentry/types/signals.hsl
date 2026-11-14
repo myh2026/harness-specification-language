@@ -1,0 +1,107 @@
+// ============================================================================
+// sentry/types/signals.hsl — 观测信号层：日志事实 / 指标事实 / 证据 / 评级
+// ============================================================================
+// 设计要点：所有"分析结论"必须来自 HSL 侧的确定性计算（scan_logs / grade），
+// 而不是模型自由发挥；模型只负责把证据写成人类可读的复盘。
+// 文法覆盖：EnumDef + impl（self 方法 / match 穷尽）/ StructDef / if-else 表达式值
+// ============================================================================
+
+/// 事故严重级别（公司 SRE 标准）。
+#[derive(Debug, Clone)]
+export enum Severity {
+    Sev1,
+    Sev2,
+    Sev3,
+    Sev4,
+}
+
+impl Severity {
+    fn label(self) -> String {
+        match self {
+            Severity::Sev1 => String::from("SEV-1"),
+            Severity::Sev2 => String::from("SEV-2"),
+            Severity::Sev3 => String::from("SEV-3"),
+            Severity::Sev4 => String::from("SEV-4"),
+        }
+    }
+
+    fn rank(self) -> u32 {
+        match self {
+            Severity::Sev1 => 1,
+            Severity::Sev2 => 2,
+            Severity::Sev3 => 3,
+            Severity::Sev4 => 4,
+        }
+    }
+}
+
+/// 日志扫描事实（由 scan_logs 计算，纯函数）。
+#[derive(Debug, Clone)]
+export struct LogFacts {
+    total_lines: u32,
+    error_lines: u32,
+    warn_lines: u32,
+    first_error_ts: String,
+    top_component: String,
+    timeout_mentions: u32,
+}
+
+impl LogFacts {
+    fn error_ratio(self) -> f64 {
+        if self.total_lines > 0 {
+            self.error_lines as f64 / self.total_lines as f64
+        } else {
+            0.0
+        }
+    }
+}
+
+/// 指标事实（由 parse_metrics 从 metrics.json 解析）。
+#[derive(Debug, Clone)]
+export struct MetricFacts {
+    p99_ms: f64,
+    baseline_p99_ms: f64,
+    error_rate: f64,
+    requests_per_min: u32,
+    cpu_saturation: f64,
+    deploy_minutes_ago: u32,
+}
+
+/// 侦察证据包：Analyzer 节点的输出，也是报告闸门与审计的输入。
+#[derive(Debug, Clone)]
+export struct Evidence {
+    log: LogFacts,
+    metrics: MetricFacts,
+    severity: Severity,
+    collected_at: String,
+}
+
+impl Evidence {
+    /// 给模型的确定性摘要（数字全部来自 HSL 计算，避免模型臆造）。
+    fn digest(self) -> String {
+        let mut out = String::from("## 确定性侦察摘要（analyzer 计算，非模型推断）\n");
+        out.push_str(format!("- 严重级别（HSL 评分矩阵）：{}\n", self.severity.clone().label()).as_str());
+        out.push_str(format!("- 日志：{} 行，ERROR {} 行，WARN {} 行\n", self.log.total_lines, self.log.error_lines, self.log.warn_lines).as_str());
+        out.push_str(format!("- 首个 ERROR 时间：{}，异常组件：{}\n", self.log.first_error_ts, self.log.top_component).as_str());
+        out.push_str(format!("- UPSTREAM_TIMEOUT 出现次数：{}\n", self.log.timeout_mentions).as_str());
+        out.push_str(format!("- p99：{} ms（基线 {} ms），错误率：{}\n", self.metrics.p99_ms, self.metrics.baseline_p99_ms, self.metrics.error_rate).as_str());
+        out.push_str(format!("- QPS：{}，CPU 饱和度：{}，最近部署：{} 分钟前\n", self.metrics.requests_per_min, self.metrics.cpu_saturation, self.metrics.deploy_minutes_ago).as_str());
+        out.push_str(format!("- 侦察时间：{}\n", self.collected_at).as_str());
+        out.push_str("\n请基于以上事实分诊并写入 report.md，不要臆造数字。\n");
+        out
+    }
+}
+
+/// 报告闸门的检查结果（确定性，不调用模型）。
+#[derive(Debug, Clone)]
+export struct GateReport {
+    ok: bool,
+    violations: Vec<String>,
+}
+
+/// 拓扑边信号词汇（analyzer → model 的 guard）。
+#[derive(Debug, Clone)]
+export enum Signal {
+    EvidenceReady,
+    BudgetExhausted,
+}

@@ -1,0 +1,48 @@
+// p5-emit — project{} + v1.5 rules{} projection (R1-R6), emit output & manifest.json.
+// goal: exercise explicit mapping shadowing, rules expansion, block->static backend, and P5 diagnostics.
+
+/// 状态枚举（被 rules enum 展开）
+export enum Status {
+    Idle,
+    Busy,
+}
+
+/// 会话（被 rules struct 展开）
+export struct Session {
+    id: u32,
+    note: String,
+}
+
+/// 逻辑函数（被 rules fn 展开，target = rust）
+export fn handle(s: Session) -> String {
+    format!("{}:{}", s.id, s.note)
+}
+
+/// 图（被 rules graph 展开，target = rust）
+export graph Flow(mut s: Session) -> Result<String, String> {
+    node worker: String = String::from("w");
+    edge worker -> worker on Status::Idle;
+    Ok(worker)
+}
+
+const LIMIT: u32 = 3;
+
+fn main() -> Result<(), String> {
+    let s = Session { id: 1, note: String::from("hi") };
+    println!("{}", handle(s));
+    Ok(())
+}
+
+project {
+    // 显式单项映射（R1 遮蔽：生效优先于 rules 展开）
+    handle -> "src/main.rs" : rust,
+    Status -> "src/state.rs" : rust,
+
+    rules {
+        struct -> "src/types/{name}.rs" : rust,
+        enum   -> "src/types/{name}.rs" : rust,
+        fn     -> "src/logic/{name}.rs" : rust,
+        graph  -> "src/graphs/{name}.rs" : rust,
+        const  -> "src/limits/{name}.rs" : rust,
+    }
+}

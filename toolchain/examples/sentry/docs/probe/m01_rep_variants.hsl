@@ -1,0 +1,12 @@
+macro_rules! rp_star {
+    ($($x:expr)*) => { vec![$($x),*] };
+}
+macro_rules! rp_plus {
+    ($($x:expr),+) => { vec![$($x),*] };
+}
+
+fn main() -> Result<(), String> {
+    println!("star={:?}", rp_star!(1 2 3));
+    println!("plus={:?}", rp_plus!(1, 2, 3));
+    Ok(())
+}

@@ -1,0 +1,45 @@
+// probe: Vec / HashMap / HashSet / Option / Result core surface
+fn main() -> i64 {
+    let v: Vec<i64> = vec![1, 2, 3];
+    let mut mv: Vec<String> = Vec::new();
+    mv.push(String::from("a"));
+    mv.push(String::from("b"));
+    println!("v={:?} len={} mv={:?}", v, v.len(), mv);
+
+    let mut m: HashMap<String, i64> = HashMap::new();
+    m.insert(String::from("a"), 1);
+    m.insert(String::from("b"), 2);
+    println!("m.a={} len={} contains={}", m.get(String::from("a")).unwrap_or(0), m.len(), m.contains_key(String::from("b")));
+    println!("keys={:?}", m.keys());
+    println!("remove={:?}", m.remove(String::from("a")));
+
+    let mut hs: HashSet<String> = HashSet::new();
+    hs.insert(String::from("x"));
+    println!("hs has x={}", hs.contains(String::from("x")));
+
+    let some: Option<i64> = Some(5);
+    let none: Option<i64> = None;
+    println!("some={} none={}", some.unwrap_or(0), none.unwrap_or(-1));
+    println!("is_some={} is_none={}", some.is_some(), none.is_none());
+
+    let ok: Result<i64, String> = Ok(7);
+    let err: Result<i64, String> = Err(String::from("boom"));
+    println!("ok={} err={}", ok.unwrap_or(0), err.unwrap_or(-1));
+    println!("is_ok={} is_err={}", ok.is_ok(), err.is_err());
+
+    // get returns Option
+    match v.get(1) {
+        Option::Some(x) => println!("v[1]={}", x),
+        Option::None => println!("missing"),
+    }
+    match v.get(99) {
+        Option::Some(x) => println!("v[99]={}", x),
+        Option::None => println!("missing99"),
+    }
+    // iterate vec by value and by index
+    let mut total: i64 = 0;
+    for x in v.clone() { total += x; }
+    for i in 0..v.len() { total += v[i as usize]; }
+    println!("total={}", total);
+    0
+}

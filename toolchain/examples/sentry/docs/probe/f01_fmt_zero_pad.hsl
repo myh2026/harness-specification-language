@@ -1,0 +1,4 @@
+fn main() -> Result<(), String> {
+    println!("[{:05}]", 42);
+    Ok(())
+}

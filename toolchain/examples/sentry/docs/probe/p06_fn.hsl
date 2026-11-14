@@ -1,0 +1,44 @@
+// probe: async, recursion, closures, fn-as-value, generic fn if supported
+fn double(x: i64) -> i64 { x * 2 }
+
+fn fact(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+
+async fn fetch_label(id: i64) -> String {
+    format!("item-{}", id)
+}
+
+// generic function probe
+fn ident_generic<T>(x: T) -> T { x }
+
+struct Counter { n: i64 }
+
+impl Counter {
+    fn bump(mut self) -> i64 { self.n = self.n + 1; self.n }
+    fn get(self) -> i64 { self.n }
+}
+
+fn main() -> i64 {
+    println!("double={} fact={}", double(21), fact(5));
+    let label = fetch_label(7).await;
+    println!("label={}", label);
+
+    let add = |a: i64, b: i64| a + b;
+    println!("add={}", add(3, 4));
+    let base = 100;
+    let nums = vec![1, 2, 3, 4, 5];
+    let with_base = nums.map(|n| n + base);
+    println!("with_base={:?}", with_base);
+    let f = double;
+    println!("f={}", f(21));
+
+    // generic call (if generics are not supported this line fails)
+    println!("g={}", ident_generic(9));
+
+    let mut c = Counter { n: 0 };
+    println!("bump={} get={}", c.bump(), c.get());
+    // mut self effect on caller visible?
+    println!("after bump get={}", c.get());
+    0
+}

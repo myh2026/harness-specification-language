@@ -1,0 +1,19 @@
+// p5c — P5 diagnostics: duplicate rules kind, unknown kind, non-{name} placeholder, unknown backend.
+export fn one() -> u32 {
+    1
+}
+
+export struct Rec {
+    n: u32,
+}
+
+project {
+    one -> "out/one.rs" : rust,
+
+    rules {
+        fn -> "out/fn/{name}.rs" : rust,
+        fn -> "out/fn2/{name}.rs" : rust,
+        bogus -> "out/bogus/{name}.rs" : rust,
+        struct -> "out/rec/{bad}.rs" : rust,
+    }
+}

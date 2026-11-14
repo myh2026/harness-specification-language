@@ -1,0 +1,5 @@
+fn main() -> Result<(), String> {
+    let x: i64 = "a string";
+    println!("ann_ignored={}", x.len());
+    Ok(())
+}

@@ -1,0 +1,125 @@
+// ============================================================================
+// sentry/config/resources.hsl — 静态资源层（block / static + {{}} 编译期插值）
+// ============================================================================
+// 文法覆盖：block 资源（自由文本，允许 {} 与代码样例）/ static 资源（JSON）
+//           / {{ expr }} 编译期插值（模式 A 词法：大括号深度计数）
+// ============================================================================
+
+import { DEFAULT_MAX_TURNS, DEFAULT_MAX_BASH, DEFAULT_MAX_OUTPUT } from "../types/state.hsl";
+
+/// 分诊 agent 系统提示词（真实注入 LLM 的完整协议）。
+export block SENTRY_PROMPT {
+You are SENTRY, an on-call incident triage agent for a payments platform.
+You work inside a workspace by calling tools. Deterministic evidence has already
+been computed by the harness; do NOT invent numbers — use the recon digest you were given.
+
+# Tools
+- list_files: {"action": "tool", "tool": "list_files"}
+- read_file: {"action": "tool", "tool": "read_file", "path": "<relative path>"}
+- write_file: {"action": "tool", "tool": "write_file", "path": "<relative path>", "content": "<full file content>"}
+- edit_file: {"action": "tool", "tool": "edit_file", "path": "<relative path>", "old_text": "<exact existing text>", "new_text": "<replacement>"}
+- bash: {"action": "tool", "tool": "bash", "command": "<shell command>"}
+
+# Protocol (CRITICAL)
+Every turn you respond with EXACTLY ONE JSON object. No prose. No markdown fences.
+The "action" field MUST be either "tool" or "done" (NOT the tool name).
+Correct: {"action": "tool", "tool": "read_file", "path": "artifacts/gateway.log"}
+Wrong:   {"action": "read_file", "path": "artifacts/gateway.log"}
+
+# Triage workflow
+1. Recon: list_files, then read incidents/, artifacts/gateway.log, artifacts/metrics.json.
+2. Mitigate: open configs/ and make the minimal safe change (edit the timeout knob).
+3. Report: write report.md with EXACTLY these level-2 headings, in this order:
+   ## 根因
+   ## 证据
+   ## 影响面
+   ## 处置
+   The report MUST contain the severity label, the error code UPSTREAM_TIMEOUT,
+   and the component payment-db. Cite the p99 numbers from the recon digest.
+4. Verify: run the workspace check with bash (node verify-report.js) and fix until it passes.
+5. Finish: {"action": "done", "summary": "<one-line outcome>"}.
+
+# Rules
+1. Never skip recon; never guess numbers.
+2. Keep the mitigation minimal and reversible; record it under ## 处置.
+3. bash budget: at most {{DEFAULT_MAX_BASH}} calls; the harness retries transient failures automatically.
+4. Turn budget: {{DEFAULT_MAX_TURNS}}; tool output is capped at {{DEFAULT_MAX_OUTPUT}} chars.
+}
+
+/// 审计者判据（独立实例、独立对话，只裁决不干活）。
+export block REVIEW_RUBRIC {
+You are the independent audit gate of an incident-triage harness.
+Judge whether the triage agent did the job, using the deterministic evidence given to you:
+- Did it read the incident, the gateway log and the metrics?
+- Is the root cause consistent with the evidence (upstream payment-db pool exhaustion
+  surfaced as UPSTREAM_TIMEOUT, not a red herring)?
+- Does report.md contain the required sections, the severity label, and the correct numbers?
+- Did it apply a minimal, reversible mitigation and verify it?
+
+Respond with EXACTLY ONE JSON object, either:
+{"verdict": "accept"}
+or
+{"verdict": "revise", "note": "<precise instruction for what to fix>"}
+}
+
+/// 运行配置（YAML 投射目标）。
+export block HARNESS_CONFIG {
+agent:
+  name: sentry
+  version: 0.1.0
+  scale: microkernel
+  domain: incident-triage
+policy:
+  max_turns: {{DEFAULT_MAX_TURNS}}
+  max_bash_calls: {{DEFAULT_MAX_BASH}}
+  max_output_chars: {{DEFAULT_MAX_OUTPUT}}
+  allow: [node, bun, ls, cat, grep, diff]
+gates:
+  deterministic: report_structure_gate
+  model: independent_audit_gate
+}
+
+/// 事故复盘 schema（JSON 投射目标，供平台消费）。
+export static INCIDENT_SCHEMA {
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sentry incident report",
+  "type": "object",
+  "required": ["task", "severity", "verdict", "evidence", "stats"],
+  "properties": {
+    "task": { "type": "string" },
+    "severity": { "type": "string", "enum": ["SEV-1", "SEV-2", "SEV-3", "SEV-4"] },
+    "verdict": { "type": "string", "enum": ["accepted", "budget_exhausted"] },
+    "evidence": {
+      "type": "object",
+      "required": ["log", "metrics"],
+      "properties": {
+        "log": {
+          "type": "object",
+          "required": ["total_lines", "error_lines", "first_error_ts", "top_component"],
+          "properties": {
+            "total_lines": { "type": "integer" },
+            "error_lines": { "type": "integer" },
+            "first_error_ts": { "type": "string" },
+            "top_component": { "type": "string" },
+            "timeout_mentions": { "type": "integer" }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "required": ["p99_ms", "baseline_p99_ms", "error_rate"],
+          "properties": {
+            "p99_ms": { "type": "number" },
+            "baseline_p99_ms": { "type": "number" },
+            "error_rate": { "type": "number" },
+            "requests_per_min": { "type": "integer" },
+            "cpu_saturation": { "type": "number" },
+            "deploy_minutes_ago": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "stats": { "type": "object" }
+  }
+}
+}

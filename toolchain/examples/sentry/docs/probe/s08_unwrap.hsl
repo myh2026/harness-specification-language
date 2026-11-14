@@ -1,0 +1,6 @@
+fn main() -> Result<(), String> {
+    let o: Option<i64> = Some(3);
+    let v = o.unwrap();
+    println!("{}", v);
+    Ok(())
+}

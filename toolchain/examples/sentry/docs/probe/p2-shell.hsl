@@ -1,0 +1,33 @@
+// p2-shell — $host.shell.run shapes with a real POSIX bash on PATH (Git for Windows bash).
+// Requires: $env:PATH = "D:\学习\py学习\Git\bin;C:\Users\86186\.bun\bin;..." and --allow ls,echo,cat,sleep,true
+fn main() {
+    let a = native typescript { return await $host.shell.run("echo hello-from-shell"); };
+    println!("A_OK ok={} code={} out={:?} err={:?}", a.ok, a.code, a.stdout, a.stderr);
+
+    let b = native typescript { return await $host.shell.run("ls sub"); };
+    println!("B_LS ok={} code={} out={:?} err={:?}", b.ok, b.code, b.stdout, b.stderr);
+
+    let c = native typescript { return await $host.shell.run("cat sub/a.txt"); };
+    println!("C_CAT ok={} code={} out={:?}", c.ok, c.code, c.stdout);
+
+    let d = native typescript { return await $host.shell.run("true"); };
+    println!("D_TRUE ok={} code={} out={:?}", d.ok, d.code, d.stdout);
+
+    let e = native typescript { return await $host.shell.run("ls /no/such/path"); };
+    println!("E_NONZERO ok={} code={} err={:?}", e.ok, e.code, e.stderr);
+
+    let f = native typescript { return await $host.shell.run("cat a.txt", { cwd: "sub" }); };
+    println!("F_CWD ok={} code={} out={:?}", f.ok, f.code, f.stdout);
+
+    let g = native typescript { return await $host.shell.run("ls", { cwd: "../../../.." }); };
+    println!("G_CWD_ESCAPE ok={} code={} out_head={:?}", g.ok, g.code, g.stdout);
+
+    let h = native typescript { return await $host.shell.run("sleep 5", { timeoutMs: 300 }); };
+    println!("H_TIMEOUT ok={} code={} err={:?}", h.ok, h.code, h.stderr);
+
+    let i = native typescript { return await $host.shell.run("cat huge.txt"); };
+    println!("I_MAXBUF ok={} code={:?} out_len={} err={:?}", i.ok, i.code, i.stdout.len(), i.stderr);
+
+    let j = native typescript { return await $host.shell.run("/usr/bin/ls"); };
+    println!("J_ABS_TOKEN ok={} code={} err={:?}", j.ok, j.code, j.stderr);
+}

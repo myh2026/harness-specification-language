@@ -1,0 +1,13 @@
+import { MItem, MPhase, m_helper } from "./mm_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let it = MItem { id: m_helper(2) };
+    println!("{} {:?}", it.id, MPhase::Idle);
+    Ok(())
+}
+
+project {
+    MItem   -> "src/m/item.rs"   : rust,
+    MPhase  -> "src/m/phase.rs"  : rust,
+    m_helper -> "src/m/helper.py" : python,
+}

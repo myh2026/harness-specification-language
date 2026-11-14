@@ -1,0 +1,8 @@
+import { LibCfg, LibTrait } from "./p17_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let cfg = LibCfg { name: "x".to_string() };
+    println!("cfg={:?}", cfg);
+    println!("trait_direct={}", LibTrait::label(cfg.clone()));
+    Ok(())
+}

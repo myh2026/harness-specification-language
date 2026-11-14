@@ -1,0 +1,7 @@
+import * as lib from "./p17_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let cfg = lib.LibCfg { name: "x".to_string() };
+    println!("ns_struct={:?}", cfg);
+    Ok(())
+}

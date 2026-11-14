@@ -1,0 +1,8 @@
+struct Payload { name: String, count: i64 }
+fn main() -> Result<(), String> {
+    let p: Payload = native typescript {
+        ({ name: "native", count: 2 })
+    };
+    println!("payload={:?}", p);
+    Ok(())
+}

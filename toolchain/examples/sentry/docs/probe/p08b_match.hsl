@@ -1,0 +1,48 @@
+enum Color { Red, Green, Blue }
+
+fn name(c: Color) -> String {
+    match c {
+        Color::Red => "red".to_string(),
+        Color::Green => "green".to_string(),
+        Color::Blue => "blue".to_string(),
+    }
+}
+
+fn score(n: i64) -> String {
+    match n {
+        0 => "zero".to_string(),
+        1..=9 => "digit".to_string(),
+        10 | 20 | 30 => "tenish".to_string(),
+        x if x < 0 => "neg".to_string(),
+        _ => "big".to_string(),
+    }
+}
+
+fn pair(p: (i64, String)) -> String {
+    match p {
+        (0, s) => format!("zero {}", s),
+        (n, _) => n.to_string(),
+    }
+}
+
+fn opt(o: Option<i64>) -> String {
+    match o { Some(v) => v.to_string(), None => "none".to_string() }
+}
+
+fn res(r: Result<i64, String>) -> String {
+    match r { Ok(v) => v.to_string(), Err(e) => e }
+}
+
+fn word(w: String) -> String {
+    match w.as_str() { "a" => "A".to_string(), _ => "other".to_string() }
+}
+
+fn main() -> Result<(), String> {
+    println!("{} {}", name(Color::Green), score(5));
+    println!("{} {} {}", score(20), score(-3), score(99));
+    println!("{}", pair((0, "p".to_string())));
+    println!("{} {}", opt(Some(7)), opt(None));
+    println!("{} {}", res(Ok(1)), res(Err("bad".to_string())));
+    println!("{} {}", word("a".to_string()), word("z".to_string()));
+    Ok(())
+}

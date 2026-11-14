@@ -1,0 +1,15 @@
+enum P { A, B }
+graph Cyc(mut phase: P) -> Result<i64, String> {
+    node mut a: i64 = 0;
+    node mut b: i64 = 0;
+    edge a -> b;
+    edge b -> a;
+    loop {
+        match phase {
+            P::A => { phase = P::B; }
+            P::B => { break; }
+        }
+    }
+    Ok(b)
+}
+fn main() -> Result<(), String> { Ok(()) }

@@ -1,0 +1,7 @@
+import { LibCfg } from "./p17_import_lib.hsl";
+
+fn main() -> Result<(), String> {
+    let cfg = LibCfg { name: "y".to_string() };
+    println!("no_import_dispatch={}", cfg.label());
+    Ok(())
+}

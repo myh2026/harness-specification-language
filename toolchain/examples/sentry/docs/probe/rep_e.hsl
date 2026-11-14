@@ -1,0 +1,16 @@
+macro_rules! tags2 {
+    ($name:ident, [$($cap:literal),*]) => {
+        impl $name {
+            fn allowed(self, capability: String) -> bool {
+                match capability.as_str() {
+                    $($cap => true,)*
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+fn main() -> Result<(), String> {
+    println!("e");
+    Ok(())
+}

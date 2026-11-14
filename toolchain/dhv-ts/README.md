@@ -169,6 +169,19 @@ maxTokens 余量）。
 - 宏展开支持基础 frag（ident/literal/tt/expr/ty）与重复，复杂 matcher（嵌套重复、多规则优先级）未覆盖
 - 赋值索引仅支持字面量/变量下标（`arr[i] += 1` 的 i 为复杂表达式时不支持）
 - `native rust` / `native yaml` 等其余后端运行期不可执行（明确报错，指向 dhv 静态投射）
+- **检查器不等价于 dhv（Rust）**：dhv-ts 未实现 S8 跨作用域遮蔽等部分 Rust 侧告警，
+  同一份源码两引擎 warning 数可能不同（例：`examples/sentry` 的 `let state = ...`
+  遮蔽在 dhv 报 S-S8、dhv-ts 为 0 警告）
+- **`$host.dhv.check/run` 走进程内捕获**（`captureCli` 懒加载 `main.ts`）：在 harness
+  内调用实测可能长时间不返回（>60s 挂起）；不建议把 `$host.dhv.*` 作为工作流主路径，
+  生产用 out-of-process 调用
+- **`$host.shell.run` 依赖 PATH 上的 `bash`**：Windows 若先命中
+  `C:\Windows\System32\bash.exe`（WSL 存根、未装发行版）会报「子系统未安装」，
+  需把 Git Bash 目录放到 PATH 前；emit 的 bash 后端语法校验同样依赖真实 bash，
+  缺失时 manifest 会误报 `syntax_check` 失败
+- **BOM**：源码首字符 U+FEFF 已宽容剥离（与 Rust 侧 `parser::parse` 同码同层）；
+  Windows PowerShell `Set-Content -Encoding UTF8` 常给文件加 BOM，此前首 token
+  报 `期望项定义，得到 "﻿"`
 
 ## 目录
 

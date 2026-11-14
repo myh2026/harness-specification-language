@@ -1,0 +1,5 @@
+struct P4S { n: i64 }
+fn main() -> Result<(), String> { Ok(()) }
+project {
+    P4S -> "docs/s.md" : markdown,
+}

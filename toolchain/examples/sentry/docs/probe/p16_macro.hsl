@@ -1,0 +1,34 @@
+macro_rules! bump {
+    ($field:expr, $by:expr) => { $field += $by; };
+}
+
+macro_rules! square {
+    ($x:expr) => { $x * $x };
+}
+
+macro_rules! add {
+    ($a:expr, $b:expr) => { $a + $b };
+}
+
+macro_rules! greet {
+    ($name:expr) => { format!("hi {}", $name) };
+}
+
+macro_rules! call_thrice {
+    ($f:ident) => { $f() + $f() + $f() };
+}
+
+fn one() -> i64 { 1 }
+
+fn main() -> Result<(), String> {
+    let mut count = 0;
+    bump!(count, 2);
+    bump!(count, 3);
+    println!("count={}", count);
+    println!("square_literal={}", square!(4));
+    println!("square_expr={}", square!(2 + 3));
+    println!("add={}", add!(10, 20));
+    println!("greet={}", greet!("sentry"));
+    println!("thrice={}", call_thrice!(one));
+    Ok(())
+}

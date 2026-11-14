@@ -1,0 +1,10 @@
+// p6a — only $host.dhv.check (relative to workspace)
+fn main() -> Result<(), String> {
+    let g = native typescript { return await $host.dhv.check("good.hsl"); };
+    println!("CHECK_GOOD ok={} output={:?}", g.ok, g.output);
+    let b = native typescript { return await $host.dhv.check("bad.hsl"); };
+    println!("CHECK_BAD ok={} output={:?}", b.ok, b.output);
+    let m = native typescript { return await $host.dhv.check("missing.hsl"); };
+    println!("CHECK_MISSING ok={} output={:?}", m.ok, m.output);
+    Ok(())
+}

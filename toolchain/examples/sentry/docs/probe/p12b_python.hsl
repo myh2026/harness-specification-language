@@ -1,0 +1,16 @@
+fn main() -> Result<(), String> {
+    let n = 5;
+    let words = vec!["a", "b"];
+    let py = native python {
+    {"double": n * 2, "words": words, "joined": ",".join(words)}
+    };
+    println!("py={:?}", py);
+    let py2 = native python {
+    total = 0
+    for i in range(3):
+        total += i
+    __hsl_result__ = total
+    };
+    println!("py2={}", py2);
+    Ok(())
+}

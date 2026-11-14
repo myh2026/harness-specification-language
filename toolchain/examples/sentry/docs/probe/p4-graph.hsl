@@ -1,0 +1,63 @@
+// p4-graph — graph/node/edge runtime events; run with both --scale microkernel and --scale monolith.
+enum Action {
+    Tool(String),
+    Done(String),
+}
+
+enum Event {
+    Observed(String),
+}
+
+graph Loop(mut turns: u32) -> Result<String, String> {
+    node model: String = String::from("model-node");
+    node executor: String = String::from("exec-node");
+    node reviewer: String = String::from("review-node");
+
+    edge model -> executor on Action::Tool;
+    edge executor -> model on Event::Observed;
+    edge model -> reviewer on Action::Done;
+
+    let mut out: String = String::from("");
+
+    while turns < 3 {
+        turns += 1;
+        let action = native typescript { return $host.fixture.next("plan"); };
+        let ev = Event::Observed(action.clone());
+        match ev {
+            Event::Observed(name) => {
+                out.push_str(name.as_str());
+                out.push(';');
+            },
+        }
+        let act = Action::Tool(action.clone());
+        match act {
+            Action::Tool(t) => {
+                out.push_str(model.as_str());
+                out.push(':');
+                out.push_str(t.as_str());
+                out.push('|');
+            },
+            Action::Done(t) => {
+                out.push_str(reviewer.as_str());
+                out.push(':');
+                out.push_str(t.as_str());
+            },
+        }
+        if turns == 2 {
+            let done = Action::Done(String::from("finish"));
+            match done {
+                Action::Tool(_t) => {},
+                Action::Done(v) => { out.push_str(v.as_str()); },
+            }
+        }
+        let _ = executor.as_str();
+    }
+    Ok(out)
+}
+
+fn main() -> Result<(), String> {
+    let mut turns: u32 = 0;
+    let out = Loop::run(turns)?;
+    println!("GRAPH_OUT {}", out);
+    Ok(())
+}

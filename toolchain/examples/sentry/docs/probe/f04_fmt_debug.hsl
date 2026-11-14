@@ -1,0 +1,9 @@
+struct P { x: i64 }
+enum E { A, B(i64) }
+fn main() -> Result<(), String> {
+    println!("p={:?} e={:?} o={:?} r={:?}", P { x: 1 }, E::B(3), Some(1), Ok::<i64, String>(5));
+    println!("hashmap={:?}", { let mut m = HashMap::new(); m.insert("k".to_string(), 1); m });
+    println!("pp={:#?}", P { x: 2 });
+    println!("s={:?} display={}", "q".to_string(), Some(7).unwrap_or(0));
+    Ok(())
+}

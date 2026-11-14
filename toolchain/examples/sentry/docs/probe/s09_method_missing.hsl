@@ -1,0 +1,6 @@
+fn main() -> Result<(), String> {
+    let s = "hello".to_string();
+    let n = s.missing_method();
+    println!("{}", n);
+    Ok(())
+}

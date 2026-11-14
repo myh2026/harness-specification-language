@@ -1,0 +1,280 @@
+// ============================================================================
+// sentry/sentry.hsl — SENTRY 入口：主编排 graph + main + 投射声明
+// ============================================================================
+// 拓扑（G3 条件环，环上每条边都带 guard）：
+//   analyzer ──on Signal::EvidenceReady──> model
+//   model    ──on Action::Tool───────────> executor
+//   executor ──on Event::Observed────────> model
+//   model    ──on Action::Done───────────> auditor
+//   auditor  ──on Verdict::Revise────────> model
+//
+// 与普通"聊天机器人"的区别：严重级别由 HSL 评分矩阵算出，报告先过确定性
+// 结构闸门再交独立模型审计，工具瞬时故障由 HSL 侧重试——三个可验证关卡。
+// ============================================================================
+
+import { Message, ToolCall, ToolResult, Action, Verdict, Event } from "./types/messages.hsl";
+import { Policy, TriageState, TriageReport, TriageOutcome, SessionStats } from "./types/state.hsl";
+import { Evidence, Severity, Signal } from "./types/signals.hsl";
+import { HarnessError } from "./types/errors.hsl";
+import { DeepSeekIncidentModel, ScriptedIncidentModel, IncidentModel } from "./providers/incident_model.hsl";
+import { Toolkit, parse_action } from "./agents/executor.hsl";
+import { audit } from "./agents/auditor.hsl";
+import { Analyzer, check_report, render_violations } from "./logic/analysis.hsl";
+import { SENTRY_PROMPT, HARNESS_CONFIG, INCIDENT_SCHEMA } from "./config/resources.hsl";
+
+macro_rules! bump {
+    ($field:expr, $by:expr) => { $field += $by; };
+}
+
+fn make_model(policy: Policy) -> Result<Box<dyn IncidentModel>, HarnessError> {
+    if policy.model == String::from("deepseek") {
+        Ok(DeepSeekIncidentModel::new(String::from("glm-4.5"), policy.temperature))
+    } else {
+        Ok(ScriptedIncidentModel::new(String::from("triage")))
+    }
+}
+
+/// 审计者：同源契约、独立实例、独立对话、独立 fixture 轨道。
+fn make_auditor(policy: Policy) -> Result<Box<dyn IncidentModel>, HarnessError> {
+    if policy.model == String::from("deepseek") {
+        Ok(DeepSeekIncidentModel::new(String::from("glm-4.5"), 0.0))
+    } else {
+        Ok(ScriptedIncidentModel::new(String::from("audit")))
+    }
+}
+
+/// 主编排 graph：分诊状态机。
+graph Sentry(mut state: TriageState) -> Result<TriageOutcome, HarnessError> {
+    node analyzer: Analyzer = Analyzer::new(state.policy.clone());
+    node model: Box<dyn IncidentModel> = make_model(state.policy.clone())?;
+    node executor: Toolkit = Toolkit::new(state.policy.clone());
+    node auditor: Box<dyn IncidentModel> = make_auditor(state.policy.clone())?;
+
+    // 阶段 0：确定性侦察（在模型回合之前完成，模型只读证据摘要）。
+    let evidence = analyzer.collect()?;
+    let severity = evidence.severity.clone();
+    let mut transcript: Vec<Message> = state.transcript.clone();
+    transcript.push(Message::user(evidence.clone().digest()));
+    let mut turns: u32 = 0;
+    let mut accepted: bool = false;
+
+    // 条件环（G3：环上每条边都带 on Guard，由词法打破死锁）
+    edge analyzer -> model on Signal::EvidenceReady;
+    edge model -> executor on Action::Tool;
+    edge executor -> model on Event::Observed;
+    edge model -> auditor on Action::Done;
+    edge auditor -> model on Verdict::Revise;
+
+    loop {
+        if turns >= state.policy.max_turns {
+            break;
+        }
+        let raw = model.act(transcript.clone()).await?;
+        // 模型回合必须入转录，否则模型看不到自己做过的动作 → 重复调用
+        transcript.push(Message::assistant(raw.clone()));
+        // 协议纠错回路：解析失败把错误反馈给模型重试（预算内）
+        let action = match parse_action(raw) {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[sentry] 协议违规，反馈重试: {}", e.message);
+                transcript.push(Message::user(format!("你的上一条输出违反了协议：{}\n请重新输出恰好一个 JSON 对象（action/tool 字段按系统提示词格式）。", e.message)));
+                turns += 1;
+                bump!(state.stats.protocol_violations, 1);
+                continue;
+            },
+        };
+        match action {
+            Action::Tool { call } => {
+                // bash 预算闸门（运行时策略，与编译期 capability 双闸门互补）
+                if let ToolCall::Bash { command: _ } = call {
+                    if state.stats.bash_calls >= state.policy.max_bash_calls {
+                        transcript.push(Message::tool(String::from("bash 预算已耗尽（max_bash_calls），请停止命令调用并收敛到 done")));
+                        turns += 1;
+                        continue;
+                    }
+                    bump!(state.stats.bash_calls, 1);
+                }
+                let result: ToolResult = executor.run(call)?;
+                if result.attempts > 1 {
+                    bump!(state.stats.retries, 1);
+                    println!("[sentry] 工具瞬时失败已重试（attempts={}）", result.attempts);
+                }
+                transcript.push(result.clone().observation());
+                if result.ok == false {
+                    bump!(state.stats.failures, 1);
+                }
+                bump!(state.stats.tool_calls, 1);
+                bump!(state.stats.turns, 1);
+                turns += 1;
+                let _ = native typescript {
+                    $host.events.emit("observed", { turns });
+                    return true;
+                };
+            },
+            Action::Done { summary } => {
+                println!("[sentry] model declared done: {}", summary);
+                // 关卡 1：确定性报告结构闸门（不花模型 token）
+                let gate = check_report(state.policy.clone(), severity.clone())?;
+                if gate.ok == false {
+                    println!("[sentry] 报告闸门未通过（{} 项违规），打回重写", gate.violations.len());
+                    transcript.push(Message::user(format!("报告闸门未通过，请修订 report.md 后重新 done：\n{}", render_violations(gate.violations.clone()))));
+                    bump!(state.stats.gate_failures, 1);
+                    turns += 1;
+                    continue;
+                }
+                // 关卡 2：独立审计者裁决
+                state.transcript = transcript.clone();
+                let verdict = audit(transcript.clone(), evidence.clone(), state.policy.task.clone(), auditor).await?;
+                match verdict {
+                    Verdict::Accept => {
+                        accepted = true;
+                        break;
+                    },
+                    Verdict::Revise { note } => {
+                        println!("[sentry] 审计要求返工: {}", note);
+                        transcript.push(Message::user(format!("审计者要求返工：{}\n请修订后重新 done。", note)));
+                        bump!(state.stats.turns, 1);
+                        turns += 1;
+                    },
+                }
+            },
+        }
+    }
+
+    state.transcript = transcript.clone();
+    Ok(TriageOutcome {
+        report: build_report(state, transcript, turns, accepted, severity),
+        evidence,
+    })
+}
+
+fn build_report(state: TriageState, transcript: Vec<Message>, turns: u32, accepted: bool, severity: Severity) -> TriageReport {
+    let verdict = if accepted { String::from("accepted") } else { String::from("budget_exhausted") };
+    TriageReport {
+        task: state.policy.task.clone(),
+        verdict,
+        severity: severity.label(),
+        turns,
+        tool_calls: state.stats.tool_calls,
+        bash_calls: state.stats.bash_calls,
+        retries: state.stats.retries,
+        failures: state.stats.failures,
+        protocol_violations: state.stats.protocol_violations,
+        gate_failures: state.stats.gate_failures,
+        transcript_lines: transcript.len(),
+        ok: accepted,
+        transcript,
+    }
+}
+
+export fn main() -> Result<bool, HarnessError> {
+    let policy = Policy::from_config()?;
+    let mut opening: Vec<Message> = Vec::new();
+    opening.push(Message::system(SENTRY_PROMPT));
+    opening.push(Message::user(format!(
+        "workspace: {}\ntask: {}\n\n按系统提示词协议行动：每回合恰好一个 JSON 对象；先侦察，再写报告。",
+        policy.workspace, policy.task
+    )));
+    let state = TriageState { policy: policy.clone(), transcript: opening, stats: SessionStats::zero() };
+    let outcome = Sentry::run(state)?;
+    let artifacts: u32 = write_artifacts(outcome.report, outcome.evidence, policy)?;
+    println!("[sentry] main 完成：本次落盘 {} 个产物", artifacts);
+    Ok(true)
+}
+
+fn write_artifacts(report: TriageReport, evidence: Evidence, policy: Policy) -> Result<u32, HarnessError> {
+    let run_md = render_run_report(report.clone(), evidence.clone(), policy.clone());
+    let incident_json = render_incident_json(report.clone(), evidence.clone());
+    let transcript_jsonl: String = native typescript {
+        const lines = report.transcript.map((m) => JSON.stringify({ role: m.role, content: m.content }));
+        return lines.join("\n") + "\n";
+    };
+    native typescript {
+        $host.artifacts.write("run-report.md", run_md);
+        $host.artifacts.write("incident.json", incident_json);
+        $host.artifacts.write("transcript.jsonl", transcript_jsonl);
+        return true;
+    };
+    println!("[sentry] artifacts: run-report.md / incident.json / transcript.jsonl");
+    Ok(3)
+}
+
+fn render_run_report(report: TriageReport, evidence: Evidence, policy: Policy) -> String {
+    let mut out = String::from("# SENTRY Run Report\n\n");
+    out.push_str("## 任务\n\n");
+    out.push_str(policy.task.as_str());
+    out.push_str("\n\n## 结果\n\n");
+    out.push_str(format!("- verdict: {}\n", report.verdict).as_str());
+    out.push_str(format!("- severity: {}\n", report.severity).as_str());
+    out.push_str(format!("- completed: {}\n", report.ok).as_str());
+    out.push_str("\n## 预算消耗\n\n");
+    out.push_str(format!("- turns: {}\n", report.turns).as_str());
+    out.push_str(format!("- tool_calls: {}\n", report.tool_calls).as_str());
+    out.push_str(format!("- bash_calls: {}\n", report.bash_calls).as_str());
+    out.push_str(format!("- retries: {}\n", report.retries).as_str());
+    out.push_str(format!("- failures: {}\n", report.failures).as_str());
+    out.push_str(format!("- protocol_violations: {}\n", report.protocol_violations).as_str());
+    out.push_str(format!("- gate_failures: {}\n", report.gate_failures).as_str());
+    out.push_str(format!("- transcript_lines: {}\n", report.transcript_lines).as_str());
+    out.push_str("\n");
+    out.push_str(evidence.digest().as_str());
+    out
+}
+
+fn render_incident_json(report: TriageReport, evidence: Evidence) -> String {
+    let ratio = evidence.log.clone().error_ratio();
+    let mut out = String::from("{\n");
+    out.push_str(format!("  \"task\": \"{}\",\n", report.task).as_str());
+    out.push_str(format!("  \"severity\": \"{}\",\n", report.severity).as_str());
+    out.push_str(format!("  \"verdict\": \"{}\",\n", report.verdict).as_str());
+    out.push_str(format!("  \"ok\": {},\n", report.ok).as_str());
+    out.push_str("  \"evidence\": {\n");
+    out.push_str("    \"log\": {\n");
+    out.push_str(format!("      \"total_lines\": {},\n", evidence.log.total_lines).as_str());
+    out.push_str(format!("      \"error_lines\": {},\n", evidence.log.error_lines).as_str());
+    out.push_str(format!("      \"warn_lines\": {},\n", evidence.log.warn_lines).as_str());
+    out.push_str(format!("      \"first_error_ts\": \"{}\",\n", evidence.log.first_error_ts).as_str());
+    out.push_str(format!("      \"top_component\": \"{}\",\n", evidence.log.top_component).as_str());
+    out.push_str(format!("      \"timeout_mentions\": {},\n", evidence.log.timeout_mentions).as_str());
+    out.push_str(format!("      \"error_ratio\": {}\n", ratio).as_str());
+    out.push_str("    },\n");
+    out.push_str("    \"metrics\": {\n");
+    out.push_str(format!("      \"p99_ms\": {},\n", evidence.metrics.p99_ms).as_str());
+    out.push_str(format!("      \"baseline_p99_ms\": {},\n", evidence.metrics.baseline_p99_ms).as_str());
+    out.push_str(format!("      \"error_rate\": {},\n", evidence.metrics.error_rate).as_str());
+    out.push_str(format!("      \"requests_per_min\": {},\n", evidence.metrics.requests_per_min).as_str());
+    out.push_str(format!("      \"cpu_saturation\": {},\n", evidence.metrics.cpu_saturation).as_str());
+    out.push_str(format!("      \"deploy_minutes_ago\": {}\n", evidence.metrics.deploy_minutes_ago).as_str());
+    out.push_str("    }\n");
+    out.push_str("  },\n");
+    out.push_str("  \"stats\": {\n");
+    out.push_str(format!("    \"turns\": {},\n", report.turns).as_str());
+    out.push_str(format!("    \"tool_calls\": {},\n", report.tool_calls).as_str());
+    out.push_str(format!("    \"bash_calls\": {},\n", report.bash_calls).as_str());
+    out.push_str(format!("    \"retries\": {},\n", report.retries).as_str());
+    out.push_str(format!("    \"failures\": {},\n", report.failures).as_str());
+    out.push_str(format!("    \"protocol_violations\": {},\n", report.protocol_violations).as_str());
+    out.push_str(format!("    \"gate_failures\": {},\n", report.gate_failures).as_str());
+    out.push_str(format!("    \"transcript_lines\": {}\n", report.transcript_lines).as_str());
+    out.push_str("  }\n");
+    out.push_str("}\n");
+    out
+}
+
+scale = microkernel;
+
+project {
+    // 编排拓扑与 CLI 投射到 TypeScript，且所有 struct/enum/fn 也投射到 TS，
+    // 保证生成仓库内引用闭合（X-1 类型引用 / X-5 未定义函数两个检查全部为 0）。
+    Sentry          -> "src/sentry/topology.ts"      : typescript,
+    main            -> "src/sentry/cli.ts"           : typescript,
+    SENTRY_PROMPT   -> "prompts/triage-agent.md"     : markdown,
+    HARNESS_CONFIG  -> "config/sentry.yml"           : yaml,
+    INCIDENT_SCHEMA -> "config/incident.schema.json" : json,
+    rules {
+        struct -> "src/sentry/types/{name}.ts" : typescript,
+        enum   -> "src/sentry/types/{name}.ts" : typescript,
+        trait  -> "src/sentry/types/{name}.ts" : typescript,
+        fn     -> "src/sentry/logic/{name}.ts" : typescript,
+    }
+}

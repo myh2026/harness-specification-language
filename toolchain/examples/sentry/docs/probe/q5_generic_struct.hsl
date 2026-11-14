@@ -1,0 +1,6 @@
+struct Holder<T> { v: T }
+fn main() -> Result<(), String> {
+    let h = Holder { v: 3 };
+    println!("{}", h.v);
+    Ok(())
+}

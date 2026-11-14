@@ -1,0 +1,27 @@
+{
+  "tracks": {
+    "triage": [
+      "{\"action\":\"tool\",\"tool\":\"list_files\"}",
+      "{\"action\":\"tool\",\"tool\":\"read_file\",\"path\":\"incidents/INC-2026-1114.md\"}",
+      "{\"action\":\"tool\",\"tool\":\"read_file\",\"path\":\"artifacts/gateway.log\"}",
+      "{\"action\":\"tool\",\"tool\":\"read_file\",\"path\":\"artifacts/metrics.json\"}",
+      "{\"action\":\"tool\",\"tool\":\"read_file\",\"path\":\"configs/gateway.yaml\"}",
+      "{\"action\":\"tool\",\"tool\":\"read_file\",\"path\":\"runbooks/payment-upstream.md\"}",
+      "{\"action\":\"tool\",\"tool\":\"edit_file\",\"path\":\"configs/gateway.yaml\",\"old_text\":\"timeout_ms: 5000\",\"new_text\":\"timeout_ms: 8000\"}",
+      "{\"action\":\"tool\",\"tool\":\"write_file\",\"path\":\"report.md\",\"content\":\"# 事故复盘：checkout 支付链路大面积超时\\n\\n- 严重级别：SEV-1\\n- 状态：已定位，已止血\\n- 责任域：gateway / payment-db\\n\\n## 根因\\n\\npayment-db 连接池在最近一次部署（deploy_minutes_ago=8）后容量不足，池内连接被耗尽；\\ngateway 对上游的查询在 5000ms 超时阈值处失败，错误码 UPSTREAM_TIMEOUT，并级联到 checkout 链路。\\n日志中全部 ERROR 来自组件 gateway.upstream，首个 ERROR 出现在 2026-11-14T02:13:07Z。\\n\\n## 证据\\n\\n- gateway.log：40 行，ERROR 10 行，WARN 2 行，UPSTREAM_TIMEOUT 出现 10 次\\n- p99 从基线 180 ms 恶化到 1830 ms（约 10.2 倍）\\n- 错误率 42%，请求量 320 r/m，CPU 饱和度 0.71，说明瓶颈在连接池而非 CPU\\n- 首批报错时间与最近部署时间（8 分钟前）吻合\\n\\n## 影响面\\n\\n- checkout 支付链路受影响最重：错误率 42%，约 134 r/m 失败\\n- 未波及其他业务线；网关对下游有超时保护，未出现雪崩\\n\\n## 处置\\n\\n- 已把 configs/gateway.yaml 的 timeout_ms 从 5000 调整为 8000，扩大上游等待窗口\\n- 已通知 payment-db owner 扩容连接池，并回滚最近部署的连接池参数\\n- 待连接池恢复后把 timeout_ms 回滚到 5000\\n\\n## 后续行动\\n\\n- 增加连接池等待时间告警（阈值 200ms）\\n- 在 gateway 增加 UPSTREAM_TIMEOUT 熔断与限流\\n\"}",
+      "{\"action\":\"tool\",\"tool\":\"bash\",\"command\":\"node verify-report.js\"}",
+      "{\"action\":\"done\",\"summary\":\"定位 payment-db 连接池耗尽导致 UPSTREAM_TIMEOUT，timeout_ms 已调至 8000 止血并产出复盘\"}"
+    ],
+    "audit": [
+      "{\"verdict\":\"accept\"}"
+    ]
+  },
+  "faults": [
+    {
+      "target": "shell.run",
+      "nth": 1,
+      "kind": "error",
+      "message": "injected transient exec failure (first bash attempt)"
+    }
+  ]
+}

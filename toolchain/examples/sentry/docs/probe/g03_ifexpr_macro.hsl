@@ -1,0 +1,4 @@
+fn main() -> Result<(), String> {
+    println!("{}", if true { "a" } else { "b" });
+    Ok(())
+}

@@ -1,0 +1,30 @@
+const RULE_LIMIT: i64 = 5;
+type RuleName = String;
+
+struct RuleCfg { limit: i64 }
+enum RulePhase { Idle, Busy }
+
+trait RuleTrait { fn label(self) -> String; }
+impl RuleTrait for RuleCfg { fn label(self) -> String { "cfg".to_string() } }
+
+fn rule_helper(a: i64) -> i64 { a + 1 }
+
+fn main() -> Result<(), String> {
+    let c = RuleCfg { limit: RULE_LIMIT };
+    println!("{} {}", c.label(), rule_helper(2));
+    Ok(())
+}
+
+project {
+    RuleCfg -> "explicit/cfg.rs" : rust,
+}
+
+rules {
+    struct -> "gen/{name}.rs"  : rust,
+    enum   -> "gen/enums/{name}.rs" : rust,
+    trait  -> "gen/traits/{name}.rs" : rust,
+    const  -> "gen/consts.rs"  : rust,
+    type   -> "gen/aliases.rs" : rust,
+    fn     -> "gen/fns/{name}.py" : python,
+    block  -> "gen/{name}.md"  : markdown,
+}

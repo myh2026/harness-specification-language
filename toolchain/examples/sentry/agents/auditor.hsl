@@ -1,0 +1,63 @@
+// ============================================================================
+// sentry/agents/auditor.hsl — 审计者：done 之后的独立裁决闸门（与执行者隔离）
+// ============================================================================
+// 文法覆盖：async fn / .await? 后缀链（From 跨类型）/ for-in / match 穷尽
+// ============================================================================
+
+import { Message, Verdict } from "../types/messages.hsl";
+import { HarnessError } from "../types/errors.hsl";
+import { Evidence } from "../types/signals.hsl";
+import { IncidentModel } from "../providers/incident_model.hsl";
+import { REVIEW_RUBRIC } from "../config/resources.hsl";
+
+/// 审计一次分诊会话：确定性证据 + 完整 transcript → 裁决。
+export async fn audit(
+    transcript: Vec<Message>,
+    evidence: Evidence,
+    task: String,
+    auditor: Box<dyn IncidentModel>,
+) -> Result<Verdict, HarnessError> {
+    let transcript_text = render_evidence(transcript);
+    let prompt = format!("任务：{}\n\n{}\n\ntranscript:\n{}", task, evidence.digest(), transcript_text);
+    let raw = auditor.act(vec![
+        Message::system(REVIEW_RUBRIC),
+        Message::user(prompt),
+    ]).await?;
+    parse_verdict(raw)
+}
+
+fn render_evidence(transcript: Vec<Message>) -> String {
+    let mut out = String::from("");
+    for m in transcript {
+        out.push_str("--- ");
+        out.push_str(m.role.as_str());
+        out.push_str(" ---\n");
+        out.push_str(m.content.as_str());
+        out.push_str("\n");
+    }
+    out
+}
+
+fn parse_verdict(raw: String) -> Result<Verdict, HarnessError> {
+    let fields: HashMap<String, String> = native typescript {
+        try {
+            return $host.json.fields(raw);
+        } catch (e) {
+            const m = new Map();
+            m.set("error", String(e && e.message || e));
+            return m;
+        }
+    };
+    if fields.contains_key("error") {
+        let detail = fields.get("error").unwrap_or(String::from("?"));
+        return Err(HarnessError::new(String::from("audit"), format!("审计输出不是合法 JSON：{}", detail)));
+    }
+    let verdict = fields.get("verdict").unwrap_or(String::from(""));
+    if verdict == String::from("accept") {
+        Ok(Verdict::Accept)
+    } else if verdict == String::from("revise") {
+        Ok(Verdict::Revise { note: fields.get("note").unwrap_or(String::from("")) })
+    } else {
+        Err(HarnessError::new(String::from("audit"), format!("verdict 必须是 accept/revise，得到 \"{}\"", verdict)))
+    }
+}

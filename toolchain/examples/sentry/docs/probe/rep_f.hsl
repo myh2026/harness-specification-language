@@ -1,0 +1,21 @@
+macro_rules! guard_check {
+    ($name:ident, [$($cap:literal),*]) => {
+        impl $name {
+            fn allowed(self, capability: String) -> bool {
+                match capability.as_str() {
+                    $($cap => true,)*
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+
+struct ClockTool { t: i64 }
+guard_check!(ClockTool, []);
+
+fn main() -> Result<(), String> {
+    let c = ClockTool { t: 1 };
+    println!("allowed={}", c.allowed("clock".to_string()));
+    Ok(())
+}
