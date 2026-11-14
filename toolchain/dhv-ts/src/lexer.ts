@@ -103,7 +103,12 @@ export class Lexer {
   private depthMode: 'none' | 'afterNative' | 'afterResource' = 'none';
   private pendingLang = '';
 
-  constructor(private src: string, public file = '<memory>') {}
+  constructor(private src: string, public file = '<memory>') {
+    // BOM 宽容（UPSTREAM-FEEDBACK A12）：PowerShell `Set-Content -Encoding UTF8`
+    // 会给 .hsl 加 U+FEFF，此前 check 报 `期望项定义，得到 "﻿" (file:1:2)`。
+    // 与 Rust 侧 parser::parse 同码同层（两边都 strip，保证双引擎一致）。
+    if (this.src.charCodeAt(0) === 0xfeff) this.src = this.src.slice(1);
+  }
 
   /**
    * 形状前瞻：当前位置（`block`/`static` 关键字之后）是否为 `NAME {` 资源声明形态。

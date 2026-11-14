@@ -12,6 +12,10 @@ export function printType(ty: HType | undefined, lang: LangSpec): string {
     case 'path': {
       const segs = ty.segs;
       const name = segs.join('::');
+      // unit 类型 `()`：必须按目标语言映射（TS → void，rust → ()），
+      // 否则 `fn f() -> ()` / `Result<(), E>` 投射出字面量 `()` —— TS 语法非法
+      // （UPSTREAM-FEEDBACK A2，sentry 实测：`export function health(): () {`）。
+      if (name === '()') return lang.types.unit ?? 'void';
       const args = (ty.args ?? []).map((a) => printType(a, lang));
       return applyTypeMap(name, args, lang);
     }
@@ -20,6 +24,9 @@ export function printType(ty: HType | undefined, lang: LangSpec): string {
     case 'paren':
       return printType(ty.inner, lang);
     case 'tuple':
+      // 空元组 = unit 类型 `()`（parser.parseType 对 `()` 产出 items: []）；
+      // 必须按目标语言映射（TS → void），否则投射出字面量 `()`（TS 语法非法）。
+      if (ty.items.length === 0) return lang.types.unit ?? 'void';
       return `(${ty.items.map((t) => printType(t, lang)).join(', ')})`;
     case 'array':
       return applyTypeMap('Vec', [printType(ty.elem, lang)], lang);

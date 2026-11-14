@@ -35,6 +35,10 @@ pub struct ParseSession<'a> {
 
 /// 解析一个 .hsl 文件。语法错误返回 None 并填充 diagnostics。
 pub fn parse(file_id: FileId, src: &str) -> Result<SourceFile, Diagnostics> {
+    // BOM 宽容（UPSTREAM-FEEDBACK A12）：Windows PowerShell 保存的 .hsl 可能带
+    // U+FEFF；此前 pest 在首 token 报「期望项定义，得到 "﻿" (file:1:2)」。
+    // 与 dhv-ts lexer 同码同层（两边都 strip，保证双引擎一致）。
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     match HslParser::parse(Rule::source_file, src) {
         Ok(mut pairs) => {
             let mut sess = ParseSession { file_id, src, diags: Diagnostics::new() };
