@@ -117,7 +117,7 @@ flowchart TB
     subgraph OUT["📦 产物与运行"]
         direction LR
         REPO["📁 多语言工程仓库<br>32 编程语言 + 6 静态格式<br>真实代码 + manifest"]
-        RUN["🤖 Agent harness 运行时<br>nova · dsh<br>剧本模式 / 真实 LLM"]
+        RUN["🤖 Agent harness 运行时<br>nova · dsh · sentry<br>剧本模式 / 真实 LLM"]
         SYNC["🔄 sync · watch 双向工程<br>围栏镜像回写 .hsl"]
     end
 
@@ -276,7 +276,7 @@ project {
 
 测试节奏双车道，均失败自动开 Issue 跟踪、恢复全绿自动关闭，均可手动触发（Actions → 对应工作流 → Run workflow）：
 
-- **[Quarter Tests](.github/workflows/quarter-tests.yml)（每 15 分钟快车道）**：实装工具链（cargo build --release + dhv 二进制冒烟）→ 3 个项目（nova 静态检查 / dsh 剧本端到端 / backends-demo 投射）→ 38 后端全测（[tests/verify_backends.ts](toolchain/tests/verify_backends.ts)：全文件语法校验 + 零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级真解析）；
+- **[Quarter Tests](.github/workflows/quarter-tests.yml)（每 15 分钟快车道）**：实装工具链（cargo build --release + dhv 二进制冒烟）→ 4 个项目（nova 静态检查 / dsh 剧本端到端 / sentry 三关回归：check + scripted 分诊 + 预算耗尽失败路径 / backends-demo 投射）→ 38 后端全测（[tests/verify_backends.ts](toolchain/tests/verify_backends.ts)：全文件语法校验 + 零告警 + 注册表 38 后端 ↔ 产物语言集合双向全覆盖 + 静态 json 内容级真解析）；
 - **[Scheduled Tests](.github/workflows/scheduled-tests.yml)（每日 UTC 20:30 / 北京 04:30 全量深水区）**：dhv-ts 全量套件（194 用例，含 v0.2.64/v0.2.65 python 产物 ruff 门禁 · 双工具链车道）+ 示例回归 + IDE 校验 + cargo test + 双编译器一致性。
 
 ## 📦 版本化发布（含 CD 自动发布链）
